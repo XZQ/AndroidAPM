@@ -321,9 +321,9 @@ Android-APM/
 本项目借鉴了以下优秀开源项目的设计思路：
 
 - [微信 Matrix](https://github.com/Tencent/matrix) — APM 插件化架构、IO/Hook 方案
-- [快手 KOOM](https://github.com/KwaiVideoTeam/KOOM) — 内存监控、Hprof 裁剪、NativeHeap
+- [快手 KOOM](https://github.com/KwaiAppTeam/KOOM) — 内存监控、Hprof 裁剪、NativeHeap
 - [bytedance/bhook](https://github.com/nicepkg/bhook) — PLT Hook 实现
-- [square/leakcanary](https://github.com/nicepkg/leakcanary) — 内存泄漏检测
+- [square/leakcanary](https://github.com/square/leakcanary) — 内存泄漏检测
 - [android/perfetto](https://android.googlesource.com/platform/external/perfetto/) — 系统级性能分析
 
 ## 贡献
