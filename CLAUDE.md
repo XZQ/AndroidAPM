@@ -28,13 +28,14 @@
 - 模块: apm-core, apm-model, apm-storage, apm-uploader, apm-memory, apm-crash, apm-anr, apm-launch, apm-network, apm-sample-app
 - 读取docs目录的文档，了解当前项目的进度
 
-## Git提交
+## Git提交（强制）
+- 所有提交消息必须使用**英文**
+- 前缀首字母大写，格式：`Type: Subject`
 - 功能业务提交用 Feat:
 - Bug提交用 Fix:
 - 重构代码(不改变功能)提交用 Refactor:
 - 性能优化提交用  Perf:
-- 代码风格调整提交用  Style: 
-- 文档更新提交用  Docs: 
-- 回滚提交用  Revert: 
-- 构建/依赖/脚本调整/CICD  Build: 
- 
+- 代码风格调整提交用  Style:
+- 文档更新提交用 Docs:
+- 回滚提交用 Revert:
+- 构建/依赖/脚本调整/CICD  Build:
