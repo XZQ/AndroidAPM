@@ -36,5 +36,6 @@ include(
     ":apm-ipc",
     ":apm-gc-monitor",
     ":apm-render",
-    ":apm-sample-app"
+    ":apm-sample-app",
+    ":apm-plugin"
 )

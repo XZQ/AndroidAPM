@@ -64,12 +64,16 @@ class SlowMethodModule(
         originPrinter = loggingField.get(Looper.getMainLooper()) as? Printer
         // 设置自定义 Printer 监控消息分发
         loggingField.set(Looper.getMainLooper(), looperPrinter)
+        // 初始化 ASM 插桩 Tracer
+        ApmSlowMethodTracer.init(config.thresholdMs)
         apmContext?.logger?.d("SlowMethod module started, threshold=${config.thresholdMs}ms, sampling=${config.enableStackSampling}")
     }
 
     /** 恢复原始 Printer，释放采样器。 */
     override fun onStop() {
         monitoring = false
+        // 禁用 ASM Tracer
+        ApmSlowMethodTracer.disable()
         // 恢复原始 Printer
         val current = loggingField.get(Looper.getMainLooper())
         if (current === looperPrinter) {
@@ -176,6 +180,8 @@ class SlowMethodModule(
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "slow_method"
+        /** 模块名引用（供 ApmSlowMethodTracer 使用）。 */
+        const val MODULE_NAME_REF = "slow_method"
         /** 慢方法检测事件名。 */
         private const val EVENT_SLOW_METHOD = "slow_method_detected"
         /** 热点方法事件名。 */

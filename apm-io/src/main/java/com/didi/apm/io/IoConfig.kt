@@ -22,7 +22,19 @@ data class IoConfig(
     /** 重复读检测阈值：同一文件被读次数超过此值触发告警。 */
     val duplicateReadThreshold: Int = DEFAULT_DUPLICATE_READ_THRESHOLD,
     /** 是否启用 Closeable 泄漏检测。 */
-    val enableCloseableLeak: Boolean = true
+    val enableCloseableLeak: Boolean = true,
+    /** 是否启用文件描述符（FD）泄漏检测。 */
+    val enableFdLeakDetection: Boolean = true,
+    /** FD 泄漏告警阈值：打开的 FD 数量超过此值触发告警。 */
+    val fdLeakThreshold: Int = DEFAULT_FD_LEAK_THRESHOLD,
+    /** 是否启用 IO 吞吐量统计。 */
+    val enableThroughputStats: Boolean = true,
+    /** 吞吐量统计聚合窗口大小（操作次数）。 */
+    val throughputWindow: Int = DEFAULT_THROUGHPUT_WINDOW,
+    /** 是否启用 Native PLT Hook（需要 JNI 库 libapm-io.so）。 */
+    val enableNativePltHook: Boolean = true,
+    /** 是否启用零拷贝检测（检测不必要的 buffer 拷贝）。 */
+    val enableZeroCopyDetection: Boolean = false
 ) {
     companion object {
         /** 默认主线程 IO 阈值：50ms。 */
@@ -37,5 +49,9 @@ data class IoConfig(
         private const val DEFAULT_SMALL_BUFFER_THRESHOLD = 4096
         /** 默认重复读阈值：5 次。 */
         private const val DEFAULT_DUPLICATE_READ_THRESHOLD = 5
+        /** 默认 FD 泄漏阈值：500。 */
+        private const val DEFAULT_FD_LEAK_THRESHOLD = 500
+        /** 默认吞吐量统计窗口：100。 */
+        private const val DEFAULT_THROUGHPUT_WINDOW = 100
     }
 }
