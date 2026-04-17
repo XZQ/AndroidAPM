@@ -336,24 +336,6 @@ Android-APM/
 4. 推送分支 (`git push origin feature/your-feature`)
 5. 创建 Pull Request
 
-### 编码规范
-
-1. 所有成员变量和方法必须添加 KDoc 注释
-2. 方法内分支/循环/异常/回调必须添加行内注释
-3. 所有常量提取为命名常量，禁止裸数字/裸字符串
-
-### Git 提交格式
-
-| 前缀 | 用途 |
-|------|------|
-| `Feat:` | 新功能 |
-| `Fix:` | Bug 修复 |
-| `Refactor:` | 重构 |
-| `Perf:` | 性能优化 |
-| `Style:` | 代码风格 |
-| `Docs:` | 文档更新 |
-| `Build:` | 构建/依赖 |
-
 ## License
 
 ```
