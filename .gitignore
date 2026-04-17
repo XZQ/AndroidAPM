@@ -19,3 +19,5 @@ Thumbs.db
 *.log
 *.tmp
 .~*
+# NDK/CMake build cache
+.cxx/
