@@ -33,6 +33,27 @@ internal class HprofDumper(
     /** hprof 文件存储目录。 */
     private val hprofDir = File(context.cacheDir, HPROF_DIR_PATH).apply { mkdirs() }
 
+    /** fork 子进程 dump 是否可用。 */
+    @Volatile
+    private var forkDumpAvailable = false
+
+    /**
+     * 初始化：尝试加载 fork dump JNI 库。
+     * 如果库加载成功则启用 fork 子进程 dump 模式。
+     */
+    fun init() {
+        try {
+            // 加载 fork dump JNI 库
+            System.loadLibrary(LIB_APM_DUMPER)
+            // 库加载成功，标记 fork dump 可用
+            forkDumpAvailable = true
+            logger.d("HprofDumper: fork-based dump available")
+        } catch (e: UnsatisfiedLinkError) {
+            // JNI 库不存在，使用直接 dump 降级方案（有 STW 代价）
+            logger.d("HprofDumper: fork lib not available, using direct dump")
+        }
+    }
+
     /**
      * 异步执行 dump。在独立线程中执行，不阻塞调用方。
      *
@@ -45,14 +66,28 @@ internal class HprofDumper(
 
     /**
      * dump 执行逻辑。
+     * 优先使用 fork 子进程 dump（无 STW），失败时降级为直接 dump。
      * 流程：生成文件 → dump → 可选 strip → 上报文件事件。
      */
     private fun dumpInternal(reason: String) {
         val hprofFile = File(hprofDir, "${System.currentTimeMillis()}_${reason.replaceNonAlpha()}$HPROF_EXTENSION")
 
         try {
-            // MVP: 直接 dump（有 STW 代价）
-            dumpDirectly(hprofFile)
+            // 优先使用 fork 子进程 dump（无 STW）
+            if (forkDumpAvailable) {
+                val pid = nativeForkAndDump(hprofFile.absolutePath)
+                if (pid > 0) {
+                    // 父进程：等待子进程完成 dump
+                    waitForChild(pid)
+                } else if (pid == FORK_ERROR) {
+                    // fork 失败，降级为直接 dump
+                    dumpDirectly(hprofFile)
+                }
+                // pid == 0 时不应该到这里（子进程已 _exit）
+            } else {
+                // 无 fork 能力，直接 dump（有 STW 代价）
+                dumpDirectly(hprofFile)
+            }
         } catch (e: Exception) {
             logger.e("HprofDumper failed", e)
             return
@@ -93,6 +128,46 @@ internal class HprofDumper(
     private fun dumpDirectly(outputFile: File) {
         Debug.dumpHprofData(outputFile.absolutePath)
     }
+
+    /**
+     * 等待 fork 的子进程完成 hprof dump。
+     * 使用循环 waitpid 带超时，避免无限阻塞。
+     *
+     * @param pid 子进程 PID
+     */
+    private fun waitForChild(pid: Int) {
+        var remainingMs = FORK_WAIT_TIMEOUT_MS
+        while (remainingMs > 0) {
+            // 非阻塞等待子进程，WNOHANG 立即返回
+            val status = waitPidNonBlocking(pid)
+            if (status != WAIT_PID_RUNNING) {
+                // 子进程已退出（正常或异常）
+                return
+            }
+            // 子进程仍在运行，短暂等待后重试
+            Thread.sleep(FORK_WAIT_POLL_INTERVAL_MS)
+            remainingMs -= FORK_WAIT_POLL_INTERVAL_MS
+        }
+        // 超时，子进程可能仍在运行
+        logger.w("HprofDumper: fork child $pid did not finish within ${FORK_WAIT_TIMEOUT_MS}ms")
+    }
+
+    /**
+     * Native 方法：fork 子进程并在子进程中执行 hprof dump。
+     *
+     * @param outputPath hprof 文件输出路径
+     * @return 子进程 PID（>0 表示父进程，0 表示子进程，-1 表示 fork 失败）
+     */
+    private external fun nativeForkAndDump(outputPath: String): Int
+
+    /**
+     * 非阻塞 waitpid 的包装方法。
+     * 调用原生 waitpid(pid, WNOHANG) 检查子进程状态。
+     *
+     * @param pid 子进程 PID
+     * @return 0 表示子进程仍在运行，非 0 表示子进程已退出
+     */
+    private external fun waitPidNonBlocking(pid: Int): Int
 
     /** 替换文件名中的非字母数字字符，防止文件名非法。 */
     private fun String.replaceNonAlpha(): String =
@@ -138,5 +213,15 @@ internal class HprofDumper(
         private const val DEFAULT_MAX_FILES = 5
         /** 字节/KB。 */
         private const val BYTES_PER_KB = 1024L
+        /** fork dump JNI 库名。 */
+        private const val LIB_APM_DUMPER = "apm_dumper"
+        /** fork 失败返回值。 */
+        private const val FORK_ERROR = -1
+        /** 等待子进程超时时间（毫秒）。 */
+        private const val FORK_WAIT_TIMEOUT_MS = 10_000L
+        /** 等待子进程轮询间隔（毫秒）。 */
+        private const val FORK_WAIT_POLL_INTERVAL_MS = 100L
+        /** waitpid 返回值：子进程仍在运行。 */
+        private const val WAIT_PID_RUNNING = 0
     }
 }

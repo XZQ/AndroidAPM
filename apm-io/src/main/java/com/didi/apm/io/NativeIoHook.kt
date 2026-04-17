@@ -9,6 +9,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.lang.ref.PhantomReference
 import java.lang.ref.ReferenceQueue
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
@@ -31,19 +32,20 @@ import java.util.concurrent.atomic.AtomicLong
  * - **Level 2**：Native PLT Hook（需 JNI 库，更全面）
  * Level 2 不可用时自动降级为 Level 1。
  */
-class NativeIoHook(
-    /** 模块配置。 */
-    private val config: IoConfig
-) {
+class NativeIoHook(private val config: IoConfig) {
 
     /** 活跃的 IO 会话：System.identityHashCode → IoSession。 */
     private val activeSessions = ConcurrentHashMap<Int, IoSession>()
+
     /** 文件读取计数器：path → 读取次数。 */
     private val readFileCounts = ConcurrentHashMap<String, Int>()
+
     /** Closeable 泄漏追踪：PhantomReference → 描述信息。 */
     private val closeableRefs = ConcurrentHashMap<PhantomReference<Any>, String>()
+
     /** Closeable 泄漏检测队列。 */
     private val closeableQueue = ReferenceQueue<Any>()
+
     /** 是否已初始化。 */
     @Volatile
     private var initialized = false
@@ -51,18 +53,23 @@ class NativeIoHook(
     // --- FD 泄漏检测 ---
     /** 当前打开的 FD 路径记录：fd → path。 */
     private val openFdPaths = ConcurrentHashMap<Int, String>()
+
     /** FD 分配计数器。 */
     private val fdAllocCount = AtomicLong(0L)
+
     /** FD 释放计数器。 */
     private val fdReleaseCount = AtomicLong(0L)
 
     // --- 吞吐量统计 ---
     /** 总读取字节数。 */
     private val totalReadBytes = AtomicLong(0L)
+
     /** 总写入字节数。 */
     private val totalWriteBytes = AtomicLong(0L)
+
     /** 总 IO 操作次数。 */
     private val totalIoOps = AtomicLong(0L)
+
     /** 按路径聚合的吞吐量：path → ThroughputStats。 */
     private val pathThroughput = ConcurrentHashMap<String, ThroughputStats>()
 
@@ -70,6 +77,13 @@ class NativeIoHook(
     /** Native PLT Hook 是否已安装。 */
     @Volatile
     private var nativeHookInstalled = false
+
+    // --- 零拷贝检测 ---
+    /** Buffer 拷贝操作追踪：sourcePath → CopyChain。 */
+    private val copyChains = ConcurrentHashMap<String, CopyChain>()
+
+    /** 零拷贝建议已触发的路径集合（避免重复上报）。 */
+    private val zeroCopyReported = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /**
      * 初始化 IO Hook。
@@ -96,6 +110,13 @@ class NativeIoHook(
             val fdThread = Thread({ monitorFdLeaks() }, THREAD_NAME_FD)
             fdThread.isDaemon = true
             fdThread.start()
+        }
+
+        // 启动零拷贝检测线程
+        if (config.enableZeroCopyDetection) {
+            val zcThread = Thread({ monitorZeroCopy() }, THREAD_NAME_ZERO_COPY)
+            zcThread.isDaemon = true
+            zcThread.start()
         }
     }
 
@@ -453,6 +474,77 @@ class NativeIoHook(
         }
     }
 
+    // ========================================================================
+    // 零拷贝检测
+    // ========================================================================
+
+    /**
+     * 记录一次 Buffer 拷贝操作。
+     * 当数据在两个路径之间通过小 buffer 多次拷贝时，建议使用零拷贝优化。
+     *
+     * @param fromPath 源路径。
+     * @param toPath 目标路径。
+     * @param bytes 拷贝字节数。
+     * @param bufferCount 单次拷贝中的 buffer 切片数。
+     */
+    fun onBufferCopy(fromPath: String, toPath: String, bytes: Long, bufferCount: Int) {
+        if (!initialized || !config.enableZeroCopyDetection) return
+        // 构建拷贝链 key
+        val chainKey = "${fromPath}$CHAIN_KEY_SEPARATOR$toPath"
+        val chain = copyChains.getOrPut(chainKey) { CopyChain(fromPath, toPath) }
+        // 累加拷贝统计
+        chain.totalBytes.addAndGet(bytes)
+        chain.copyCount.incrementAndGet()
+        chain.bufferCountSum.addAndGet(bufferCount.toLong())
+    }
+
+    /**
+     * 零拷贝检测线程。
+     * 定期扫描拷贝链，检测是否存在多次小 buffer 拷贝的场景。
+     * 当同一拷贝链的 bufferCountSum / copyCount > 阈值时，上报零拷贝优化建议。
+     */
+    private fun monitorZeroCopy() {
+        while (initialized) {
+            try {
+                Thread.sleep(ZERO_COPY_CHECK_INTERVAL_MS)
+                if (!initialized) break
+
+                // 遍历所有拷贝链
+                for ((key, chain) in copyChains) {
+                    val copyCount = chain.copyCount.get()
+                    // 至少发生足够次数的拷贝才检测
+                    if (copyCount < ZERO_COPY_MIN_COPY_COUNT) continue
+                    // 计算平均每次拷贝的 buffer 数量
+                    val avgBuffers = chain.bufferCountSum.get().toDouble() / copyCount
+                    // 平均 buffer 数量超过阈值 → 检测到零拷贝优化机会
+                    if (avgBuffers >= ZERO_COPY_AVG_BUFFER_THRESHOLD) {
+                        // 避免重复上报
+                        if (zeroCopyReported.add(key)) {
+                            Apm.emit(
+                                module = MODULE_IO,
+                                name = EVENT_ZERO_COPY_OPPORTUNITY,
+                                kind = ApmEventKind.ALERT,
+                                severity = ApmSeverity.INFO,
+                                fields = mapOf(
+                                    FIELD_FROM_PATH to chain.fromPath.take(MAX_PATH_LENGTH),
+                                    FIELD_TO_PATH to chain.toPath.take(MAX_PATH_LENGTH),
+                                    FIELD_TOTAL_BYTES to chain.totalBytes.get(),
+                                    FIELD_COPY_COUNT to copyCount,
+                                    FIELD_AVG_BUFFERS to String.format("%.1f", avgBuffers),
+                                    FIELD_SUGGESTION to SUGGESTION_ZERO_COPY
+                                )
+                            )
+                        }
+                    }
+                }
+            } catch (_: InterruptedException) {
+                break
+            } catch (_: Exception) {
+                // 静默处理
+            }
+        }
+    }
+
     /** 释放资源。 */
     fun destroy() {
         initialized = false
@@ -461,6 +553,8 @@ class NativeIoHook(
         closeableRefs.clear()
         openFdPaths.clear()
         pathThroughput.clear()
+        copyChains.clear()
+        zeroCopyReported.clear()
         // 卸载 Native Hook
         if (nativeHookInstalled) {
             try {
@@ -496,83 +590,166 @@ class NativeIoHook(
         val opCount: AtomicLong = AtomicLong(0L)
     )
 
+    /** 零拷贝检测：Buffer 拷贝链追踪。 */
+    class CopyChain(
+        /** 源路径。 */
+        val fromPath: String,
+        /** 目标路径。 */
+        val toPath: String,
+        /** 总拷贝字节数。 */
+        val totalBytes: AtomicLong = AtomicLong(0L),
+        /** 拷贝次数。 */
+        val copyCount: AtomicLong = AtomicLong(0L),
+        /** buffer 切片总数。 */
+        val bufferCountSum: AtomicLong = AtomicLong(0L)
+    )
+
     // --- Native 方法声明 ---
     /** 安装 Native IO Hook。 */
     private external fun nativeInstallIoHooks()
+
     /** 卸载 Native IO Hook。 */
     private external fun nativeUninstallIoHooks()
 
     companion object {
         /** IO 模块名。 */
         private const val MODULE_IO = "io"
+
         /** Native 库名称。 */
         private const val NATIVE_LIB_NAME = "apm-io"
 
         // --- 事件名 ---
         /** 小 buffer 事件。 */
         private const val EVENT_SMALL_BUFFER = "io_small_buffer"
+
         /** 重复读事件。 */
         private const val EVENT_DUPLICATE_READ = "io_duplicate_read"
+
         /** 主线程 IO 事件。 */
         private const val EVENT_MAIN_THREAD_IO = "io_main_thread"
+
         /** Closeable 泄漏事件。 */
         private const val EVENT_CLOSEABLE_LEAK = "io_closeable_leak"
+
         /** FD 泄漏事件。 */
         private const val EVENT_FD_LEAK = "io_fd_leak"
+
+        /** 零拷贝优化建议事件。 */
+        private const val EVENT_ZERO_COPY_OPPORTUNITY = "io_zero_copy_opportunity"
 
         // --- 字段名 ---
         /** 字段：路径。 */
         private const val FIELD_PATH = "path"
+
         /** 字段：buffer 大小。 */
         private const val FIELD_BUFFER_SIZE = "bufferSize"
+
         /** 字段：阈值。 */
         private const val FIELD_THRESHOLD = "threshold"
+
         /** 字段：读取次数。 */
         private const val FIELD_READ_COUNT = "readCount"
+
         /** 字段：耗时。 */
         private const val FIELD_DURATION_MS = "durationMs"
+
         /** 字段：字节数。 */
         private const val FIELD_BYTES = "bytes"
+
         /** 字段：FD 数量。 */
         private const val FIELD_FD_COUNT = "fdCount"
+
         /** 字段：分配计数。 */
         private const val FIELD_ALLOC_COUNT = "fdAllocCount"
+
         /** 字段：释放计数。 */
         private const val FIELD_RELEASE_COUNT = "fdReleaseCount"
+
         /** 字段：泄漏路径列表。 */
         private const val FIELD_LEAKED_PATHS = "leakedPaths"
+
         /** 字段：操作类型。 */
         private const val FIELD_OPERATION = "operation"
+
         /** 字段：Hook 层级。 */
         private const val FIELD_HOOK_LEVEL = "hookLevel"
+
         /** 字段：总读取字节。 */
         private const val FIELD_TOTAL_READ_BYTES = "totalReadBytes"
+
         /** 字段：总写入字节。 */
         private const val FIELD_TOTAL_WRITE_BYTES = "totalWriteBytes"
+
         /** 字段：总 IO 操作数。 */
         private const val FIELD_TOTAL_IO_OPS = "totalIoOps"
+
+        /** 字段：源路径（零拷贝）。 */
+        private const val FIELD_FROM_PATH = "fromPath"
+
+        /** 字段：目标路径（零拷贝）。 */
+        private const val FIELD_TO_PATH = "toPath"
+
+        /** 字段：拷贝次数（零拷贝）。 */
+        private const val FIELD_COPY_COUNT = "copyCount"
+
+        /** 字段：平均 buffer 数（零拷贝）。 */
+        private const val FIELD_AVG_BUFFERS = "avgBuffers"
+
+        /** 字段：优化建议。 */
+        private const val FIELD_SUGGESTION = "suggestion"
+
+        /** 字段：总字节数（零拷贝）。 */
+        private const val FIELD_TOTAL_BYTES = "totalBytes"
 
         // --- 常量 ---
         /** 路径最大长度。 */
         private const val MAX_PATH_LENGTH = 256
+
         /** Closeable 检测间隔。 */
         private const val CLOSEABLE_CHECK_INTERVAL_MS = 1000L
+
         /** FD 检测间隔。 */
         private const val FD_CHECK_INTERVAL_MS = 5000L
+
         /** 泄漏路径最大报告数。 */
         private const val MAX_LEAKED_PATHS_REPORT = 10
+
         /** /proc/self/fd 路径。 */
         private const val PROC_FD_PATH = "/proc/self/fd"
+
         /** 列表分隔符。 */
         private const val LIST_SEPARATOR = ", "
+
         /** 泄漏检测线程名。 */
         private const val THREAD_NAME_LEAK = "apm-io-leak-monitor"
+
         /** FD 检测线程名。 */
         private const val THREAD_NAME_FD = "apm-io-fd-monitor"
+
         /** Hook 层级：Native。 */
         private const val HOOK_LEVEL_NATIVE = "native_plt"
+
         /** 操作类型值。 */
         private const val OP_WRITE = "write"
         private const val OP_CREATE_NEW = "createNew"
+
+        // --- 零拷贝检测常量 ---
+        /** 零拷贝检测线程名。 */
+        private const val THREAD_NAME_ZERO_COPY = "apm-io-zero-copy"
+
+        /** 零拷贝检测间隔：10 秒。 */
+        private const val ZERO_COPY_CHECK_INTERVAL_MS = 10_000L
+
+        /** 最少拷贝次数（低于此值不检测）。 */
+        private const val ZERO_COPY_MIN_COPY_COUNT = 3L
+
+        /** 平均 buffer 数阈值（超过此值建议零拷贝）。 */
+        private const val ZERO_COPY_AVG_BUFFER_THRESHOLD = 4.0
+
+        /** 拷贝链 key 分隔符。 */
+        private const val CHAIN_KEY_SEPARATOR = " → "
+
+        /** 零拷贝优化建议文案。 */
+        private const val SUGGESTION_ZERO_COPY = "Consider FileChannel.transferTo / sendfile"
     }
 }

@@ -214,20 +214,20 @@ val okHttpClient = OkHttpClient.Builder()
 | 模块 | 包名 | 说明 |
 |------|------|------|
 | apm-model | 事件模型 | ApmEvent + Line Protocol 序列化 |
-| apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/日志 |
+| apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程/日志 |
 | apm-storage | 本地存储 | EventStore 接口 + FileEventStore (RingBuffer) |
-| apm-uploader | 上传通道 | RetryingApmUploader (重试/批量/指数退避) |
-| apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump |
-| apm-crash | 崩溃监控 | Java + Native 信号 + Tombstone |
+| apm-uploader | 上传通道 | HttpApmUploader + LogcatApmUploader + RetryingApmUploader |
+| apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
+| apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone |
 | apm-anr | ANR 监控 | SIGQUIT + Watchdog + traces.txt 解析 |
 | apm-launch | 启动监控 | 冷/热/温启动 + 6 阶段追踪 |
 | apm-network | 网络监控 | OkHttp 全链路 (DNS→TCP→TLS→Body) |
 | apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
 | apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
-| apm-io | IO 监控 | Native PLT Hook + FD 泄漏 + Closeable 泄漏 |
+| apm-io | IO 监控 | Native PLT Hook + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
 | apm-battery | 电量监控 | WakeLock + CPU Jiffies + Alarm 泛洪 |
 | apm-sqlite | SQLite 监控 | 慢查询 + QueryPlan 分析 |
-| apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 |
+| apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |
 | apm-ipc | IPC 监控 | Binder 调用耗时 |
 | apm-thread-monitor | 线程监控 | 膨胀/泄漏/死锁 |
 | apm-gc-monitor | GC 监控 | 频次/耗时/Heap/分配率/回收率 |
@@ -242,9 +242,11 @@ val okHttpClient = OkHttpClient.Builder()
 | 内存泄漏 (Activity/Fragment/ViewModel) | ✅ | ✅ | ✅ |
 | OOM 预警 + Hprof Dump | ✅ | ✅ | ✅ |
 | Hprof 裁剪 | ✅ | ✅ | ✅ |
+| 引用链分析 (Hprof 解析 + BFS) | ✅ | ✅ | ✅ |
+| fork 子进程 Dump (无 STW) | ✅ | ❌ | ✅ |
 | NativeHeap 监控 | ✅ | ❌ | ✅ |
 | Java 崩溃 | ✅ | ✅ | ❌ |
-| Native 崩溃 + Tombstone | ✅ | ✅ | ❌ |
+| Native 崩溃信号处理器 + Tombstone | ✅ | ✅ | ❌ |
 | ANR 检测 (SIGQUIT + Watchdog) | ✅ | ✅ | ❌ |
 | ANR 原因分类 | ✅ (5 类) | ❌ | ❌ |
 | 冷启动 6 阶段 | ✅ | ✅ | ❌ |
@@ -255,13 +257,16 @@ val okHttpClient = OkHttpClient.Builder()
 | IO Native PLT Hook | ✅ | ✅ | ❌ |
 | FD 泄漏检测 | ✅ | ✅ | ❌ |
 | Closeable 泄漏 | ✅ | ❌ | ❌ |
+| 零拷贝检测 | ✅ | ❌ | ❌ |
 | SQLite QueryPlan 分析 | ✅ | ❌ | ❌ |
 | Binder IPC 监控 | ✅ | ❌ | ❌ |
 | 线程死锁检测 | ✅ | ❌ | ❌ |
 | GC 监控 (5 维度) | ✅ | ❌ | ❌ |
 | View 树分析 | ✅ | ❌ | ❌ |
 | WakeLock + CPU Jiffies | ✅ | ❌ | ❌ |
-| WebView 性能 | ✅ | ❌ | ❌ |
+| WebView 性能 + JS Bridge + 资源瀑布图 | ✅ | ❌ | ❌ |
+| HTTP 上传通道 + Gzip 压缩 | ✅ | ❌ | ❌ |
+| 多进程支持 (ContentProvider 自动初始化) | ✅ | ❌ | ❌ |
 | 令牌桶限流 + 灰度发布 | ✅ | ❌ | ❌ |
 | Gradle ASM 字节码插桩 | ✅ | ❌ | ❌ |
 | 模块数量 | **16 监控 + 5 基础** | 6 插件 | 3 模块 |

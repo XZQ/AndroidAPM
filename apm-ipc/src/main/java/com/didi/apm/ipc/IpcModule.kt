@@ -26,15 +26,13 @@ import com.didi.apm.model.ApmSeverity
  * ipcModule.onBinderCallEnd(interfaceName, methodName, durationMs)
  * ```
  */
-class IpcModule(
-    /** 模块配置。 */
-    private val config: IpcConfig = IpcConfig()
-) : ApmModule {
+class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
     /** APM 上下文引用。 */
     private var apmContext: ApmContext? = null
+
     /** 是否已启动。 */
     @Volatile
     private var started = false
@@ -99,20 +97,28 @@ class IpcModule(
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "ipc"
+
         /** 慢 Binder 调用事件。 */
         private const val EVENT_SLOW_BINDER = "slow_binder_call"
+
         /** 字段：接口名。 */
         private const val FIELD_INTERFACE = "interfaceName"
+
         /** 字段：方法名。 */
         private const val FIELD_METHOD = "methodName"
+
         /** 字段：耗时。 */
         private const val FIELD_DURATION_MS = "durationMs"
+
         /** 字段：是否主线程。 */
         private const val FIELD_IS_MAIN_THREAD = "isMainThread"
+
         /** 字段：阈值。 */
         private const val FIELD_THRESHOLD = "threshold"
+
         /** 字段：堆栈。 */
         private const val FIELD_STACK_TRACE = "stackTrace"
+
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
     }

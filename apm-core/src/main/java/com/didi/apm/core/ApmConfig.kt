@@ -9,7 +9,9 @@ enum class ProcessStrategy {
     /** 仅在主进程初始化，子进程跳过。 */
     MAIN_PROCESS_ONLY,
     /** 所有进程都初始化。 */
-    ALL_PROCESSES
+    ALL_PROCESSES,
+    /** 自定义进程映射：通过 customProcessModules 指定每个进程启用的模块。 */
+    CUSTOM
 }
 
 /**
@@ -37,6 +39,8 @@ data class ApmConfig(
     val debugLogging: Boolean = true,
     /** 进程策略：控制 APM 在哪些进程中初始化。 */
     val processStrategy: ProcessStrategy = ProcessStrategy.MAIN_PROCESS_ONLY,
+    /** 自定义进程模块映射：进程名 → 允许运行的模块名列表。仅 [ProcessStrategy.CUSTOM] 时生效。 */
+    val customProcessModules: Map<String, List<String>> = emptyMap(),
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
     /** 业务上下文提供者，每次 emit 时动态获取。 */

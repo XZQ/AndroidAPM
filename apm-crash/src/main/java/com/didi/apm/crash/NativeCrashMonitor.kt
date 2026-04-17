@@ -24,6 +24,10 @@ object NativeCrashMonitor {
     @Volatile
     private var initialized = false
 
+    /** 信号处理器是否已安装。 */
+    @Volatile
+    private var signalHandlerInstalled = false
+
     /** 最近一次 tombstone 检查时间。 */
     private var lastCheckTime: Long = 0L
 
@@ -76,18 +80,52 @@ object NativeCrashMonitor {
 
     /**
      * 初始化 Native Crash 监控。
-     * 尝试加载 JNI 库注册信号处理器。
+     * 尝试加载 JNI 库并安装信号处理器。
      */
     fun init() {
         if (initialized) return
         initialized = true
         try {
-            // 尝试加载 JNI 库（如果存在）
+            // 加载 JNI 库
             System.loadLibrary("apm_crash")
+            // 安装信号处理器：拦截 SIGSEGV/SIGABRT/SIGBUS/SIGFPE
+            if (nativeInstallSignalHandlers()) {
+                signalHandlerInstalled = true
+            }
         } catch (e: UnsatisfiedLinkError) {
             // JNI 库不存在，使用 Java 层降级方案（tombstone 解析）
         }
     }
+
+    /**
+     * 销毁信号处理器，恢复原始信号处理。
+     * 在模块卸载或进程退出前调用。
+     */
+    fun destroy() {
+        if (signalHandlerInstalled) {
+            try {
+                // 恢复原始信号处理器
+                nativeUninstallSignalHandlers()
+            } catch (e: UnsatisfiedLinkError) {
+                // JNI 库已卸载，忽略
+            }
+            signalHandlerInstalled = false
+        }
+    }
+
+    /**
+     * 安装 Native 信号处理器。
+     * 注册 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGPIPE、SIGSTKFLT 的信号处理函数。
+     *
+     * @return true 表示安装成功
+     */
+    private external fun nativeInstallSignalHandlers(): Boolean
+
+    /**
+     * 卸载 Native 信号处理器。
+     * 恢复所有被拦截信号的原始处理函数。
+     */
+    private external fun nativeUninstallSignalHandlers()
 
     /**
      * 记录一次 Native 崩溃信号。

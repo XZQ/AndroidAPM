@@ -84,7 +84,7 @@ class ApmConfigTest {
 
     /** ProcessStrategy 枚举完整性。 */
     @Test
-    fun `processStrategy enum has two values`() {
-        assertEquals(2, ProcessStrategy.values().size)
+    fun `processStrategy enum has three values`() {
+        assertEquals(3, ProcessStrategy.values().size)
     }
 }
