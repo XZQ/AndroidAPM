@@ -1,0 +1,18 @@
+<resources>
+    <string name="app_name">Android APM Sample</string>
+    <string name="title">Android APM Dashboard</string>
+    <!-- Memory -->
+    <string name="allocate_memory">Allocate 12MB</string>
+    <string name="clear_memory">Clear Memory</string>
+    <string name="capture_snapshot">Capture Snapshot</string>
+    <string name="test_leak">Test Activity Leak</string>
+    <!-- Crash -->
+    <string name="test_crash">Trigger Crash</string>
+    <!-- Network -->
+    <string name="test_network_ok">Simulate OK Request</string>
+    <string name="test_network_slow">Simulate Slow Request</string>
+    <string name="test_network_error">Simulate Error Request</string>
+    <!-- Events -->
+    <string name="recent_events">Recent Events</string>
+    <string name="finish_activity">Finish (Leak)</string>
+</resources>
