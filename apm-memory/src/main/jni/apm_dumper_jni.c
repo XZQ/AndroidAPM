@@ -114,7 +114,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
  * @return >0 父进程（返回子进程 PID），0 子进程（正常情况不会返回），-1 fork 失败
  */
 JNIEXPORT jint JNICALL
-Java_com_didi_apm_memory_oom_HprofDumper_nativeForkAndDump(
+Java_com_apm_memory_oom_HprofDumper_nativeForkAndDump(
     JNIEnv *env, jobject thiz, jstring output_path) {
 
     if (output_path == NULL) {
@@ -210,7 +210,7 @@ Java_com_didi_apm_memory_oom_HprofDumper_nativeForkAndDump(
  * @return 0 表示子进程仍在运行，非 0 表示子进程已退出
  */
 JNIEXPORT jint JNICALL
-Java_com_didi_apm_memory_oom_HprofDumper_waitPidNonBlocking(
+Java_com_apm_memory_oom_HprofDumper_waitPidNonBlocking(
     JNIEnv *env, jobject thiz, jint pid) {
 
     int status = 0;

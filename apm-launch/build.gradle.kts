@@ -4,9 +4,9 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.launch"
+    namespace = "com.apm.launch"
     compileSdk = 34
-    defaultConfig { minSdk = 21 }
+    defaultConfig { minSdk = 24 }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
@@ -16,5 +16,5 @@ android {
 dependencies {
     implementation(project(":apm-core"))
     implementation(project(":apm-model"))
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

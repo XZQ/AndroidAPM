@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.uploader"
+    namespace = "com.apm.uploader"
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 21
+        minSdk = 24
     }
 
     compileOptions {
@@ -23,5 +23,5 @@ android {
 
 dependencies {
     api(project(":apm-model"))
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

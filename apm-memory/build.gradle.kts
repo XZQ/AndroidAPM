@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.memory"
+    namespace = "com.apm.memory"
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 21
+        minSdk = 24
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -35,7 +35,7 @@ android {
 dependencies {
     implementation(project(":apm-core"))
     implementation(project(":apm-model"))
-    implementation("androidx.lifecycle:lifecycle-process:2.6.2")
+    implementation(libs.lifecycle.process)
     implementation("androidx.fragment:fragment-ktx:1.6.2")
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

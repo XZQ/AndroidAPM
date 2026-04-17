@@ -343,7 +343,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
  * @return JNI_TRUE 安装成功，JNI_FALSE 安装失败
  */
 JNIEXPORT jboolean JNICALL
-Java_com_didi_apm_crash_NativeCrashMonitor_nativeInstallSignalHandlers(
+Java_com_apm_crash_NativeCrashMonitor_nativeInstallSignalHandlers(
     JNIEnv *env, jclass thiz) {
 
     if (s_handlers_installed) {
@@ -393,7 +393,7 @@ Java_com_didi_apm_crash_NativeCrashMonitor_nativeInstallSignalHandlers(
  * @param thiz this 对象
  */
 JNIEXPORT void JNICALL
-Java_com_didi_apm_crash_NativeCrashMonitor_nativeUninstallSignalHandlers(
+Java_com_apm_crash_NativeCrashMonitor_nativeUninstallSignalHandlers(
     JNIEnv *env, jclass thiz) {
 
     if (!s_handlers_installed) {

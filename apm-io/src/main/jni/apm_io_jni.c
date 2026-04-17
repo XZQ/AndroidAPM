@@ -536,7 +536,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
  * @param clazz 调用类的 jclass
  */
 JNIEXPORT void JNICALL
-Java_com_didi_apm_io_NativeIoHook_nativeInstallIoHooks(
+Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
         JNIEnv *env,
         jclass clazz) {
     if (s_hooks_installed) {
@@ -623,7 +623,7 @@ Java_com_didi_apm_io_NativeIoHook_nativeInstallIoHooks(
  * @param clazz 调用类的 jclass
  */
 JNIEXPORT void JNICALL
-Java_com_didi_apm_io_NativeIoHook_nativeUninstallIoHooks(
+Java_com_apm_io_NativeIoHook_nativeUninstallIoHooks(
         JNIEnv *env,
         jclass clazz) {
     if (!s_hooks_installed) {

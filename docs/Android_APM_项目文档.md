@@ -140,31 +140,31 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 
 | 模块 | 包名 | 核心类 | 源文件数 |
 |------|------|--------|---------|
-| apm-model | com.didi.apm.model | ApmEvent, ApmEventKind, ApmSeverity, Line Protocol 序列化 | 1 |
-| apm-core | com.didi.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter | 9 |
-| apm-core/throttle | com.didi.apm.core.throttle | RateLimiter(令牌桶), SampleController(灰度+采样) | 2 |
-| apm-storage | com.didi.apm.storage | EventStore, FileEventStore(lazy init, ring buffer) | 2 |
-| apm-uploader | com.didi.apm.uploader | ApmUploader, LogcatApmUploader, HttpApmUploader, RetryingApmUploader | 4 |
+| apm-model | com.apm.model | ApmEvent, ApmEventKind, ApmSeverity, Line Protocol 序列化 | 1 |
+| apm-core | com.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter | 9 |
+| apm-core/throttle | com.apm.core.throttle | RateLimiter(令牌桶), SampleController(灰度+采样) | 2 |
+| apm-storage | com.apm.storage | EventStore, FileEventStore(lazy init, ring buffer) | 2 |
+| apm-uploader | com.apm.uploader | ApmUploader, LogcatApmUploader, HttpApmUploader, RetryingApmUploader | 4 |
 
 ### 3.2 功能模块层
 
 | 模块 | 包名 | 核心类 | 源文件数 |
 |------|------|--------|---------|
-| apm-memory | com.didi.apm.memory | MemoryModule, MemorySampler, MemoryScheduler, MemorySnapshot, MemoryReporter, MemoryConfig | 17 + JNI |
-| apm-crash | com.didi.apm.crash | CrashModule, CrashConfig, NativeCrashMonitor(信号处理器+Tombstone降级) | 3 + JNI |
-| apm-anr | com.didi.apm.anr | AnrModule(SIGQUIT+Watchdog+traces.txt+分类+去重), AnrConfig | 2 |
-| apm-launch | com.didi.apm.launch | LaunchModule(6阶段冷启动+热启动+首帧), LaunchConfig | 2 |
-| apm-network | com.didi.apm.network | NetworkModule, ApmNetworkInterceptor, ApmEventListener, NetworkConfig, NetworkStats, NetworkRequestStats | 6 |
-| apm-fps | com.didi.apm.fps | FpsModule, FpsMonitor(Choreographer VSync), FpsConfig, FrameStats | 4 |
-| apm-slow-method | com.didi.apm.slowmethod | SlowMethodModule, ApmSlowMethodTracer(ASM运行时), StackSamplingProfiler, SlowMethodConfig | 4 |
-| apm-io | com.didi.apm.io | IoModule, NativeIoHook(PLT Hook+FD+吞吐量+零拷贝), IoConfig | 3 + JNI |
-| apm-thread-monitor | com.didi.apm.threadmonitor | ThreadMonitorModule, ThreadMonitorConfig | 2 |
-| apm-battery | com.didi.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler | 3 |
-| apm-sqlite | com.didi.apm.sqlite | SqliteModule, SqliteConfig, QueryPlanAnalyzer | 3 |
-| apm-webview | com.didi.apm.webview | WebviewModule(JS Bridge+Console Error), WebviewConfig, ResourceWaterfall | 3 |
-| apm-ipc | com.didi.apm.ipc | IpcModule, IpcConfig | 2 |
-| apm-gc-monitor | com.didi.apm.gcmonitor | GcMonitorModule, GcStats, GcMonitorConfig | 3 |
-| apm-render | com.didi.apm.render | RenderModule, RenderConfig, RenderStats | 3 |
+| apm-memory | com.apm.memory | MemoryModule, MemorySampler, MemoryScheduler, MemorySnapshot, MemoryReporter, MemoryConfig | 17 + JNI |
+| apm-crash | com.apm.crash | CrashModule, CrashConfig, NativeCrashMonitor(信号处理器+Tombstone降级) | 3 + JNI |
+| apm-anr | com.apm.anr | AnrModule(SIGQUIT+Watchdog+traces.txt+分类+去重), AnrConfig | 2 |
+| apm-launch | com.apm.launch | LaunchModule(6阶段冷启动+热启动+首帧), LaunchConfig | 2 |
+| apm-network | com.apm.network | NetworkModule, ApmNetworkInterceptor, ApmEventListener, NetworkConfig, NetworkStats, NetworkRequestStats | 6 |
+| apm-fps | com.apm.fps | FpsModule, FpsMonitor(Choreographer VSync), FpsConfig, FrameStats | 4 |
+| apm-slow-method | com.apm.slowmethod | SlowMethodModule, ApmSlowMethodTracer(ASM运行时), StackSamplingProfiler, SlowMethodConfig | 4 |
+| apm-io | com.apm.io | IoModule, NativeIoHook(PLT Hook+FD+吞吐量+零拷贝), IoConfig | 3 + JNI |
+| apm-thread-monitor | com.apm.threadmonitor | ThreadMonitorModule, ThreadMonitorConfig | 2 |
+| apm-battery | com.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler | 3 |
+| apm-sqlite | com.apm.sqlite | SqliteModule, SqliteConfig, QueryPlanAnalyzer | 3 |
+| apm-webview | com.apm.webview | WebviewModule(JS Bridge+Console Error), WebviewConfig, ResourceWaterfall | 3 |
+| apm-ipc | com.apm.ipc | IpcModule, IpcConfig | 2 |
+| apm-gc-monitor | com.apm.gcmonitor | GcMonitorModule, GcStats, GcMonitorConfig | 3 |
+| apm-render | com.apm.render | RenderModule, RenderConfig, RenderStats | 3 |
 
 ### 3.3 构建工具层
 

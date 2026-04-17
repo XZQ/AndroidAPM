@@ -13,8 +13,8 @@ dependencies {
 gradlePlugin {
     plugins {
         create("apmSlowMethod") {
-            id = "com.didi.apm.slow-method"
-            implementationClass = "com.didi.apm.plugin.ApmSlowMethodPlugin"
+            id = "com.apm.slow-method"
+            implementationClass = "com.apm.plugin.ApmSlowMethodPlugin"
         }
     }
 }

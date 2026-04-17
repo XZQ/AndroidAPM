@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.crash"
+    namespace = "com.apm.crash"
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 21
+        minSdk = 24
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
@@ -31,5 +31,5 @@ android {
 dependencies {
     implementation(project(":apm-core"))
     implementation(project(":apm-model"))
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
 }

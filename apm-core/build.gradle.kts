@@ -4,11 +4,11 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.core"
+    namespace = "com.apm.core"
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 21
+        minSdk = 24
     }
 
     compileOptions {
@@ -25,6 +25,6 @@ dependencies {
     api(project(":apm-model"))
     implementation(project(":apm-storage"))
     implementation(project(":apm-uploader"))
-    implementation("androidx.lifecycle:lifecycle-process:2.6.2")
-    testImplementation("junit:junit:4.13.2")
+    implementation(libs.lifecycle.process)
+    testImplementation(libs.junit)
 }

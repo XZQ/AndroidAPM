@@ -1,0 +1,14 @@
+[versions]
+kotlin = "1.8.10"
+agp = "7.4.2"
+lifecycle = "2.6.2"
+junit = "4.13.2"
+
+[libraries]
+lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
+junit = { module = "junit:junit", version.ref = "junit" }
+
+[plugins]
+android-library = { id = "com.android.library", version.ref = "agp" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }

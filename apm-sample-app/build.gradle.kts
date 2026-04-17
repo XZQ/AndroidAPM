@@ -4,12 +4,12 @@ plugins {
 }
 
 android {
-    namespace = "com.didi.apm.sample"
+    namespace = "com.apm.sample"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.didi.apm.sample"
-        minSdk = 21
+        applicationId = "com.apm.sample"
+        minSdk = 24
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
@@ -54,6 +54,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.7.0")
     implementation("androidx.appcompat:appcompat:1.4.1")
     implementation("com.google.android.material:material:1.5.0")
-    testImplementation("junit:junit:4.13.2")
+    testImplementation(libs.junit)
     testImplementation("org.mockito:mockito-core:4.8.0")
 }
