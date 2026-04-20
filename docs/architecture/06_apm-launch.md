@@ -1,6 +1,6 @@
 # apm-launch 模块架构
 
-> 启动监控：6 阶段冷启动 + 热启动 + 首帧检测 + 瓶颈分析
+> 启动监控：6 阶段冷启动 + 热/温启动恢复耗时 + 首帧检测 + 瓶颈分析
 
 ---
 
@@ -27,6 +27,7 @@
 │ - isStopped: Boolean                                     │
 │ - activityStoppedTime: Long                              │
 │ - startedActivityCount: Int                              │
+│ - relaunchTracker: RelaunchTracker                       │
 │                                                          │
 │ ContentProvider 追踪:                                     │
 │ - contentProviderTotalMs: Long                           │
@@ -86,11 +87,11 @@
 └───────────────────────────────────────────────────────────────┘
 ```
 
-## 热启动检测流程
+## 热/温启动检测流程
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│                    热启动检测                              │
+│                  热/温启动检测                             │
 ├──────────────────────────────────────────────────────────┤
 │                                                          │
 │  Activity.onStopped()                                    │
@@ -100,19 +101,21 @@
 │                                                          │
 │  Activity.onActivityStarted() (再次启动)                  │
 │       │                                                  │
-│       ├── if (!isStopped) → 不是热启动                    │
+│       ├── if (!isStopped) → 不是恢复路径                   │
 │       │                                                  │
-│       ├── stoppedDuration = now - activityStoppedTime    │
+│       ├── backgroundDuration = now - activityStoppedTime │
 │       │                                                  │
-│       ├── if (stoppedDuration < warmStartThresholdMs)    │
-│       │   └── 温启动 (默认 < 5s)                         │
-│       │       → reportLaunch("warm", duration)           │
+│       ├── if (backgroundDuration < warmStartThresholdMs) │
+│       │   └── 热启动 (默认 < 5s)                         │
+│       │       → 标记 launchType="hot"                    │
 │       │                                                  │
 │       └── else                                           │
-│           └── 热启动 (>= 5s)                             │
-│               → reportLaunch("hot", duration)            │
+│           └── 温启动 (>= 5s)                             │
+│               → 标记 launchType="warm"                   │
 │                                                          │
-│  isStopped = false                                       │
+│  Activity.onResumed()                                    │
+│       └── launchDuration = resumedAt - startedAt         │
+│           → 上报 duration + backgroundDurationMs         │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
 ```

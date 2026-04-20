@@ -55,6 +55,7 @@
 ├──────────────────────────────┤
 │ - eventFile: File            │
 │ - recentLines: ArrayDeque<String> │ (内存 ring buffer, 500行)
+│ - rewriteScheduler: FileRewriteScheduler │
 │ - initialized: Boolean @Volatile │
 │ - maxLines: Int = 500        │
 ├──────────────────────────────┤
@@ -62,7 +63,7 @@
 │   ├── lazy { 确保文件存在 }   │
 │   ├── recentLines.addLast()  │
 │   ├── 超过 maxLines 则 trim  │
-│   └── 每50次 rewrite 文件    │
+│   └── 每累计50次 append rewrite 文件 │
 │ + readRecent(limit)          │
 │ + clear()  @Synchronized     │
 └──────────────────────────────┘
@@ -81,9 +82,9 @@ append(event)
     ├── recentLines.addLast(line)
     │   └── while (size > maxLines) recentLines.removeFirst()
     │
-    ├── writeCounter++
+    ├── rewriteScheduler.onAppend()
     │
-    └── if (writeCounter % 50 == 0)
+    └── if (累计 append 次数 % 50 == 0)
         └── rewriteFile()  ← 全量重写，清理过期数据
 ```
 
@@ -93,7 +94,8 @@ append(event)
 ┌──────────────────────────────┐
 │   «interface» ApmUploader    │
 ├──────────────────────────────┤
-│ + upload(event: ApmEvent)    │
+│ + upload(event: ApmEvent): Boolean │
+│ + shutdown()                 │
 └──────────────┬───────────────┘
                │
        ┌───────┴────────┐
@@ -104,7 +106,7 @@ append(event)
 ├─────────────┤  ├──────────────────────┤
 │- endpoint   │  │- delegate: ApmUploader│← 委托实际上传
 │             │  │- queue: LinkedBlocking│  容量 500
-│+ upload(e)  │  │  Queue<ApmEvent>     │
+│+ upload(e): Boolean│  │  Queue<ApmEvent>     │
 │  → Log.d()  │  │- executor: SingleThread│
 │  → 打印Line │  │- running: @Volatile  │
 │    Protocol │  │- batchSize = 10      │
@@ -145,7 +147,7 @@ upload(event) 调用
        │       queue.poll(100ms)   │← 批量聚合
        │                           │
        │  ③ for (event in batch)   │
-       │       delegate.upload()   │← 调用 LogcatUploader
+       │       delegate.upload()   │← 返回 false 或抛异常都视为失败
        │                           │
        │  ④ 失败则 retry           │
        │     delay = policy.delay  │

@@ -3,7 +3,6 @@ package com.apm.uploader
 import android.util.Log
 import com.apm.model.ApmEvent
 import com.apm.model.toLineProtocol
-import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -50,9 +49,9 @@ class HttpApmUploader(
      *
      * @param event 要上传的 APM 事件
      */
-    override fun upload(event: ApmEvent) {
+    override fun upload(event: ApmEvent): Boolean {
         val payload = event.toLineProtocol().toByteArray(Charsets.UTF_8)
-        sendHttpPost(payload)
+        return sendHttpPost(payload)
     }
 
     /**

@@ -7,6 +7,7 @@ import com.apm.core.throttle.RateLimiter
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 
 /**
  * APM 事件分发器。
@@ -28,6 +29,10 @@ internal class ApmDispatcher(
         Thread(runnable, THREAD_NAME)
     }
 
+    /** 分发器是否已关闭。 */
+    @Volatile
+    private var shutdown = false
+
     /**
      * 分发一个事件。执行流程：
      * 1. 限流检查（ERROR/FATAL 级别跳过限流，保证关键事件不丢失）
@@ -35,6 +40,12 @@ internal class ApmDispatcher(
      * 3. 在执行器中：存储 → 上传
      */
     fun dispatch(event: ApmEvent) {
+        // stop 之后直接拒绝新事件，避免关闭期间出现尾部写入。
+        if (shutdown) {
+            logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
+            return
+        }
+
         // ERROR/FATAL 事件绕过限流，确保崩溃/ANR 等关键事件必达
         if (rateLimiter != null && event.severity != ApmSeverity.ERROR && event.severity != ApmSeverity.FATAL) {
             val key = "${event.module}/${event.name}"
@@ -45,19 +56,27 @@ internal class ApmDispatcher(
         }
 
         // 异步执行存储+上传，不阻塞调用线程
-        executor.execute {
-            try {
-                store.append(event)
-                uploader.upload(event)
-            } catch (throwable: Throwable) {
-                logger.e("Failed to dispatch ${event.module}/${event.name}", throwable)
+        try {
+            executor.execute {
+                try {
+                    store.append(event)
+                    val uploadAccepted = uploader.upload(event)
+                    if (!uploadAccepted) {
+                        logger.w("Uploader rejected ${event.module}/${event.name}")
+                    }
+                } catch (throwable: Throwable) {
+                    logger.e("Failed to dispatch ${event.module}/${event.name}", throwable)
+                }
             }
+        } catch (rejected: RejectedExecutionException) {
+            logger.d("Dispatcher rejected ${event.module}/${event.name} after shutdown")
         }
     }
 
     /** 关闭分发器，停止接受新事件。 */
     fun shutdown() {
-        executor.shutdown()
+        shutdown = true
+        executor.shutdownNow()
     }
 
     companion object {

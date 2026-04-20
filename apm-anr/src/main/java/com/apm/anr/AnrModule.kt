@@ -8,6 +8,9 @@ import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -56,6 +59,12 @@ class AnrModule(
     /** Watchdog 线程引用。 */
     private var watchdogThread: Thread? = null
 
+    /** SIGQUIT 分析线程池。 */
+    private var sigquitAnalysisExecutor: ExecutorService? = null
+
+    /** SIGQUIT 调度器。 */
+    private val sigquitAnalysisDispatcher = SigquitAnalysisDispatcher(::scheduleSigquitAnalysis)
+
     // --- ANR 去重 ---
     /** 上次 ANR 上报时间戳。 */
     private val lastReportTimeMs = AtomicLong(0L)
@@ -63,11 +72,6 @@ class AnrModule(
     @Volatile private var lastStackFingerprint: String = ""
 
     // --- 堆栈采样 ---
-    /** 多次堆栈采样结果，用于原因分类。 */
-    private val stackSamples = mutableListOf<String>()
-    /** 采样 Handler。 */
-    private val sampleHandler = Handler(Looper.getMainLooper())
-
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
@@ -77,6 +81,9 @@ class AnrModule(
         if (!config.enableAnrMonitor) return
         running = true
         anrDetected.set(false)
+        sigquitAnalysisExecutor = Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, SIGQUIT_ANALYSIS_THREAD_NAME)
+        }
 
         // 尝试注册 SIGQUIT 信号处理器
         val sigquitReady = if (config.enableSigquitDetection) {
@@ -102,7 +109,8 @@ class AnrModule(
         if (config.enableSigquitDetection) {
             unregisterSigquitHandler()
         }
-        sampleHandler.removeCallbacksAndMessages(null)
+        sigquitAnalysisExecutor?.shutdownNow()
+        sigquitAnalysisExecutor = null
     }
 
     // ========================================================================
@@ -150,9 +158,28 @@ class AnrModule(
      * 注意：此方法在信号处理器线程中执行，必须快速返回。
      */
     private fun onSigquitReceived() {
-        if (!running) return
-        // 投递到主线程执行 ANR 处理，避免在信号线程做重操作
-        mainHandler.post { handleAnrDetection(DETECTION_SIGQUIT) }
+        // 将重分析工作切到独立线程，避免依赖已阻塞的主线程。
+        sigquitAnalysisDispatcher.dispatch(
+            running = running,
+            anrDetected = anrDetected,
+            analysis = { handleAnrDetection(DETECTION_SIGQUIT) }
+        )
+    }
+
+    /**
+     * 将 SIGQUIT 分析任务提交到独立线程。
+     *
+     * @param analysis 实际分析任务
+     * @return true 表示任务已被线程池接管
+     */
+    private fun scheduleSigquitAnalysis(analysis: () -> Unit): Boolean {
+        val executor = sigquitAnalysisExecutor ?: return false
+        return try {
+            executor.execute(analysis)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
     }
 
     // ========================================================================
@@ -453,6 +480,8 @@ class AnrModule(
         private const val MODULE_NAME = "anr"
         /** Watchdog 线程名。 */
         private const val THREAD_NAME = "apm-anr-watchdog"
+        /** SIGQUIT 分析线程名。 */
+        private const val SIGQUIT_ANALYSIS_THREAD_NAME = "apm-anr-sigquit"
 
         // --- 事件名 ---
         /** ANR 检测事件名。 */

@@ -77,16 +77,24 @@ class RetryingApmUploader(
      * 将事件加入上传队列。
      * 队列满时丢弃并打印警告，不阻塞调用方。
      */
-    override fun upload(event: ApmEvent) {
+    override fun upload(event: ApmEvent): Boolean {
+        // 关闭后拒绝新的上传请求，避免 stop 之后继续积压事件。
+        if (!running) {
+            return false
+        }
         if (!queue.offer(event)) {
             Log.w(TAG, "Upload queue full, dropping event: ${event.name}")
+            return false
         }
+        return true
     }
 
     /** 关闭上传器，停止工作线程。 */
-    fun shutdown() {
+    override fun shutdown() {
         running = false
-        executor.shutdown()
+        // 立即打断 poll/sleep，避免 stop 后后台线程继续持有资源。
+        executor.shutdownNow()
+        delegate.shutdown()
     }
 
     /**
@@ -126,17 +134,32 @@ class RetryingApmUploader(
         var attempt = 0
         while (attempt <= retryPolicy.maxRetries) {
             try {
-                events.forEach { delegate.upload(it) }
-                return
+                // 只有整批事件都被底层 uploader 成功接收时才算本轮成功。
+                val uploadSucceeded = events.all { delegate.upload(it) }
+                if (uploadSucceeded) {
+                    return
+                }
             } catch (e: Exception) {
-                attempt++
-                if (attempt > retryPolicy.maxRetries) {
+                if (attempt >= retryPolicy.maxRetries) {
                     Log.e(TAG, "Upload failed after ${retryPolicy.maxRetries} retries", e)
                     return
                 }
-                // 按指数退避等待后重试
+            }
+
+            attempt++
+            if (attempt > retryPolicy.maxRetries) {
+                Log.e(TAG, "Upload failed after ${retryPolicy.maxRetries} retries")
+                return
+            }
+
+            try {
+                // 按指数退避等待后重试。
                 val delay = retryPolicy.delayForAttempt(attempt)
                 Thread.sleep(delay)
+            } catch (_: InterruptedException) {
+                // 关闭上传器时立即结束重试循环。
+                Thread.currentThread().interrupt()
+                return
             }
         }
     }

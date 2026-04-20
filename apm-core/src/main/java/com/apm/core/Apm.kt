@@ -8,8 +8,6 @@ import com.apm.storage.EventStore
 import com.apm.storage.FileEventStore
 import com.apm.core.throttle.RateLimiter
 import com.apm.uploader.ApmUploader
-import com.apm.uploader.LogcatApmUploader
-import com.apm.uploader.RetryingApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
@@ -78,17 +76,8 @@ object Apm {
         // 创建本地存储（延迟加载，不在 init 时读文件）
         val store: EventStore = FileEventStore(application)
 
-        // 上传通道：基础 Logcat 上传器，可选包装重试逻辑
-        val baseUploader: ApmUploader = LogcatApmUploader(config.endpoint)
-        val uploader: ApmUploader = if (config.enableRetry) {
-            RetryingApmUploader(
-                delegate = baseUploader,
-                retryPolicy = com.apm.uploader.RetryPolicy(
-                    maxRetries = config.maxRetries,
-                    baseDelayMs = config.retryBaseDelayMs
-                )
-            )
-        } else baseUploader
+        // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。
+        val uploader: ApmUploader = UploaderFactory.create(config)
 
         // 限流器：按 module/name 分桶，超出配额的事件被丢弃
         val rateLimiter = if (config.rateLimitEventsPerWindow > 0) {
@@ -104,7 +93,7 @@ object Apm {
             logger = logger,
             dispatcher = dispatcher
         )
-        state = State(context, store, dispatcher)
+        state = State(context, store, dispatcher, uploader)
 
         // 启动所有已注册的模块
         modules.forEach(::startModule)
@@ -134,11 +123,14 @@ object Apm {
      * 调用后框架进入未初始化状态，可重新 init。
      */
     fun stop() {
+        val currentState = state ?: return
+        // 先切断新的事件入口，避免 stop 过程中继续接收上报。
+        state = null
         modules.forEach {
             runCatching { it.onStop() }
         }
-        state?.dispatcher?.shutdown()
-        state = null
+        currentState.dispatcher.shutdown()
+        currentState.uploader.shutdown()
     }
 
     /**
@@ -234,6 +226,8 @@ object Apm {
         /** 本地存储。 */
         val store: EventStore,
         /** 事件分发器。 */
-        val dispatcher: ApmDispatcher
+        val dispatcher: ApmDispatcher,
+        /** 上传器。 */
+        val uploader: ApmUploader
     )
 }

@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-20 | `20` 个 root Gradle subproject + `1` 个 included build | 85 个主源码文件 | 34 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 均通过
+> 最后校验：2026-04-20 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
 >
 > 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；构建单元总数 `21 = 20` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -80,7 +80,7 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 | Phase 4: 高级模块 | 已完成 | gc-monitor, render |
 | Phase 5: 全面对标重构 | 已完成 | 15 个监控模块对标微信 Matrix + KOOM + Google 最佳实践 |
 | Phase 6: 三大核心增强 | 已完成 | ANR SIGQUIT、ASM 字节码插桩、IO Native Hook；sample 已完成 slow-method 插件接线 |
-| Phase 7: 测试覆盖 | 已完成 | 34 个测试文件，覆盖 Config + Module + Plugin 核心逻辑 |
+| Phase 7: 测试覆盖 | 已完成 | 40 个测试文件，覆盖 Config + Module + Plugin 核心逻辑 |
 
 ### 1.2 Git 提交历史
 
@@ -99,6 +99,12 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 4. `apm-plugin` 的 ASM tracer 目标类已修正为 `com.apm.slowmethod.ApmSlowMethodTracer`。
 5. `apm-sample-app` 已通过 `pluginManagement { includeBuild("apm-plugin") }` 应用 `com.apm.slow-method`。
 6. 由于 `apm-plugin` 仍基于 legacy Transform API，仓库已在 `gradle.properties` 打开 `android.experimental.legacyTransform.forceNonIncremental=true` 兼容开关。
+7. `ApmConfig` 已支持显式注入 `uploader`；未注入时按 `endpoint` 自动选择 `HttpApmUploader` 或 `LogcatApmUploader`。
+8. `RetryingApmUploader` 已将 `delegate.upload()` 返回 `false` 也纳入重试判定，`Apm.stop()` 同时关闭 dispatcher 和 uploader。
+9. `AnrModule` 的 SIGQUIT 路径已切到独立分析线程，不再依赖主线程消息队列恢复后才处理。
+10. `LaunchModule` 的热/温启动已改为“后台停留时长决定类型，前台恢复链路耗时决定上报值”，并附带 `backgroundDurationMs`。
+11. `FileEventStore` 已改为按真实 append 次数触发重写，避免缓冲区打满后每次 append 都整文件重写。
+12. `apm-core` 已将 `apm-uploader` 提升为 `api` 依赖，保证 `ApmConfig.uploader` 暴露的公开类型能被下游应用正常编译解析。
 
 ### 1.4 编码规范（CLAUDE.md 强制）
 
@@ -153,9 +159,9 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 | 模块 | 包名 | 核心类 | 源文件数 |
 |------|------|--------|---------|
 | apm-model | com.apm.model | ApmEvent, ApmEventKind, ApmSeverity, Line Protocol 序列化 | 1 |
-| apm-core | com.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter | 9 |
+| apm-core | com.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter, UploaderFactory | 10 |
 | apm-core/throttle | com.apm.core.throttle | RateLimiter(令牌桶), SampleController(灰度+采样) | 2 |
-| apm-storage | com.apm.storage | EventStore, FileEventStore(lazy init, ring buffer) | 2 |
+| apm-storage | com.apm.storage | EventStore, FileEventStore(lazy init, ring buffer), FileRewriteScheduler | 3 |
 | apm-uploader | com.apm.uploader | ApmUploader, LogcatApmUploader, HttpApmUploader, RetryingApmUploader | 4 |
 
 ### 3.2 功能模块层
@@ -164,8 +170,8 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 |------|------|--------|---------|
 | apm-memory | com.apm.memory | MemoryModule, MemorySampler, MemoryScheduler, MemorySnapshot, MemoryReporter, MemoryConfig | 17 + JNI |
 | apm-crash | com.apm.crash | CrashModule, CrashConfig, NativeCrashMonitor(信号处理器+Tombstone降级) | 3 + JNI |
-| apm-anr | com.apm.anr | AnrModule(SIGQUIT+Watchdog+traces.txt+分类+去重), AnrConfig | 2 |
-| apm-launch | com.apm.launch | LaunchModule(6阶段冷启动+热启动+首帧), LaunchConfig | 2 |
+| apm-anr | com.apm.anr | AnrModule(SIGQUIT+Watchdog+traces.txt+分类+去重), SigquitAnalysisDispatcher, AnrConfig | 3 |
+| apm-launch | com.apm.launch | LaunchModule(6阶段冷启动+热启动+首帧), RelaunchTracker, LaunchConfig | 3 |
 | apm-network | com.apm.network | NetworkModule, ApmNetworkInterceptor, ApmEventListener, NetworkConfig, NetworkStats, NetworkRequestStats | 6 |
 | apm-fps | com.apm.fps | FpsModule, FpsMonitor(Choreographer VSync), FpsConfig, FrameStats | 4 |
 | apm-slow-method | com.apm.slowmethod | SlowMethodModule, ApmSlowMethodTracer(ASM运行时), StackSamplingProfiler, SlowMethodConfig | 4 |
@@ -199,7 +205,7 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 ```
 AnrModule（双重检测 + 原因分类 + traces.txt + 去重）
 ├── SIGQUIT 信号检测
-│   └── 注册 SIGQUIT handler，收到信号 → 触发 ANR 分析
+│   └── 注册 SIGQUIT handler，收到信号 → 调度到独立分析线程执行 ANR 分析
 ├── Watchdog 线程
 │   └── 主线程 tick 标记，超时未响应 → 触发 ANR 分析
 ├── ANR 原因分类

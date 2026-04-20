@@ -6,7 +6,6 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
-import android.view.Window
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
@@ -71,6 +70,12 @@ class LaunchModule(
     private var isStopped: Boolean = false
     /** 当前正在运行的 Activity 计数。 */
     private var startedActivityCount: Int = 0
+
+    /** 热启动/温启动恢复过程跟踪器。 */
+    private val relaunchTracker = RelaunchTracker(
+        warmStartThresholdMs = config.warmStartThresholdMs,
+        launchTimeoutMs = config.launchTimeoutMs
+    )
 
     // --- ContentProvider 追踪 ---
     /** ContentProvider.onCreate 累计耗时。 */
@@ -218,11 +223,13 @@ class LaunchModule(
      * 对首帧渲染追踪至关重要。
      */
     override fun onActivityResumed(activity: Activity) {
-        if (!firstActivityCreated || firstActivityOnResumeMs > 0L) return
-        if (config.enablePhaseTracking) {
+        if (firstActivityCreated && firstActivityOnResumeMs <= 0L && config.enablePhaseTracking) {
             // 记录 Phase 5: firstActivity.onResume
             firstActivityOnResumeMs = SystemClock.elapsedRealtime()
         }
+
+        // 热/温启动的恢复耗时以 resumed 结束，避免把后台停留时间当成启动耗时。
+        reportRelaunchIfNeeded(activity)
     }
 
     /**
@@ -231,47 +238,12 @@ class LaunchModule(
      */
     override fun onActivityStarted(activity: Activity) {
         startedActivityCount++
+        val now = SystemClock.elapsedRealtime()
+        relaunchTracker.onActivityStarted(now)
 
-        // 热启动/温启动判定：之前处于 stopped 状态，且这是第一个重新 start 的
+        // 热启动/温启动判定：之前处于 stopped 状态，且这是第一个重新 start 的。
         if (isStopped && startedActivityCount == 1) {
-            val now = SystemClock.elapsedRealtime()
-            val durationMs = now - activityStoppedTime
             isStopped = false
-
-            if (durationMs >= config.launchTimeoutMs) return
-
-            // 区分热启动和温启动
-            if (config.enableHotStart && durationMs < config.warmStartThresholdMs) {
-                // 热启动：stop 后很快恢复（Activity 仍在内存中）
-                Apm.emit(
-                    module = MODULE_NAME,
-                    name = EVENT_HOT_START,
-                    kind = ApmEventKind.METRIC,
-                    severity = ApmSeverity.INFO,
-                    fields = mapOf(
-                        FIELD_LAUNCH_DURATION_MS to durationMs,
-                        FIELD_FIRST_ACTIVITY to activity.javaClass.simpleName,
-                        FIELD_IS_COLD_START to false,
-                        FIELD_LAUNCH_TYPE to LAUNCH_TYPE_HOT,
-                        FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty())
-                    )
-                )
-            } else if (config.enableWarmStart && durationMs >= config.warmStartThresholdMs) {
-                // 温启动：stop 后较长时间恢复（Activity 被回收但进程仍在）
-                Apm.emit(
-                    module = MODULE_NAME,
-                    name = EVENT_WARM_START,
-                    kind = ApmEventKind.METRIC,
-                    severity = ApmSeverity.INFO,
-                    fields = mapOf(
-                        FIELD_LAUNCH_DURATION_MS to durationMs,
-                        FIELD_FIRST_ACTIVITY to activity.javaClass.simpleName,
-                        FIELD_IS_COLD_START to false,
-                        FIELD_LAUNCH_TYPE to LAUNCH_TYPE_WARM,
-                        FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty())
-                    )
-                )
-            }
         }
     }
 
@@ -285,7 +257,45 @@ class LaunchModule(
             startedActivityCount = 0
             isStopped = true
             activityStoppedTime = SystemClock.elapsedRealtime()
+            relaunchTracker.onAllActivitiesStopped(activityStoppedTime)
         }
+    }
+
+    /**
+     * 上报待完成的热启动/温启动恢复事件。
+     *
+     * @param activity 当前恢复到前台的 Activity
+     */
+    private fun reportRelaunchIfNeeded(activity: Activity) {
+        val measurement = relaunchTracker.onActivityResumed(SystemClock.elapsedRealtime()) ?: return
+        val eventName = when (measurement.launchType) {
+            RelaunchTracker.LAUNCH_TYPE_HOT -> {
+                if (!config.enableHotStart) return
+                EVENT_HOT_START
+            }
+
+            RelaunchTracker.LAUNCH_TYPE_WARM -> {
+                if (!config.enableWarmStart) return
+                EVENT_WARM_START
+            }
+
+            else -> return
+        }
+
+        Apm.emit(
+            module = MODULE_NAME,
+            name = eventName,
+            kind = ApmEventKind.METRIC,
+            severity = ApmSeverity.INFO,
+            fields = mapOf(
+                FIELD_LAUNCH_DURATION_MS to measurement.launchDurationMs,
+                FIELD_BACKGROUND_DURATION_MS to measurement.backgroundDurationMs,
+                FIELD_FIRST_ACTIVITY to activity.javaClass.simpleName,
+                FIELD_IS_COLD_START to false,
+                FIELD_LAUNCH_TYPE to measurement.launchType,
+                FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty())
+            )
+        )
     }
 
     // --- 首帧渲染追踪 ---
@@ -465,6 +475,8 @@ class LaunchModule(
         private const val FIELD_PROCESS_NAME = "processName"
         /** 字段：启动类型。 */
         private const val FIELD_LAUNCH_TYPE = "launchType"
+        /** 字段：后台停留时长。 */
+        private const val FIELD_BACKGROUND_DURATION_MS = "backgroundDurationMs"
         /** 字段：Application 创建阶段耗时。 */
         private const val FIELD_PHASE_APP_CREATE_MS = "phaseAppCreateMs"
         /** 字段：ContentProvider 阶段耗时。 */
@@ -492,9 +504,9 @@ class LaunchModule(
         /** 启动类型值：冷启动。 */
         private const val LAUNCH_TYPE_COLD = "cold"
         /** 启动类型值：热启动。 */
-        private const val LAUNCH_TYPE_HOT = "hot"
+        private const val LAUNCH_TYPE_HOT = RelaunchTracker.LAUNCH_TYPE_HOT
         /** 启动类型值：温启动。 */
-        private const val LAUNCH_TYPE_WARM = "warm"
+        private const val LAUNCH_TYPE_WARM = RelaunchTracker.LAUNCH_TYPE_WARM
 
         // --- 阶段名 ---
         /** 阶段名：Application 初始化。 */

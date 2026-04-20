@@ -17,9 +17,10 @@ class LogcatApmUploader(
      * 将事件格式化后输出到 Logcat。
      * 格式：target=xxx line_protocol_content
      */
-    override fun upload(event: ApmEvent) {
+    override fun upload(event: ApmEvent): Boolean {
         val target = endpoint.ifBlank { FALLBACK_TARGET }
         Log.i(TAG, "target=$target ${event.toLineProtocol()}")
+        return true
     }
 
     companion object {

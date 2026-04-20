@@ -26,6 +26,9 @@ class FileEventStore(
     /** 内存环形缓冲区，保存最近的事件。 */
     private val recentLines = ArrayDeque<String>(maxLines)
 
+    /** 文件裁剪节奏控制器。 */
+    private val rewriteScheduler = FileRewriteScheduler(REWRITE_INTERVAL)
+
     /** 是否已完成文件加载。 */
     @Volatile
     private var initialized = false
@@ -71,8 +74,8 @@ class FileEventStore(
         while (recentLines.size > maxLines) {
             recentLines.removeFirst()
         }
-        // 定期重写文件，裁剪掉已被淘汰的旧数据
-        if (recentLines.size % REWRITE_INTERVAL == 0) {
+        // 定期重写文件，裁剪掉已被淘汰的旧数据。
+        if (rewriteScheduler.onAppend()) {
             rewriteWithRecentLines()
         }
     }
@@ -93,6 +96,8 @@ class FileEventStore(
         ensureInit()
         eventFile.writeText("")
         recentLines.clear()
+        // 清空后重新开始统计 append 次数。
+        rewriteScheduler.reset()
     }
 
     /**

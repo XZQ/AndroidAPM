@@ -16,7 +16,6 @@
 ├─────────────────────────────────────────────────────────────────┤
 │ + init(application: Application, config: ApmConfig)             │
 │ + register(module: ApmModule)                                   │
-│ + start()                                                       │
 │ + stop()                                                        │
 │ + emit(module, name, kind, severity, fields)                    │
 │ + isInitialized(): Boolean                                      │
@@ -24,7 +23,9 @@
 ├─────────────────────────────────────────────────────────────────┤
 │ «class» State                                                   │
 │  - context: ApmContext                                          │
+│  - store: EventStore                                            │
 │  - dispatcher: ApmDispatcher                                    │
+│  - uploader: ApmUploader                                        │
 └──────────────┬──────────────────────────────────────────────────┘
                │ 持有
                ▼
@@ -58,8 +59,10 @@
 │                    ApmConfig (data class)                     │
 ├──────────────────────────────────────────────────────────────┤
 │ endpoint: String = ""                                        │
+│ uploader: ApmUploader? = null                                │
 │ debugLogging: Boolean = true                                 │
-│ processStrategy: ProcessStrategy (MAIN_ONLY/ALL/DEDICATED)   │
+│ processStrategy: ProcessStrategy (MAIN_PROCESS_ONLY/ALL_PROCESSES/CUSTOM) │
+│ customProcessModules: Map<String, List<String>>              │
 │ defaultContext: Map<String, String>                           │
 │ bizContextProvider: BizContextProvider                        │
 │ rateLimitEventsPerWindow: Int = 10                            │
@@ -87,16 +90,21 @@ Apm.init(app, config)
        ├── 创建组件
        │   ├── logger = AndroidApmLogger()
        │   ├── store = FileEventStore(app)
-       │   ├── baseUploader = LogcatApmUploader(endpoint)
-       │   ├── uploader = RetryingApmUploader(baseUploader, retryPolicy)
+       │   ├── uploader = UploaderFactory.create(config)
        │   ├── rateLimiter = RateLimiter(events, window)
        │   ├── dispatcher = ApmDispatcher(store, uploader, rateLimiter, logger)
        │   └── context = ApmContext(app, config, processName, logger, dispatcher)
        │
-       ├── state = State(context, dispatcher)
+       ├── state = State(context, store, dispatcher, uploader)
        │
        └── 返回
 ```
+
+`UploaderFactory` 选择规则：
+
+- `config.uploader != null`：直接使用显式注入 uploader
+- `endpoint` 以 `http://` 或 `https://` 开头：使用 `HttpApmUploader`
+- 其他情况：使用 `LogcatApmUploader`
 
 ## 事件分发流程
 
@@ -131,6 +139,7 @@ ApmDispatcher.dispatch(event)
        │               → RetryingApmUploader.upload()
        │               → queue.offer(event) (非阻塞)
        │               → 上传线程批量取出并上传
+       │               → 返回 false 时按失败处理并记录日志
        │   }
        │
        └── 返回（非阻塞）

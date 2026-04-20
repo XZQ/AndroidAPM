@@ -3,6 +3,7 @@ package com.apm.core
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
 import com.apm.core.throttle.RateLimiter
+import com.apm.uploader.ApmUploader
 
 /** 进程策略：控制 APM 在哪些进程中初始化。 */
 enum class ProcessStrategy {
@@ -35,6 +36,8 @@ fun interface BizContextProvider {
 data class ApmConfig(
     /** 上传目标地址。为空时使用 Logcat 本地输出。 */
     val endpoint: String = "",
+    /** 可选自定义上传器。非空时优先级高于 endpoint 自动推导。 */
+    val uploader: ApmUploader? = null,
     /** 是否开启调试日志（Log.d 级别）。 */
     val debugLogging: Boolean = true,
     /** 进程策略：控制 APM 在哪些进程中初始化。 */

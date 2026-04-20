@@ -20,8 +20,8 @@
 │ - watchdogThread: Thread?                                   │
 │ - lastReportTimeMs: AtomicLong                              │
 │ - lastStackFingerprint: String @Volatile                    │
-│ - stackSamples: MutableList<String>                          │
-│ - sampleHandler: Handler                                    │
+│ - sigquitAnalysisExecutor: ExecutorService?                 │
+│ - sigquitAnalysisDispatcher: SigquitAnalysisDispatcher      │
 ├─────────────────────────────────────────────────────────────┤
 │ + onInitialize(context)                                     │
 │ + onStart()                                                 │
@@ -75,7 +75,8 @@
 │  │       ├── anrDetected.compareAndSet(false, true) │       │
 │  │       │   └── 防止与 Watchdog 重复触发            │       │
 │  │       │                                          │       │
-│  │       └── handleAnrDetection("sigquit")          │       │
+│  │       └── 调度到 apm-anr-sigquit 线程             │       │
+│  │           └── handleAnrDetection("sigquit")      │       │
 │  └──────────────────────────────────────────────────┘       │
 │                                                              │
 │  ┌─────────────────── 检测通道 2 ───────────────────┐       │
@@ -100,7 +101,9 @@
 ## ANR 分析处理流程
 
 ```
-handleAnrDetection(source)
+onSigquitReceived() / handleAnrDetection(source)
+       │
+       ├── SIGQUIT 路径先经 SigquitAnalysisDispatcher 去重并投递后台线程
        │
        ├── AtomicBoolean CAS 防重入
        │
