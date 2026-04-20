@@ -21,23 +21,21 @@ import com.apm.model.ApmSeverity
  * - Activity 场景感知
  * - API 24+ FrameMetrics 细粒度渲染分析
  */
-class FpsModule(
-    /** 模块配置。 */
-    private val config: FpsConfig = FpsConfig()
-) : ApmModule, Application.ActivityLifecycleCallbacks {
+class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Application.ActivityLifecycleCallbacks {
 
     override val name: String = MODULE_NAME
 
     /** APM 上下文引用。 */
     private var apmContext: ApmContext? = null
+
     /** FPS 监控器，核心帧率采集引擎。 */
     private val fpsMonitor = FpsMonitor(config)
+
     /** 当前前台 Activity 类名，用于场景标注。 */
     private var currentScene: String = ""
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
-        // 设置帧率统计回调
         fpsMonitor.onFrameStats = { stats -> onFrameStats(stats) }
     }
 
@@ -164,32 +162,46 @@ class FpsModule(
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "fps"
+
         /** FPS 统计事件名。 */
         private const val EVENT_FPS_STATS = "fps_stats"
+
         /** 字段：FPS 值。 */
         private const val FIELD_FPS = "fps"
+
         /** 字段：掉帧数。 */
         private const val FIELD_DROPPED_FRAMES = "droppedFrames"
+
         /** 字段：卡顿次数。 */
         private const val FIELD_JANK_COUNT = "jankCount"
+
         /** 字段：冻结次数。 */
         private const val FIELD_FROZEN_COUNT = "frozenCount"
+
         /** 字段：总帧数。 */
         private const val FIELD_FRAME_COUNT = "frameCount"
+
         /** 字段：场景名。 */
         private const val FIELD_SCENE = "scene"
+
         /** 字段：刷新率。 */
         private const val FIELD_REFRESH_RATE = "refreshRate"
+
         /** 字段：丢帧严重程度。 */
         private const val FIELD_DROP_SEVERITY = "dropSeverity"
+
         /** 字段：FrameMetrics measure+layout 耗时。 */
         private const val FIELD_METRICS_MEASURE_LAYOUT_NS = "metricsMeasureLayoutNs"
+
         /** 字段：FrameMetrics draw 耗时。 */
         private const val FIELD_METRICS_DRAW_NS = "metricsDrawNs"
+
         /** 字段：FrameMetrics sync 耗时。 */
         private const val FIELD_METRICS_SYNC_NS = "metricsSyncNs"
+
         /** 字段：FrameMetrics swapBuffers 耗时。 */
         private const val FIELD_METRICS_SWAP_NS = "metricsSwapNs"
+
         /** 字段：FrameMetrics 延迟帧数。 */
         private const val FIELD_METRICS_DELAYED_FRAMES = "metricsDelayedFrames"
     }

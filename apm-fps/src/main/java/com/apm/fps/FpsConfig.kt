@@ -31,16 +31,22 @@ data class FpsConfig(
     companion object {
         /** 默认卡顿阈值：16ms（60fps）。 */
         private const val DEFAULT_JANK_THRESHOLD_MS = 16L
+
         /** 默认冻结阈值：300ms。 */
         private const val DEFAULT_FROZEN_THRESHOLD_MS = 300L
+
         /** 默认统计窗口：60 帧（约 1 秒）。 */
         private const val DEFAULT_WINDOW_SIZE = 60
+
         /** FPS 告警阈值：30 fps。 */
         private const val DEFAULT_FPS_WARN_THRESHOLD = 30
+
         /** 默认堆栈最大长度。 */
         private const val DEFAULT_MAX_STACK_LENGTH = 4000
+
         /** 丢帧 SEVERE 阈值：单次掉 10 帧。 */
         private const val DEFAULT_DROP_SEVERE_THRESHOLD = 10
+
         /** 丢帧 MODERATE 阈值：单次掉 4 帧。 */
         private const val DEFAULT_DROP_MODERATE_THRESHOLD = 4
     }
