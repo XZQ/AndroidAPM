@@ -1,6 +1,8 @@
 # Android APM 项目文档
 
-> 最后更新：2026-04-17 | 20 模块 | 75+ 源文件 | 27 测试类 | BUILD SUCCESSFUL
+> 最后校验：2026-04-20 | 21 个 Gradle 模块 | 85 个主源码文件 | 34 个测试文件 | `assembleDebug` / `testDebugUnitTest` 均通过
+>
+> 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；模块总数 `21 = 4` 个基础模块 + `15` 个监控模块 + `apm-plugin` + `apm-sample-app`
 
 ---
 
@@ -8,7 +10,7 @@
 
 ### 项目是什么
 
-一个 Android 应用性能监控（APM）框架，对标微信 Matrix + 快手 KOOM + Google 最佳实践，覆盖内存、崩溃、ANR、启动、网络、FPS、慢方法、IO、电量、SQLite、WebView、IPC、线程、GC、渲染共 **16 个监控维度**。
+一个 Android 应用性能监控（APM）框架，对标微信 Matrix + 快手 KOOM + Google 最佳实践，当前代码覆盖内存、崩溃、ANR、启动、网络、FPS、慢方法、IO、电量、SQLite、WebView、IPC、线程、GC、渲染共 **15 个监控模块**。
 
 ### 环境要求
 
@@ -18,7 +20,7 @@
 | Android Gradle Plugin | 7.4.2 |
 | Kotlin | 1.8.10 |
 | compileSdk | 34 |
-| minSdk | 21 |
+| minSdk | 24 |
 | targetSdk | 34 |
 
 ### 构建命令
@@ -38,7 +40,7 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│                       Feature 层（16 功能模块）                        │
+│                       Feature 层（15 功能模块）                        │
 │  memory | crash | anr | launch | network | fps | slow-method | io     │
 │  thread-monitor | battery | sqlite | webview | ipc | gc-monitor       │
 │  render | (apm-plugin: Gradle ASM 插桩插件)                           │
@@ -75,17 +77,17 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 | Phase 2: 核心模块 | 已完成 | memory, crash, anr, launch, network |
 | Phase 3: 扩展模块 | 已完成 | fps, slow-method, io, thread-monitor, battery, sqlite, webview, ipc |
 | Phase 4: 高级模块 | 已完成 | gc-monitor, render |
-| Phase 5: 全面对标重构 | 已完成 | 16 模块对标微信 Matrix + KOOM + Google 最佳实践 |
+| Phase 5: 全面对标重构 | 已完成 | 15 个监控模块对标微信 Matrix + KOOM + Google 最佳实践 |
 | Phase 6: 三大核心增强 | 已完成 | ANR SIGQUIT、ASM 字节码插桩、IO Native Hook |
-| Phase 7: 测试覆盖 | 已完成 | 25 个测试类，Config + Module 逻辑测试 |
+| Phase 7: 测试覆盖 | 已完成 | 34 个测试文件，覆盖 Config + Module + Plugin 核心逻辑 |
 
 ### 1.2 Git 提交历史
 
 ```
-7af866f chore: gitignore 添加 WPS 临时锁定文件（.~*）
-236505f build: 添加构建辅助文件 gradle.properties 和 gradlew.bat
-473b394 feat: 三大核心模块增强 — ANR SIGQUIT、ASM 插桩、IO Native Hook
-91a886e feat: 全面重构 16 模块对标微信 Matrix + KOOM + Google 最佳实践
+372d7e7 Docs: Add mandatory MEMORY.md sync rule after each commit
+2b73c8b Feat: Full project optimization - tests, version catalog, CI
+eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
+4a6a491 Refactor: minSdk 24 + centralized dependency management + package rename com.didi.apm -> com.apm
 ```
 
 ### 1.3 编码规范（CLAUDE.md 强制）
