@@ -217,6 +217,13 @@
 └────────────────────────────────────────────────────────────┘
 ```
 
+## 当前仓库接线状态
+
+- `settings.gradle.kts` 通过 `pluginManagement { includeBuild("apm-plugin") }` 解析本地 Gradle 插件。
+- `apm-sample-app/build.gradle.kts` 已应用 `id("com.apm.slow-method")`，sample 构建会实际执行 ASM 插桩链路。
+- 运行时 tracer 目标类为 `com.apm.slowmethod.ApmSlowMethodTracer`，已与插件注入目标保持一致。
+- 由于当前插件仍基于 legacy Transform API，仓库在 `gradle.properties` 中启用了 `android.experimental.legacyTransform.forceNonIncremental=true` 兼容开关。
+
 ## ApmSlowMethodTracer 运行时流程
 
 ```

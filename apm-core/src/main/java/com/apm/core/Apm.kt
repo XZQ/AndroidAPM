@@ -205,6 +205,19 @@ object Apm {
      */
     private fun startModule(module: ApmModule) {
         val currentState = state ?: return
+        val config = currentState.context.config
+        val shouldRun = ProcessModuleFilter.shouldRunInCurrentProcess(
+            moduleName = module.name,
+            processName = currentState.context.processName,
+            strategy = config.processStrategy,
+            customMapping = config.customProcessModules
+        )
+        if (!shouldRun) {
+            currentState.context.logger.d(
+                "Skip module=${module.name} in process=${currentState.context.processName} strategy=${config.processStrategy}"
+            )
+            return
+        }
         runCatching {
             module.onInitialize(currentState.context)
             module.onStart()

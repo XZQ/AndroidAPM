@@ -6,6 +6,8 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import java.io.InputStream
+import java.io.OutputStream
 
 /**
  * IO 监控模块。
@@ -39,17 +41,65 @@ class IoModule(
     @Volatile
     private var started = false
 
+    /** 自动 Hook / Native Hook 桥接器。 */
+    private var nativeIoHook: NativeIoHook? = null
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
 
     override fun onStart() {
         started = config.enableIoMonitor
+        if (started) {
+            nativeIoHook = NativeIoHook(config).also { it.init() }
+        }
         apmContext?.logger?.d("IO module started, mainThreadThreshold=${config.mainThreadIoThresholdMs}ms")
     }
 
     override fun onStop() {
         started = false
+        nativeIoHook?.destroy()
+        nativeIoHook = null
+    }
+
+    /**
+     * 包装 InputStream，接入自动 IO 追踪。
+     * 未启动时返回原始流。
+     */
+    fun wrapInputStream(source: InputStream, path: String): InputStream {
+        return nativeIoHook?.wrapInputStream(source, path) ?: source
+    }
+
+    /**
+     * 包装 OutputStream，接入自动 IO 追踪。
+     * 未启动时返回原始流。
+     */
+    fun wrapOutputStream(source: OutputStream, path: String): OutputStream {
+        return nativeIoHook?.wrapOutputStream(source, path) ?: source
+    }
+
+    /**
+     * 记录自动 Hook 的读取行为。
+     * 用于小 buffer、重复读和吞吐量统计。
+     */
+    fun onRead(path: String, bytesRead: Int, bufferUsed: Int) {
+        nativeIoHook?.onRead(path, bytesRead, bufferUsed)
+    }
+
+    /**
+     * 记录自动 Hook 的关闭行为。
+     * 用于主线程 IO、FD 释放和 closeable 泄漏分析。
+     */
+    fun onClose(source: Any, totalBytes: Long) {
+        nativeIoHook?.onClose(source, totalBytes)
+    }
+
+    /**
+     * 记录一次 buffer 拷贝行为。
+     * 零拷贝检测开启时用于识别优化机会。
+     */
+    fun onBufferCopy(fromPath: String, toPath: String, bytes: Long, bufferCount: Int) {
+        nativeIoHook?.onBufferCopy(fromPath, toPath, bytes, bufferCount)
     }
 
     /**

@@ -32,16 +32,31 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
      * 保存原始 handler，崩溃发生时先上报再委托。
      */
     override fun onStart() {
-        if (!config.enableJavaCrash) return
-        previousHandler = Thread.getDefaultUncaughtExceptionHandler()
-        Thread.setDefaultUncaughtExceptionHandler(CrashHandler(previousHandler))
-        apmContext?.logger?.d("Crash module started")
+        if (!config.enableJavaCrash && !config.enableNativeCrash) return
+
+        // 启用 Java 崩溃链路：替换默认未捕获异常处理器。
+        if (config.enableJavaCrash) {
+            previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+            Thread.setDefaultUncaughtExceptionHandler(CrashHandler(previousHandler))
+        }
+
+        // 启用 Native 崩溃链路：尝试安装 JNI 信号处理器。
+        if (config.enableNativeCrash) {
+            NativeCrashMonitor.init()
+        }
+
+        apmContext?.logger?.d(
+            "Crash module started, java=${config.enableJavaCrash}, native=${config.enableNativeCrash}"
+        )
     }
 
     /** 恢复原始 handler。 */
     override fun onStop() {
-        if (Thread.getDefaultUncaughtExceptionHandler() is CrashHandler) {
+        if (config.enableJavaCrash && Thread.getDefaultUncaughtExceptionHandler() is CrashHandler) {
             Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+        if (config.enableNativeCrash) {
+            NativeCrashMonitor.destroy()
         }
     }
 

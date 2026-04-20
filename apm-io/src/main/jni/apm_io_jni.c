@@ -494,7 +494,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     }
 
     /* 查找 NativeIoHook 类 */
-    jclass local_class = (*env)->FindClass(env, "com/didi/apm/io/NativeIoHook");
+    jclass local_class = (*env)->FindClass(env, "com/apm/io/NativeIoHook");
     if (local_class == NULL) {
         LOG_E("Failed to find NativeIoHook class");
         return JNI_ERR;

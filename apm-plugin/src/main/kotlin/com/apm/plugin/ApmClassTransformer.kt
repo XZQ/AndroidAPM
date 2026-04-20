@@ -24,7 +24,7 @@ import java.util.jar.JarOutputStream
 object ApmClassTransformer {
 
     /** 运行时 Tracer 类的全限定名（JVM 内部格式）。 */
-    private const val TRACER_CLASS = "com/didi/apm/slowmethod/ApmSlowMethodTracer"
+    private const val TRACER_CLASS = "com/apm/slowmethod/ApmSlowMethodTracer"
     /** Tracer 的 methodEnter 方法签名。 */
     private const val METHOD_ENTER = "methodEnter"
     /** Tracer 的 methodExit 方法签名。 */

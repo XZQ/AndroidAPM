@@ -1,4 +1,5 @@
 pluginManagement {
+    includeBuild("apm-plugin")
     repositories {
         google()
         mavenCentral()
@@ -36,6 +37,5 @@ include(
     ":apm-ipc",
     ":apm-gc-monitor",
     ":apm-render",
-    ":apm-sample-app",
-    ":apm-plugin"
+    ":apm-sample-app"
 )

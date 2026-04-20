@@ -303,7 +303,7 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
 
     /* 查找 NativeCrashMonitor 类 */
     jclass crash_class = (*env)->FindClass(env,
-        "com/didi/apm/crash/NativeCrashMonitor");
+        "com/apm/crash/NativeCrashMonitor");
     if (crash_class == NULL) {
         LOGE("JNI_OnLoad: NativeCrashMonitor class not found");
         return JNI_ERR;
