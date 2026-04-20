@@ -85,6 +85,7 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 ### 1.2 Git 提交历史
 
 ```
+117bafa Fix: Repair uploader lifecycle and measurement semantics
 372d7e7 Docs: Add mandatory MEMORY.md sync rule after each commit
 2b73c8b Feat: Full project optimization - tests, version catalog, CI
 eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
