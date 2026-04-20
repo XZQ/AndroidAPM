@@ -108,7 +108,7 @@ Android APM Framework 是一个全维度 Android 性能监控框架，覆盖 **1
 - JDK 11
 - Kotlin 1.8.10
 - AGP 7.4.2
-- compileSdk 34 / minSdk 21
+- compileSdk 34 / minSdk 24
 
 ### 构建
 
