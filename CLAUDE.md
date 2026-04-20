@@ -39,3 +39,14 @@
 - 文档更新提交用 Docs:
 - 回滚提交用 Revert:
 - 构建/依赖/脚本调整/CICD  Build:
+
+## Commit 后更新 MEMORY.md（强制）
+
+每次 `git commit` 成功后，**必须**同步更新 `~/.claude/projects/-home-didi-AI-APM/memory/MEMORY.md`：
+
+1. 更新 `最近更新` 区块：日期、最近 commit hash、构建/测试状态
+2. 如有模块变更，更新 `模块状态总表`
+3. 如有架构决策变更，更新 `架构关键决策`
+4. 如有新技术要点，补充到 `技术要点备忘`
+
+目的：任何模型或开发者打开此项目时，MEMORY.md 就是项目最新状态的唯一真相源。
