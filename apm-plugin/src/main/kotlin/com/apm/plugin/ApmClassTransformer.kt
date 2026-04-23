@@ -6,7 +6,6 @@ import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
 import org.objectweb.asm.commons.AdviceAdapter
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.util.jar.JarEntry
 import java.util.jar.JarFile
@@ -31,6 +30,40 @@ object ApmClassTransformer {
     private const val METHOD_EXIT = "methodExit"
     /** 方法签名描述符。 */
     private const val METHOD_DESC = "(Ljava/lang/String;)V"
+
+    /**
+     * 创建可复用的 ASM ClassVisitor。
+     *
+     * @param api ASM API 版本。
+     * @param classVisitor 下游 visitor。
+     * @param className 可选类名；为空时从 visit 回调中读取。
+     * @return 注入慢方法探针的 visitor。
+     */
+    fun createClassVisitor(
+        api: Int,
+        classVisitor: org.objectweb.asm.ClassVisitor,
+        className: String? = null
+    ): org.objectweb.asm.ClassVisitor {
+        return ApmClassVisitor(
+            api = api,
+            classVisitor = classVisitor,
+            className = className.orEmpty()
+        )
+    }
+
+    /**
+     * 判断类是否应参与插桩。
+     *
+     * @param className 点分、斜杠或 class 文件路径格式类名。
+     * @param excludePackages 排除包名前缀。
+     * @return true 表示可插桩。
+     */
+    fun isInstrumentable(className: String, excludePackages: List<String>): Boolean {
+        val normalizedClassName = className
+            .removeSuffix(".class")
+            .replace('/', '.')
+        return excludePackages.none { normalizedClassName.startsWith(it) }
+    }
 
     /**
      * 转换 jar 文件。
@@ -106,13 +139,16 @@ object ApmClassTransformer {
         className: String,
         config: ApmSlowMethodExtension
     ): ByteArray {
+        if (!config.enabled) {
+            return bytes
+        }
         // 将路径格式转为类名格式：com/example/MyClass.class → com.example.MyClass
         val fullClassName = className
             .removeSuffix(".class")
             .replace('/', '.')
 
         // 排除不需要插桩的类
-        if (shouldExclude(fullClassName, config)) {
+        if (!isInstrumentable(fullClassName, config.excludePackages)) {
             return bytes
         }
 
@@ -123,8 +159,7 @@ object ApmClassTransformer {
             val visitor = ApmClassVisitor(
                 api = Opcodes.ASM9,
                 classVisitor = classWriter,
-                className = fullClassName,
-                config = config
+                className = fullClassName
             )
 
             classReader.accept(visitor, ClassReader.EXPAND_FRAMES)
@@ -136,15 +171,6 @@ object ApmClassTransformer {
     }
 
     /**
-     * 判断类是否应该排除插桩。
-     * 排除系统类、第三方库、以及配置中指定的包名。
-     */
-    private fun shouldExclude(className: String, config: ApmSlowMethodExtension): Boolean {
-        // 排除配置中指定的包名
-        return config.excludePackages.any { className.startsWith(it) }
-    }
-
-    /**
      * ASM ClassVisitor 实现。
      * 访问类中的每个方法，委托给 ApmMethodVisitor 进行插桩。
      */
@@ -152,11 +178,30 @@ object ApmClassTransformer {
         api: Int,
         classVisitor: org.objectweb.asm.ClassVisitor,
         /** 当前类名（点分格式）。 */
-        private val className: String,
-        /** 插件配置。 */
-        private val config: ApmSlowMethodExtension
+        private var className: String
     ) : org.objectweb.asm.ClassVisitor(api, classVisitor) {
 
+        /**
+         * 访问 class 头部并捕获当前类名。
+         */
+        override fun visit(
+            version: Int,
+            access: Int,
+            name: String?,
+            signature: String?,
+            superName: String?,
+            interfaces: Array<String>?
+        ) {
+            // AGP instrumentation 场景下从 class visit 回调捕获内部类名。
+            if (className.isBlank() && name != null) {
+                className = name.replace('/', '.')
+            }
+            super.visit(version, access, name, signature, superName, interfaces)
+        }
+
+        /**
+         * 访问方法并为可插桩方法创建 AdviceAdapter。
+         */
         override fun visitMethod(
             access: Int,
             name: String,

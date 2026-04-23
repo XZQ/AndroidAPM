@@ -1,55 +1,75 @@
 package com.apm.plugin
 
-import com.android.build.api.transform.Format
-import com.android.build.api.transform.QualifiedContent
-import com.android.build.api.transform.Transform
-import com.android.build.api.transform.TransformInvocation
-import com.android.build.gradle.internal.pipeline.TransformManager
+import com.android.build.api.instrumentation.AsmClassVisitorFactory
+import com.android.build.api.instrumentation.ClassData
+import com.android.build.api.instrumentation.FramesComputationMode
+import com.android.build.api.instrumentation.InstrumentationParameters
+import com.android.build.api.instrumentation.InstrumentationScope
+import com.android.build.api.variant.AndroidComponentsExtension
 import org.gradle.api.Plugin
 import org.gradle.api.Project
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.provider.Property
+import org.gradle.api.tasks.Input
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.Opcodes
 
 /**
  * APM 慢方法检测 Gradle 插件。
- * 通过 ASM 字节码插桩在编译期注入方法计时代码。
+ * 通过 AGP instrumentation API 在编译期注入方法计时代码。
  *
  * ## 插桩原理（对标微信 Matrix）
- * 1. 注册 Transform，拦截所有 class 文件
+ * 1. 注册 [AsmClassVisitorFactory]，由 AGP 遍历当前 project 的 class 文件
  * 2. 使用 ASM 访问每个方法的入口和出口
- * 3. 在方法入口注入：ApmSlowMethodTracer.onMethodEnter(className, methodName)
- * 4. 在方法出口注入：ApmSlowMethodTracer.onMethodExit(className, methodName)
+ * 3. 在方法入口注入：ApmSlowMethodTracer.methodEnter(className#methodName)
+ * 4. 在方法出口注入：ApmSlowMethodTracer.methodExit(className#methodName)
  * 5. 运行时 Tracer 自动计算方法耗时并上报
- *
- * ## 使用方式
- * 在 app/build.gradle 中：
- * ```groovy
- * apply plugin: 'com.apm.slow-method'
- * apmSlowMethod {
- *     thresholdMs = 300   // 方法耗时阈值
- *     excludePackages = ["androidx.", "google."]  // 排除的包名
- * }
- * ```
  */
 class ApmSlowMethodPlugin : Plugin<Project> {
 
     /** 插件扩展配置。 */
     lateinit var extension: ApmSlowMethodExtension
 
+    /**
+     * 应用插件并注册 AGP ASM instrumentation。
+     *
+     * @param project 当前 Gradle project。
+     */
     override fun apply(project: Project) {
-        // 注册插件扩展配置
+        // 注册插件扩展配置，供宿主 build.gradle 调整阈值和排除包名。
         extension = project.extensions.create(
-            "apmSlowMethod",
+            EXTENSION_NAME,
             ApmSlowMethodExtension::class.java
         )
 
-        // 注册 Transform
-        val appExtension = project.extensions.findByType(
-            com.android.build.gradle.AppExtension::class.java
-        )
-        appExtension?.registerTransform(
-            ApmSlowMethodTransform(extension)
-        )
+        val androidComponents = project.extensions.findByType(AndroidComponentsExtension::class.java)
+        if (androidComponents == null) {
+            // 只支持 Android module；非 Android module 应用插件时给出明确日志。
+            project.logger.warn("APM SlowMethod Plugin requires Android Gradle Plugin")
+            return
+        }
 
-        project.logger.lifecycle("APM SlowMethod Plugin applied")
+        androidComponents.onVariants { variant ->
+            // 仅插桩当前 project，避免把 APM SDK 依赖类插桩后造成 Tracer 递归。
+            variant.instrumentation.transformClassesWith(
+                ApmSlowMethodAsmClassVisitorFactory::class.java,
+                InstrumentationScope.PROJECT
+            ) { params ->
+                params.enabled.set(extension.enabled)
+                params.excludePackages.set(extension.excludePackages)
+            }
+            // 插桩会增加 operand stack 使用量，必须让 AGP 重算被插桩方法的 frames。
+            variant.instrumentation.setAsmFramesComputationMode(
+                FramesComputationMode.COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS
+            )
+        }
+
+        project.logger.lifecycle("APM SlowMethod Plugin applied with AGP instrumentation")
+    }
+
+    companion object {
+        /** 插件扩展名。 */
+        private const val EXTENSION_NAME = "apmSlowMethod"
     }
 }
 
@@ -75,6 +95,7 @@ open class ApmSlowMethodExtension {
             "androidx.",
             "android.",
             "com.google.",
+            "com.apm.slowmethod.",
             "kotlin.",
             "java.",
             "javax.",
@@ -84,106 +105,55 @@ open class ApmSlowMethodExtension {
 }
 
 /**
- * APM 慢方法 Transform。
- * 拦截编译后的 class 文件，通过 ASM 插入方法计时代码。
+ * AGP instrumentation 参数。
  */
-class ApmSlowMethodTransform(
-    /** 插件配置。 */
-    private val config: ApmSlowMethodExtension
-) : Transform() {
+interface ApmSlowMethodInstrumentationParameters : InstrumentationParameters {
+    /** 插件是否启用。 */
+    @get:Input
+    val enabled: Property<Boolean>
 
-    override fun getName(): String = TRANSFORM_NAME
+    /** 排除插桩的包名前缀列表。 */
+    @get:Input
+    val excludePackages: ListProperty<String>
+}
 
-    override fun getInputTypes(): Set<QualifiedContent.ContentType> {
-        return TransformManager.CONTENT_CLASS
-    }
-
-    override fun getScopes(): MutableSet<in QualifiedContent.Scope> {
-        return TransformManager.SCOPE_FULL_PROJECT
-    }
-
-    override fun isIncremental(): Boolean = true
-
-    /**
-     * 执行 Transform：遍历所有 class 文件并进行插桩。
-     */
-    override fun transform(transformInvocation: TransformInvocation) {
-        if (!config.enabled) {
-            // 插件禁用时直接复制
-            transformInvocation.outputProvider.deleteAll()
-            copyInputs(transformInvocation)
-            return
-        }
-
-        // 处理所有输入
-        transformInvocation.inputs.forEach { input ->
-            // 处理 jar 包
-            input.jarInputs.forEach { jarInput ->
-                val inputJar = jarInput.file
-                val outputJar = transformInvocation.outputProvider.getContentLocation(
-                    jarInput.name,
-                    jarInput.contentTypes,
-                    jarInput.scopes,
-                    Format.JAR
-                )
-                // 跳过不需要插桩的 jar
-                if (shouldExcludeJar(inputJar.name)) {
-                    inputJar.copyTo(outputJar, overwrite = true)
-                } else {
-                    ApmClassTransformer.transformJar(inputJar, outputJar, config)
-                }
-            }
-
-            // 处理目录
-            input.directoryInputs.forEach { dirInput ->
-                val inputDir = dirInput.file
-                val outputDir = transformInvocation.outputProvider.getContentLocation(
-                    dirInput.name,
-                    dirInput.contentTypes,
-                    dirInput.scopes,
-                    Format.DIRECTORY
-                )
-                ApmClassTransformer.transformDirectory(inputDir, outputDir, config)
-            }
-        }
-    }
+/**
+ * AGP ASM visitor 工厂。
+ */
+abstract class ApmSlowMethodAsmClassVisitorFactory :
+    AsmClassVisitorFactory<ApmSlowMethodInstrumentationParameters> {
 
     /**
-     * 判断 jar 是否应该排除。
-     * 排除 Android 框架和第三方库。
+     * 创建每个 class 对应的 ASM visitor。
+     *
+     * @param classContext AGP class 上下文。
+     * @param nextClassVisitor 下游 class visitor。
+     * @return 注入慢方法探针的 visitor。
      */
-    private fun shouldExcludeJar(jarName: String): Boolean {
-        val lower = jarName.lowercase()
-        return EXCLUDE_JAR_PATTERNS.any { lower.contains(it) }
-    }
-
-    /**
-     * 禁用时直接复制所有输入到输出。
-     */
-    private fun copyInputs(transformInvocation: TransformInvocation) {
-        transformInvocation.inputs.forEach { input ->
-            input.jarInputs.forEach { jarInput ->
-                val output = transformInvocation.outputProvider.getContentLocation(
-                    jarInput.name, jarInput.contentTypes, jarInput.scopes, Format.JAR
-                )
-                jarInput.file.copyTo(output, overwrite = true)
-            }
-            input.directoryInputs.forEach { dirInput ->
-                val output = transformInvocation.outputProvider.getContentLocation(
-                    dirInput.name, dirInput.contentTypes, dirInput.scopes, Format.DIRECTORY
-                )
-                dirInput.file.copyRecursively(output, overwrite = true)
-            }
-        }
-    }
-
-    companion object {
-        /** Transform 名称。 */
-        private const val TRANSFORM_NAME = "apmSlowMethod"
-        /** 排除的 jar 关键词。 */
-        private val EXCLUDE_JAR_PATTERNS = listOf(
-            "androidx", "support", "kotlin", "google", "okhttp",
-            "retrofit", "glide", "picasso", "rxjava"
+    override fun createClassVisitor(
+        classContext: com.android.build.api.instrumentation.ClassContext,
+        nextClassVisitor: ClassVisitor
+    ): ClassVisitor {
+        // 具体类名由 visitor.visit() 捕获，避免依赖 AGP 内部 class name 表示格式。
+        return ApmClassTransformer.createClassVisitor(
+            api = Opcodes.ASM9,
+            classVisitor = nextClassVisitor
         )
+    }
+
+    /**
+     * 判断当前 class 是否需要插桩。
+     *
+     * @param classData AGP 提供的 class 元数据。
+     * @return true 表示该 class 会进入 ASM visitor。
+     */
+    override fun isInstrumentable(classData: ClassData): Boolean {
+        val params = parameters.get()
+        // 插件禁用或包名命中排除列表时，AGP 直接跳过该 class。
+        return params.enabled.get() &&
+            ApmClassTransformer.isInstrumentable(
+                className = classData.className,
+                excludePackages = params.excludePackages.get()
+            )
     }
 }

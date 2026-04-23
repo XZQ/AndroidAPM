@@ -94,6 +94,7 @@ class MemoryConfigTest {
         val config = MemoryConfig()
         assertTrue(config.enableOomMonitor)
         assertFalse(config.enableHprofDump)
+        assertFalse(config.enableForkHprofDump)
     }
 
     /** 自定义参数应正确覆盖默认值。 */
@@ -103,11 +104,13 @@ class MemoryConfigTest {
             foregroundIntervalMs = 5000L,
             javaHeapWarnRatio = 0.6f,
             sampleRate = 0.5f,
+            enableForkHprofDump = true,
             enableNativeMonitor = true
         )
         assertEquals(5000L, config.foregroundIntervalMs)
         assertEquals(0.6f, config.javaHeapWarnRatio, 0.001f)
         assertEquals(0.5f, config.sampleRate, 0.001f)
+        assertTrue(config.enableForkHprofDump)
         assertTrue(config.enableNativeMonitor)
     }
 

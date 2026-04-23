@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-20 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-04-21 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
 >
 > 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；构建单元总数 `21 = 20` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -95,11 +95,11 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 ### 1.3 当前已验证关键接线
 
 1. `Apm.startModule()` 已接入 `ProcessModuleFilter`，`ProcessStrategy.CUSTOM` 不再只是定义存在。
-2. `CrashModule` 已消费 `enableNativeCrash`，`NativeCrashMonitor.init()/destroy()` 已挂入模块生命周期。
-3. `IoModule` 已驱动 `NativeIoHook.init()/destroy()`，并暴露 `wrapInputStream` / `wrapOutputStream` 等桥接入口。
-4. `apm-plugin` 的 ASM tracer 目标类已修正为 `com.apm.slowmethod.ApmSlowMethodTracer`。
+2. `CrashModule` 已消费 `enableNativeCrash`，启动时先扫描 tombstone，Native 信号处理默认安全重抛；调试场景可显式开启 unsafe JNI 回调。
+3. `IoModule` 已驱动 `NativeIoHook.init()/destroy()`，`apm-io` 已接入 CMake 构建 `libapm-io.so`，运行时动态解析 `libxhook.so`，缺失时自动降级 Java 代理。
+4. `apm-plugin` 已从 legacy Transform 迁移到 AGP instrumentation API，ASM tracer 目标类为 `com.apm.slowmethod.ApmSlowMethodTracer`。
 5. `apm-sample-app` 已通过 `pluginManagement { includeBuild("apm-plugin") }` 应用 `com.apm.slow-method`。
-6. 由于 `apm-plugin` 仍基于 legacy Transform API，仓库已在 `gradle.properties` 打开 `android.experimental.legacyTransform.forceNonIncremental=true` 兼容开关。
+6. `gradle.properties` 已移除 `android.experimental.legacyTransform.forceNonIncremental`，slow-method 插件不再依赖旧 Transform 兼容开关。
 7. `ApmConfig` 已支持显式注入 `uploader`；未注入时按 `endpoint` 自动选择 `HttpApmUploader` 或 `LogcatApmUploader`。
 8. `RetryingApmUploader` 已将 `delegate.upload()` 返回 `false` 也纳入重试判定，`Apm.stop()` 同时关闭 dispatcher 和 uploader。
 9. `AnrModule` 的 SIGQUIT 路径已切到独立分析线程，不再依赖主线程消息队列恢复后才处理。
@@ -124,8 +124,8 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 | **IO 监控** | 主线程 IO + 大 buffer + **Native PLT Hook** + FD 泄漏 + 吞吐量 + Closeable 泄漏 + **零拷贝检测** | File I/O 耗时统计 | - | 推荐 |
 | **ANR** | **SIGQUIT 信号检测** + Watchdog 双重检测 + **traces.txt 解析** + 5 种原因分类 + 堆栈采样 + 去重 | Watchdog + 堆栈分析 | - | - |
 | **内存泄漏** | WeakRef + Activity/Fragment/ViewModel 泄漏 + **引用链分析**(Hprof BFS) | Activity/Fragment/Root | 监控 + 自动回收 |
-| **OOM 预警** | OomMonitor + HprofDumper + **fork 子进程 dump** + HprofStripProcessor | Hprof Stripper | **fork 子进程 dump** + Strip |
-| **Crash** | UncaughtExceptionHandler + NativeCrashMonitor(**信号处理器** + Tombstone 降级，已接入模块生命周期) | Java + Native + ANR | - |
+| **OOM 预警** | OomMonitor + HprofDumper + **fork 子进程 dump（显式开启）** + HprofStripProcessor | Hprof Stripper | **fork 子进程 dump** + Strip |
+| **Crash** | UncaughtExceptionHandler + NativeCrashMonitor(**安全信号重抛** + Tombstone 降级，unsafe JNI 回调可选) | Java + Native + ANR | - |
 | **启动耗时** | 冷启动 + 热启动 + 温启动（6 阶段分阶段上报） + Choreographer 首帧检测 | 冷/热/温启动 | - | - |
 | **网络监控** | onRequestComplete + OkHttp Interceptor + EventListener + 聚合统计 | 全链路 | - | - |
 | **电量** | WakeLock 追踪 + 电量下降速率 + 广播监听 + CPU Jiffies | Battery 监控 | - | 推荐 |
@@ -140,12 +140,12 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 
 1. **ANR 双重检测**：SIGQUIT 信号 + Watchdog 线程互补，不漏检不误报
 2. **ANR 原因分类**：自动归因为 CPU/IO/LOCK/DEADLOCK/BINDER 五类
-3. **ASM 字节码插桩**：Gradle Transform + ASM，编译期零侵入注入 methodEnter/methodExit
-4. **IO Native PLT Hook**：拦截 libc open/read/write/close，Java 层自动降级
+3. **ASM 字节码插桩**：AGP instrumentation API + ASM，编译期零侵入注入 methodEnter/methodExit
+4. **IO Native PLT Hook**：CMake 构建 `libapm-io.so`，运行时动态解析 xhook 拦截 libc open/read/write/close，Java 层自动降级
 5. **IO 多维检测**：FD 泄漏 + 吞吐量统计 + Closeable 泄漏 + 零拷贝检测
 6. **启动 6 阶段**：Application.attach → onCreate → Activity.onCreate → onResume → 首帧绘制 → 首帧渲染
-7. **Native Crash 信号处理器**：sigaction 注册 6 个致命信号 + backtrace + fault addr + JNI 回调
-8. **fork 子进程 Dump**：JNI fork 子进程执行 Debug.dumpHprofData，主进程零 STW
+7. **Native Crash 信号处理器**：sigaction 注册 6 个致命信号，默认恢复原 handler 并重抛生成 tombstone，调试可选 unsafe JNI 回调
+8. **fork 子进程 Dump**：JNI fork 子进程执行 Debug.dumpHprofData，需显式开启并带失败降级
 9. **引用链分析**：Hprof 二进制解析 → GC Root 扫描 → BFS 最短路径 → 完整引用链输出
 10. **WebView 全链路**：JS Bridge 性能 + JS Console Error + 资源瀑布图 + 关键路径分析
 11. **HTTP 上传通道**：HttpURLConnection + Line Protocol + Gzip 压缩 + 批量上报
@@ -189,7 +189,7 @@ eb1b9f2 Docs: Enforce English commit messages in CLAUDE.md
 
 | 模块 | 说明 | 源文件数 |
 |------|------|---------|
-| apm-plugin | included build：ApmSlowMethodPlugin(Transform) + ApmClassTransformer(ASM) | 2 |
+| apm-plugin | included build：ApmSlowMethodPlugin(AGP instrumentation) + ApmClassTransformer(ASM) | 2 |
 
 ### 3.4 Demo 应用
 
@@ -232,9 +232,9 @@ SlowMethodModule
 │   ├── methodExit(signature) — 计算耗时，超阈值上报
 │   ├── 热点方法统计 — ConcurrentHashMap<signature, HotMethodInfo>
 │   └── 严重告警分级 — >= 300ms WARN, >= 800ms ERROR
-└── 编译期：apm-plugin（Gradle Transform + ASM）
+└── 编译期：apm-plugin（AGP instrumentation + ASM）
     ├── ApmSlowMethodPlugin — Gradle 插件入口
-    │   └── 注册 Transform + Extension（配置包名过滤、阈值）
+    │   └── 注册 AsmClassVisitorFactory + Extension（配置包名过滤、阈值）
     └── ApmClassTransformer — ASM ClassVisitor
         └── AdviceAdapter 注入 methodEnter/methodExit 调用
 ```
@@ -248,9 +248,9 @@ IoModule + NativeIoHook
 │   ├── onRead — 小 buffer 检测 + 重复读检测
 │   ├── onClose — 主线程 IO 耗时检测
 │   └── 自动降级（Native Hook 不可用时）
-├── Level 2: Native PLT Hook（需 libapm-io.so）
+├── Level 2: Native PLT Hook（需 libapm-io.so + 可解析 libxhook.so）
 │   ├── System.loadLibrary("apm-io") 加载 JNI 库
-│   ├── nativeInstallIoHooks() 安装 Hook
+│   ├── nativeInstallIoHooks() 动态解析 xhook 并安装 Hook
 │   └── JNI 回调 onNativeIoEvent() 上报
 ├── FD 泄漏检测
 │   ├── /proc/self/fd 目录扫描
@@ -363,16 +363,16 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 |------|------|------|
 | Hprof 裁剪实现 | 已完成 | HprofStripProcessor 完整实现：二进制解析、record 处理、primitive array 清零、GC Root 处理 |
 | HTTP 全链路 trace | 已完成 | ApmEventListener 完整追踪 DNS→TCP→TLS→RequestHeaders→ResponseHeaders→ResponseBody，纳秒级精度 |
-| Native Crash 信号处理 | 已完成 | JNI 信号处理器（SIGSEGV/SIGABRT/SIGBUS/SIGFPE/SIGPIPE/SIGSTKFLT）+ backtrace 捕获 + fault addr + 回调 Java 层上报 + Tombstone 降级方案 |
-| fork 子进程 dump | 已完成 | JNI fork 子进程 dump（避免主进程 STW）+ 父进程 waitpid 等待 + 失败自动降级直接 dump |
+| Native Crash 信号处理 | 已完成 | JNI 信号处理器（SIGSEGV/SIGABRT/SIGBUS/SIGFPE/SIGPIPE/SIGSTKFLT）+ 默认安全重抛生成 Tombstone + 启动扫描 Tombstone；unsafe JNI 回调仅调试显式开启 |
+| fork 子进程 dump | 已完成 | JNI fork 子进程 dump + 父进程 waitpid 等待 + 失败自动降级直接 dump；默认关闭，需通过 `enableForkHprofDump` 显式开启 |
 | 多进程支持 | 已完成 | ApmInitProvider ContentProvider 自动初始化 + ProcessModuleFilter 进程隔离 + ProcessStrategy 三策略（MAIN_PROCESS_ONLY/ALL_PROCESSES/CUSTOM） |
 | 引用链分析 | 已完成 | ReferenceChainAnalyzer 完整 Hprof 二进制解析：header 解析 → GC Root 扫描 → Class/Instance Dump → BFS 最短路径 → 引用链输出 |
 | WebView 监控 | 已完成 | JS Bridge 调用性能监控 + JS Console Error 拦截 + 资源加载瀑布图（ResourceWaterfall）+ 慢资源告警 + 关键路径分析 |
-| libapm-io.so JNI 库 | 已完成 | C 源码实现 PLT Hook（xhook/bhook）拦截 open/openat/read/write/close + IO 会话管理 + Java 回调 |
+| libapm-io.so JNI 库 | 已完成 | `apm-io` 已接入 CMake 构建，C 源码动态解析 `libxhook.so` 后拦截 open/openat/read/write/close；缺少 xhook 时明确异常并回落 Java 代理 |
 | 上传通道实现 | 已完成 | HttpApmUploader 基于 HttpURLConnection：Line Protocol 批量上报 + 自定义 Headers + Gzip 压缩 + 超时配置 |
 | 零拷贝检测 | 已完成 | NativeIoHook CopyChain 追踪 + 平均 buffer 数阈值检测 + 零拷贝优化建议上报（FileChannel.transferTo/sendfile） |
-| Native Crash JNI 库 | 已完成 | apm_crash_jni.c 完整实现：sigaction 注册 + 信号回调 + JNI_OnLoad 缓存 + CMakeLists.txt |
-| Fork dump JNI 库 | 已完成 | apm_dumper_jni.c 完整实现：fork 子进程 + Debug.dumpHprofData JNI 调用 + CMakeLists.txt |
+| Native Crash JNI 库 | 已完成 | apm_crash_jni.c 完整实现：sigaction 注册 + 安全重抛默认路径 + 可选 unsafe 回调 + JNI_OnLoad 缓存 + CMakeLists.txt |
+| Fork dump JNI 库 | 已完成 | apm_dumper_jni.c 完整实现：fork 子进程 + Debug.dumpHprofData JNI 调用 + 子进程失败状态回传 + CMakeLists.txt |
 
 ---
 

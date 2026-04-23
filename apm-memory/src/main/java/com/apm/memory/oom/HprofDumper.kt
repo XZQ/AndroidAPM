@@ -14,8 +14,8 @@ import java.util.concurrent.Executors
  * Hprof 文件 Dump 器。
  * 在 OOM 危险阈值触发时，将 Java Heap 导出为 hprof 文件。
  *
- * MVP 版本使用直接 dump（Debug.dumpHprofData），会产生 1~3 秒的 STW。
- * 生产环境应升级为 fork 子进程 dump 方案。
+ * 默认使用直接 dump（Debug.dumpHprofData），会产生 1~3 秒的 STW。
+ * fork 子进程 dump 依赖设备/ART 兼容性，需通过 [MemoryConfig.enableForkHprofDump] 显式开启。
  */
 internal class HprofDumper(
     /** 应用上下文，用于获取缓存目录。 */
@@ -42,6 +42,11 @@ internal class HprofDumper(
      * 如果库加载成功则启用 fork 子进程 dump 模式。
      */
     fun init() {
+        if (!config.enableForkHprofDump) {
+            // fork dump 涉及 fork 后 ART/JNI 兼容性，生产默认关闭。
+            logger.d("HprofDumper: fork dump disabled by config, using direct dump")
+            return
+        }
         try {
             // 加载 fork dump JNI 库
             System.loadLibrary(LIB_APM_DUMPER)

@@ -3,7 +3,8 @@
  *
  * Native 崩溃信号处理器 JNI 实现。
  * 拦截 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGPIPE、SIGSTKFLT 信号，
- * 捕获调用栈和故障地址后回调 Java 层上报。
+ * 默认只恢复原始处理器并重抛，让系统生成 tombstone 后由 Java 层下次启动解析。
+ * 调试环境可显式开启不安全 Java 回调，以捕获调用栈和故障地址后上报。
  */
 
 #include <jni.h>
@@ -68,6 +69,12 @@ static struct sigaction s_old_handlers[NUM_HANDLED_SIGNALS];
 
 /** 是否已安装信号处理器。 */
 static int s_handlers_installed = 0;
+
+/** 是否允许在信号处理器中执行 JNI 回调；默认关闭以降低生产风险。 */
+static int s_enable_unsafe_jni_callback = 0;
+
+/** 信号处理重入保护。 */
+static volatile sig_atomic_t s_handling_signal = 0;
 
 /** JavaVM 指针，JNI_OnLoad 时缓存。 */
 static JavaVM *s_jvm = NULL;
@@ -196,6 +203,13 @@ static void format_fault_addr(void *addr, char *buf, size_t buf_len) {
  * @param ucontext 上下文（未使用）
  */
 static void native_crash_signal_handler(int sig, siginfo_t *info, void *ucontext) {
+    if (s_handling_signal) {
+        signal(sig, SIG_DFL);
+        raise(sig);
+        return;
+    }
+    s_handling_signal = 1;
+
     /* 避免重入：先恢复原始处理器 */
     int signal_index = -1;
     int i;
@@ -204,6 +218,10 @@ static void native_crash_signal_handler(int sig, siginfo_t *info, void *ucontext
             signal_index = i;
             break;
         }
+    }
+
+    if (!s_enable_unsafe_jni_callback) {
+        goto restore_and_reraise;
     }
 
     /* 捕获信号名称 */
@@ -273,8 +291,10 @@ static void native_crash_signal_handler(int sig, siginfo_t *info, void *ucontext
 
 restore_and_reraise:
     /* 恢复原始信号处理器 */
-    if (signal_index >= 0 && s_old_handlers[signal_index].sa_handler != NULL) {
+    if (signal_index >= 0) {
         sigaction(sig, &s_old_handlers[signal_index], NULL);
+    } else {
+        signal(sig, SIG_DFL);
     }
 
     /* 重新发送信号，让系统默认处理器产生 core dump / tombstone */
@@ -344,13 +364,17 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
  */
 JNIEXPORT jboolean JNICALL
 Java_com_apm_crash_NativeCrashMonitor_nativeInstallSignalHandlers(
-    JNIEnv *env, jclass thiz) {
+    JNIEnv *env, jclass thiz, jboolean unsafeSignalCallback) {
 
     if (s_handlers_installed) {
         /* 已安装，避免重复注册 */
         LOGW("Signal handlers already installed");
         return JNI_TRUE;
     }
+
+    /* 默认不在信号处理器中执行 JNI/日志/堆栈采集。 */
+    s_enable_unsafe_jni_callback = unsafeSignalCallback == JNI_TRUE ? 1 : 0;
+    s_handling_signal = 0;
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
@@ -407,5 +431,7 @@ Java_com_apm_crash_NativeCrashMonitor_nativeUninstallSignalHandlers(
     }
 
     s_handlers_installed = 0;
+    s_enable_unsafe_jni_callback = 0;
+    s_handling_signal = 0;
     LOGI("Signal handlers uninstalled");
 }

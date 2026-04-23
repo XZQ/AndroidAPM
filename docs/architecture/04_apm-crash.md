@@ -17,7 +17,9 @@
 ├──────────────────────────────────────────────┤
 │ + onInitialize(context)                      │
 │ + onStart()                                  │
-│   └── Thread.setDefaultUncaughtExceptionHandler│
+│   ├── Thread.setDefaultUncaughtExceptionHandler│
+│   ├── NativeCrashMonitor.checkRecentTombstone()│
+│   └── NativeCrashMonitor.init(unsafeCallback) │
 │ + onStop()                                   │
 │ + stackTraceToString(throwable): String      │
 └──────────────────────────────────────────────┘
@@ -28,7 +30,8 @@
 ├──────────────────────┤  │ - initialized: Boolean        │
 │ enableJavaCrash: Bool │  │ - lastCheckTime: Long         │
 │ enableNativeCrash:Bool│  ├──────────────────────────────┤
-│ maxStackTraceLength   │  │ + init()                     │
+│ unsafeCallback: Bool  │  │ + init(unsafeSignalCallback)  │
+│ maxStackTraceLength   │  │ + destroy()                  │
 └──────────────────────┘  │ + logNativeCrashSignal(...)   │
                           │ + checkRecentTombstone()      │
                           │ + parseAndReportTombstone()   │
@@ -77,14 +80,15 @@
 │             Native Crash 检测流程                 │
 ├─────────────────────────────────────────────────┤
 │                                                 │
-│  方式 1: JNI 回调 (libapm-crash.so)             │
+│  方式 1: 安全信号重抛 (libapm-crash.so，默认)  │
 │  ┌──────────────────────────────┐               │
 │  │ 信号处理 (SIGSEGV/SIGABRT/..)│               │
-│  │ → logNativeCrashSignal()     │               │
-│  │   → Apm.emit(ALERT, FATAL)   │               │
+│  │ → 恢复原始 handler           │               │
+│  │ → raise(sig)                 │               │
+│  │ → 系统生成 tombstone         │               │
 │  └──────────────────────────────┘               │
 │                                                 │
-│  方式 2: Tombstone 扫描 (降级方案)               │
+│  方式 2: Tombstone 扫描 (默认上报路径)          │
 │  ┌──────────────────────────────┐               │
 │  │ checkRecentTombstone()       │               │
 │  │ ├── 读取 /data/tombstones/   │               │
@@ -96,6 +100,13 @@
 │  │ │   └── 线程信息              │               │
 │  │ └── parseAndReportTombstone() │               │
 │  │     → Apm.emit(ALERT, FATAL)  │               │
+│  └──────────────────────────────┘               │
+│                                                 │
+│  方式 3: unsafe JNI 回调 (仅调试显式开启)        │
+│  ┌──────────────────────────────┐               │
+│  │ 信号处理器内采集线程/栈/地址  │               │
+│  │ → logNativeCrashSignal()     │               │
+│  │ → Apm.emit(ALERT, FATAL)     │               │
 │  └──────────────────────────────┘               │
 │                                                 │
 │  信号名称映射:                                   │

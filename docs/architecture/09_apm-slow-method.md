@@ -25,7 +25,7 @@
 │                                                              │
 │  引擎 2: ASM 字节码插桩 (编译期)                             │
 │  ┌──────────────────────────────────────────────┐           │
-│  │  apm-plugin (Gradle Transform)                │           │
+│  │  apm-plugin (AGP instrumentation)             │           │
 │  │  ┌────────────────────────────────────┐      │           │
 │  │  │ ApmClassTransformer (ASM)           │      │           │
 │  │  │                                     │      │           │
@@ -162,7 +162,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│              Gradle Transform + ASM 编译期插桩              │
+│          AGP instrumentation + ASM 编译期插桩                │
 ├────────────────────────────────────────────────────────────┤
 │                                                            │
 │  ApmSlowMethodPlugin.apply(project)                        │
@@ -172,29 +172,28 @@
 │       │   ├── excludePackages: List<String>  (排除的包)    │
 │       │   └── thresholdMs: Long = 300                      │
 │       │                                                    │
-│       └── 注册 Transform                                   │
+│       └── 注册 AsmClassVisitorFactory                      │
 │            │                                               │
 │            ▼                                               │
-│  Transform.transform(inputs, outputProvider)               │
+│  variant.instrumentation.transformClassesWith(...)         │
 │       │                                                    │
-│       ├── 遍历 JarInput → transformJar()                   │
-│       │   └── ApmClassTransformer.transformJar()           │
+│       ├── InstrumentationScope.PROJECT                     │
+│       ├── isInstrumentable(classData)                      │
+│       └── createClassVisitor(...)                          │
+│            │                                               │
+│            ▼                                               │
+│  ApmClassTransformer.createClassVisitor(...)               │
 │       │                                                    │
-│       └── 遍历 DirectoryInput → transformDirectory()       │
-│           └── ApmClassTransformer.transformDirectory()     │
-│                │                                           │
-│                ▼                                           │
-│  transformClass(bytes, className, config)                  │
-│       │                                                    │
-│       ├── shouldExclude(className, config)?                │
-│       │   ├── 匹配 includePackages?                       │
+│       ├── isInstrumentable(className, excludePackages)?    │
+│       │   ├── 插件 enabled?                               │
 │       │   ├── 匹配 excludePackages?                       │
 │       │   └── 排除 Android/Java/Kotlin 框架类              │
 │       │                                                    │
 │       └── ASM 转换                                         │
-│            ├── ClassReader(bytes)                          │
-│            ├── ClassWriter(ClassWriter.COMPUTE_MAXS)       │
-│            ├── ApmClassVisitor(ClassWriter, config)        │
+│            ├── AGP 提供 ClassVisitor 链                    │
+│            ├── FramesComputationMode                       │
+│            │   COMPUTE_FRAMES_FOR_INSTRUMENTED_METHODS    │
+│            ├── ApmClassVisitor(nextVisitor)                │
 │            │   └── ApmMethodVisitor(AdviceAdapter)        │
 │            │       ├── onMethodEnter()                     │
 │            │       │   └── mv.visitLdcInsn(signature)     │
@@ -222,7 +221,7 @@
 - `settings.gradle.kts` 通过 `pluginManagement { includeBuild("apm-plugin") }` 解析本地 Gradle 插件。
 - `apm-sample-app/build.gradle.kts` 已应用 `id("com.apm.slow-method")`，sample 构建会实际执行 ASM 插桩链路。
 - 运行时 tracer 目标类为 `com.apm.slowmethod.ApmSlowMethodTracer`，已与插件注入目标保持一致。
-- 由于当前插件仍基于 legacy Transform API，仓库在 `gradle.properties` 中启用了 `android.experimental.legacyTransform.forceNonIncremental=true` 兼容开关。
+- 插件已迁移到 AGP instrumentation API，`gradle.properties` 不再需要 legacy Transform 兼容开关。
 
 ## ApmSlowMethodTracer 运行时流程
 

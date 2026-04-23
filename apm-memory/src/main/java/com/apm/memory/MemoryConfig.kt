@@ -42,6 +42,8 @@ data class MemoryConfig(
     val enableOomMonitor: Boolean = true,
     /** 是否开启 hprof dump。 */
     val enableHprofDump: Boolean = false,
+    /** 是否启用 fork 子进程 dump；默认关闭，需业务确认设备兼容性后显式开启。 */
+    val enableForkHprofDump: Boolean = false,
     /** dump 冷却时间（毫秒），防止频繁 dump。 */
     val dumpCooldownMs: Long = DEFAULT_DUMP_COOLDOWN_MS,
     /** 是否开启 hprof strip 裁剪。 */

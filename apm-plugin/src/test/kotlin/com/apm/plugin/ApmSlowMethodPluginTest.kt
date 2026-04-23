@@ -43,6 +43,7 @@ class ApmSlowMethodPluginTest {
         assertTrue(extension.excludePackages.contains("androidx."))
         assertTrue(extension.excludePackages.contains("android."))
         assertTrue(extension.excludePackages.contains("com.google."))
+        assertTrue(extension.excludePackages.contains("com.apm.slowmethod."))
         assertTrue(extension.excludePackages.contains("kotlin."))
         assertTrue(extension.excludePackages.contains("java."))
         assertTrue(extension.excludePackages.contains("javax."))
@@ -133,20 +134,20 @@ class ApmSlowMethodPluginTest {
         assertNotNull(notExcluded)
     }
 
-    /** Transform 名称正确。 */
+    /** 插件禁用时 class 字节保持原样。 */
     @Test
-    fun `transform name is apmSlowMethod`() {
+    fun `disabled extension keeps class bytes unchanged`() {
         val extension = ApmSlowMethodExtension()
-        val transform = ApmSlowMethodTransform(extension)
-        assertEquals(TRANSFORM_NAME, transform.name)
+        extension.enabled = false
+        val result = transformClassWithDefaultConfig("com/example/MyClass.class", extension)
+        assertArrayEquals(SIMPLE_CLASS_BYTES, result)
     }
 
-    /** Transform 支持增量编译。 */
+    /** isInstrumentable 根据排除包名判断。 */
     @Test
-    fun `transform is incremental`() {
-        val extension = ApmSlowMethodExtension()
-        val transform = ApmSlowMethodTransform(extension)
-        assertTrue(transform.isIncremental)
+    fun `isInstrumentable respects excluded package prefixes`() {
+        assertFalse(ApmClassTransformer.isInstrumentable("com/apm/slowmethod/ApmSlowMethodTracer.class", listOf("com.apm.slowmethod.")))
+        assertTrue(ApmClassTransformer.isInstrumentable("com/example/MyClass.class", listOf("com.apm.slowmethod.")))
     }
 
     // --- 目录转换测试 ---
@@ -308,8 +309,6 @@ class ApmSlowMethodPluginTest {
         private const val EXPECTED_DEFAULT_THRESHOLD_MS = 300L
         /** 自定义阈值：500ms。 */
         private const val CUSTOM_THRESHOLD_MS = 500L
-        /** Transform 名称。 */
-        private const val TRANSFORM_NAME = "apmSlowMethod"
         /** 测试用字节码（非有效 class 文件，仅用于排除逻辑测试）。 */
         private val SIMPLE_CLASS_BYTES = byteArrayOf(0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte(), 0x00, 0x00)
         /** 测试资源文件内容。 */

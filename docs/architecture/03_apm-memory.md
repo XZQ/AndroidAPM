@@ -62,6 +62,7 @@
 │ enableFragmentLeak│     │ vmRssKb            │
 │ enableOomMonitor  │     │ gcCount / gcTimeMs │
 │ enableHprofDump   │     │ processName        │
+│ enableForkHprof   │     │                    │
 │ enableNativeMonitr│     │ scene / foreground │
 └───────────────────┘     ├────────────────────┤
                           │ toFields(reason)   │
@@ -179,7 +180,10 @@ OomMonitor.check(snapshot)
                     └── HprofDumper.dumpAsync(reason)
                          │
                          ├── dumpExecutor.submit {
-                         │     Debug.dumpHprofData(path)
+                         │     if (enableForkHprofDump)
+                         │       nativeForkAndDump(path)
+                         │     else
+                         │       Debug.dumpHprofData(path)
                          │ }
                          │
                          └── dump 完成后

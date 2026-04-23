@@ -9,14 +9,15 @@ import java.io.File
  * Native 崩溃信号监控器。
  *
  * 双层策略：
- * 1. Java 层：通过 [logNativeCrashSignal] 接收 JNI 层上报的信号
- * 2. Java 层降级：通过 tombstone 文件解析最近的 native crash
+ * 1. 默认安全模式：JNI 层恢复原始信号处理器并重抛，下一次启动通过 tombstone 解析上报
+ * 2. 调试兼容模式：通过 [logNativeCrashSignal] 接收 JNI 层上报的信号
+ * 3. Java 层降级：通过 tombstone 文件解析最近的 native crash
  *
  * 完整的 Native 崩溃捕获需要在 JNI 层注册信号处理器（SIGSEGV、SIGABRT 等）。
  * 生产环境推荐集成 Google Breakpad 或 Firebase Crashlytics NDK。
  *
- * 当 JNI 层捕获到致命信号时，调用 [logNativeCrashSignal] 上报到 APM 管道。
- * 无 JNI 层时，可通过 [checkRecentTombstone] 检查最近的 tombstone 记录。
+ * 默认不在信号处理上下文回调 Java，避免异步信号不安全操作。
+ * 如需调试实时回调，可在 [init] 中显式开启 unsafeSignalCallback。
  */
 object NativeCrashMonitor {
 
@@ -79,17 +80,18 @@ object NativeCrashMonitor {
     private const val SIGNAL_SIGTERM = 15
 
     /**
-     * 初始化 Native Crash 监控。
-     * 尝试加载 JNI 库并安装信号处理器。
+     * 初始化 Native Crash 监控。尝试加载 JNI 库并安装信号处理器。
+     *
+     * @param unsafeSignalCallback 是否允许在信号处理器内直接回调 Java；仅建议调试环境使用
      */
-    fun init() {
+    fun init(unsafeSignalCallback: Boolean = false) {
         if (initialized) return
         initialized = true
         try {
             // 加载 JNI 库
             System.loadLibrary("apm_crash")
-            // 安装信号处理器：拦截 SIGSEGV/SIGABRT/SIGBUS/SIGFPE
-            if (nativeInstallSignalHandlers()) {
+            // 安装信号处理器：默认只恢复原 handler 并重抛，避免信号上下文执行 Java。
+            if (nativeInstallSignalHandlers(unsafeSignalCallback)) {
                 signalHandlerInstalled = true
             }
         } catch (e: UnsatisfiedLinkError) {
@@ -117,9 +119,10 @@ object NativeCrashMonitor {
      * 安装 Native 信号处理器。
      * 注册 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGPIPE、SIGSTKFLT 的信号处理函数。
      *
+     * @param unsafeSignalCallback 是否允许信号处理器内直接回调 Java
      * @return true 表示安装成功
      */
-    private external fun nativeInstallSignalHandlers(): Boolean
+    private external fun nativeInstallSignalHandlers(unsafeSignalCallback: Boolean): Boolean
 
     /**
      * 卸载 Native 信号处理器。

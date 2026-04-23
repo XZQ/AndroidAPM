@@ -42,7 +42,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
 
         // 启用 Native 崩溃链路：尝试安装 JNI 信号处理器。
         if (config.enableNativeCrash) {
-            NativeCrashMonitor.init()
+            // 启动时先扫描上一轮崩溃生成的 tombstone，再安装本轮信号处理器。
+            NativeCrashMonitor.checkRecentTombstone()
+            NativeCrashMonitor.init(config.enableUnsafeNativeSignalCallback)
         }
 
         apmContext?.logger?.d(

@@ -11,10 +11,11 @@
 │                    IO 监控双层架构                              │
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
-│  Level 2: Native PLT Hook (需 libapm-io.so)                 │
+│  Level 2: Native PLT Hook (需 libapm-io.so + libxhook.so)  │
 │  ┌──────────────────────────────────────────────┐           │
 │  │  System.loadLibrary("apm-io")                │           │
 │  │  nativeInstallIoHooks()                      │           │
+│  │  └── dlopen/dlsym 动态解析 xhook              │           │
 │  │                                               │           │
 │  │  拦截 libc 函数:                              │           │
 │  │  ├── open()  → 记录 fd 和 path               │           │
@@ -101,6 +102,7 @@ init()
        │   └── installNativePltHook()
        │       ├── System.loadLibrary("apm-io")
        │       ├── nativeInstallIoHooks()
+       │       │   └── 动态解析 libxhook.so
        │       └── nativeHookInstalled = true
        │       ├── catch UnsatisfiedLinkError → 降级
        │       └── catch Exception → 降级
@@ -149,8 +151,8 @@ init()
 │     拦截 libc open/read/write/close                        │
 │     JNI 回调 onNativeIoEvent()                             │
 │                                                            │
-│  8. 零拷贝检测 (预留)                                      │
-│     config.enableZeroCopyDetection (当前 false)            │
+│  8. 零拷贝检测 (默认关闭)                                  │
+│     config.enableZeroCopyDetection                         │
 │                                                            │
 └────────────────────────────────────────────────────────────┘
 ```

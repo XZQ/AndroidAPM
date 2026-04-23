@@ -21,6 +21,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <stdarg.h>
 
 /* ======================== 常量定义 ======================== */
 
@@ -35,6 +36,12 @@
 
 /** Java 回调方法签名。 */
 #define CALLBACK_METHOD_SIG "(Ljava/lang/String;Ljava/lang/String;JJZ)V"
+
+/** xhook 共享库名。 */
+#define XHOOK_LIBRARY_NAME "libxhook.so"
+
+/** xhook 同步刷新标记。 */
+#define XHOOK_REFRESH_SYNC 0
 
 /* 日志宏 */
 #define LOG_D(fmt, ...) __android_log_print(ANDROID_LOG_DEBUG, TAG, fmt, ##__VA_ARGS__)
@@ -74,6 +81,24 @@ static orig_write_t s_orig_write = NULL;
 
 /** 原始 close 函数指针。 */
 static orig_close_t s_orig_close = NULL;
+
+/* ======================== xhook 动态符号 ======================== */
+
+/** xhook_register 函数指针类型。 */
+typedef int (*xhook_register_t)(const char *path_regex, const char *symbol,
+                                void *new_func, void **old_func);
+
+/** xhook_refresh 函数指针类型。 */
+typedef int (*xhook_refresh_t)(int async);
+
+/** xhook 共享库句柄。 */
+static void *s_xhook_handle = NULL;
+
+/** 动态解析到的 xhook_register。 */
+static xhook_register_t s_xhook_register = NULL;
+
+/** 动态解析到的 xhook_refresh。 */
+static xhook_refresh_t s_xhook_refresh = NULL;
 
 /* ======================== IO 会话跟踪 ======================== */
 
@@ -190,6 +215,58 @@ static void init_io_sessions(void) {
  */
 static int is_valid_fd(int fd) {
     return (fd >= 0 && fd < MAX_IO_SESSIONS) ? 1 : 0;
+}
+
+/**
+ * 向 Java 层抛出 IllegalStateException。
+ *
+ * @param env JNIEnv 指针
+ * @param message 异常消息
+ */
+static void throw_illegal_state(JNIEnv *env, const char *message) {
+    jclass exception_class = (*env)->FindClass(env, "java/lang/IllegalStateException");
+    if (exception_class != NULL) {
+        (*env)->ThrowNew(env, exception_class, message);
+        (*env)->DeleteLocalRef(env, exception_class);
+    }
+}
+
+/**
+ * 动态解析 xhook 符号。
+ * 宿主若集成 libxhook.so，可通过 jniLibs 或预加载方式让本库解析到符号；
+ * 未集成时返回 0，由 Java 层降级到 InputStream/OutputStream 代理。
+ *
+ * @return 1 表示 xhook 可用，0 表示不可用
+ */
+static int resolve_xhook_symbols(void) {
+    if (s_xhook_register != NULL && s_xhook_refresh != NULL) {
+        return 1;
+    }
+
+    s_xhook_register = (xhook_register_t)dlsym(RTLD_DEFAULT, "xhook_register");
+    s_xhook_refresh = (xhook_refresh_t)dlsym(RTLD_DEFAULT, "xhook_refresh");
+    if (s_xhook_register != NULL && s_xhook_refresh != NULL) {
+        return 1;
+    }
+
+    s_xhook_handle = dlopen(XHOOK_LIBRARY_NAME, RTLD_NOW | RTLD_LOCAL);
+    if (s_xhook_handle == NULL) {
+        LOG_W("xhook library not found: %s", dlerror());
+        return 0;
+    }
+
+    s_xhook_register = (xhook_register_t)dlsym(s_xhook_handle, "xhook_register");
+    s_xhook_refresh = (xhook_refresh_t)dlsym(s_xhook_handle, "xhook_refresh");
+    if (s_xhook_register == NULL || s_xhook_refresh == NULL) {
+        LOG_W("xhook symbols not found");
+        dlclose(s_xhook_handle);
+        s_xhook_handle = NULL;
+        s_xhook_register = NULL;
+        s_xhook_refresh = NULL;
+        return 0;
+    }
+
+    return 1;
 }
 
 /**
@@ -455,21 +532,6 @@ int hooked_close(int fd) {
     return result;
 }
 
-/* ======================== xhook 接口声明 ======================== */
-
-/**
- * xhook 库的 PLT Hook 注册函数。
- * 声明为 weak 符号，允许在编译时链接不同的 hook 库实现。
- */
-extern int xhook_register(const char *path_regex, const char *symbol,
-                          void *new_func, void **old_func);
-
-/**
- * xhook 库的刷新函数。
- * 使已注册的 hook 对已加载的 SO 生效。
- */
-extern int xhook_refresh(void);
-
 /* ======================== JNI 接口实现 ======================== */
 
 /**
@@ -546,8 +608,15 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     LOG_D("Installing IO hooks via xhook...");
 
+    if (!resolve_xhook_symbols()) {
+        throw_illegal_state(env, "libxhook.so is not available; falling back to Java IO proxy");
+        return;
+    }
+
+    int failures = 0;
+
     /* 注册 open hook */
-    int ret = xhook_register(
+    int ret = s_xhook_register(
             "libc\\.so$",
             "open",
             (void *)hooked_open,
@@ -555,10 +624,11 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
     );
     if (ret != 0) {
         LOG_E("Failed to register hook for open, ret=%d", ret);
+        failures++;
     }
 
     /* 注册 openat hook */
-    ret = xhook_register(
+    ret = s_xhook_register(
             "libc\\.so$",
             "openat",
             (void *)hooked_openat,
@@ -566,10 +636,11 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
     );
     if (ret != 0) {
         LOG_E("Failed to register hook for openat, ret=%d", ret);
+        failures++;
     }
 
     /* 注册 read hook */
-    ret = xhook_register(
+    ret = s_xhook_register(
             "libc\\.so$",
             "read",
             (void *)hooked_read,
@@ -577,10 +648,11 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
     );
     if (ret != 0) {
         LOG_E("Failed to register hook for read, ret=%d", ret);
+        failures++;
     }
 
     /* 注册 write hook */
-    ret = xhook_register(
+    ret = s_xhook_register(
             "libc\\.so$",
             "write",
             (void *)hooked_write,
@@ -588,10 +660,11 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
     );
     if (ret != 0) {
         LOG_E("Failed to register hook for write, ret=%d", ret);
+        failures++;
     }
 
     /* 注册 close hook */
-    ret = xhook_register(
+    ret = s_xhook_register(
             "libc\\.so$",
             "close",
             (void *)hooked_close,
@@ -599,12 +672,19 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
     );
     if (ret != 0) {
         LOG_E("Failed to register hook for close, ret=%d", ret);
+        failures++;
+    }
+
+    if (failures > 0) {
+        throw_illegal_state(env, "xhook registration failed; falling back to Java IO proxy");
+        return;
     }
 
     /* 刷新 hook，使已加载的 SO 库中的 PLT 项被替换 */
-    ret = xhook_refresh();
+    ret = s_xhook_refresh(XHOOK_REFRESH_SYNC);
     if (ret != 0) {
         LOG_E("xhook_refresh failed, ret=%d", ret);
+        throw_illegal_state(env, "xhook_refresh failed; falling back to Java IO proxy");
     } else {
         s_hooks_installed = 1;
         LOG_D("IO hooks installed successfully");
@@ -666,6 +746,12 @@ JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *reserved) {
     s_on_native_io_event_method = NULL;
     s_jvm = NULL;
     s_hooks_installed = 0;
+    s_xhook_register = NULL;
+    s_xhook_refresh = NULL;
+    if (s_xhook_handle != NULL) {
+        dlclose(s_xhook_handle);
+        s_xhook_handle = NULL;
+    }
     init_io_sessions();
 
     LOG_D("JNI_OnUnload completed");

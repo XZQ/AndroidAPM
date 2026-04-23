@@ -23,6 +23,13 @@ class CrashConfigTest {
         assertFalse(config.enableNativeCrash)
     }
 
+    /** 默认禁用 native 信号处理器内的 Java 回调。 */
+    @Test
+    fun `default unsafe native signal callback is false`() {
+        val config = CrashConfig()
+        assertFalse(config.enableUnsafeNativeSignalCallback)
+    }
+
     /** 默认堆栈最大长度为 4000。 */
     @Test
     fun `default maxStackTraceLength is 4000`() {
@@ -36,10 +43,12 @@ class CrashConfigTest {
         val config = CrashConfig(
             enableJavaCrash = false,
             enableNativeCrash = true,
+            enableUnsafeNativeSignalCallback = true,
             maxStackTraceLength = 8000
         )
         assertFalse(config.enableJavaCrash)
         assertTrue(config.enableNativeCrash)
+        assertTrue(config.enableUnsafeNativeSignalCallback)
         assertEquals(8000, config.maxStackTraceLength)
     }
 }

@@ -3,7 +3,8 @@
  *
  * Fork 子进程 Hprof Dump JNI 实现。
  * 通过 fork() 创建子进程，在子进程中调用 Debug.dumpHprofData()，
- * 避免主进程 STW（Stop-The-World）。
+ * 尽量降低主进程 STW（Stop-The-World）。该路径默认由 Java 配置关闭，
+ * 仅在业务确认设备兼容性后启用。
  */
 
 #include <jni.h>
@@ -161,6 +162,7 @@ Java_com_apm_memory_oom_HprofDumper_nativeForkAndDump(
          * 但为了简化，这里仍使用 JNI 调用。
          */
 
+        int dump_success = 0;
         JNIEnv *child_env = NULL;
         int get_result = (*s_jvm)->GetEnv(s_jvm, (void **)&child_env, JNI_VERSION_1_6);
 
@@ -176,6 +178,8 @@ Java_com_apm_memory_oom_HprofDumper_nativeForkAndDump(
                 if ((*child_env)->ExceptionCheck(child_env)) {
                     (*child_env)->ExceptionClear(child_env);
                     LOGE("Child: dumpHprofData threw exception");
+                } else {
+                    dump_success = 1;
                 }
 
                 (*child_env)->DeleteLocalRef(child_env, j_path);
@@ -191,7 +195,7 @@ Java_com_apm_memory_oom_HprofDumper_nativeForkAndDump(
         /* (*env)->ReleaseStringUTFChars(env, output_path, path_str); */
 
         /* 子进程直接退出，不执行任何清理（避免破坏父进程状态） */
-        _exit(0);
+        _exit(dump_success ? 0 : 1);
     }
 
     /* ---- 父进程 ---- */
@@ -224,10 +228,17 @@ Java_com_apm_memory_oom_HprofDumper_waitPidNonBlocking(
         /* waitpid 调用失败，通常表示子进程已不存在 */
         LOGW("waitPidNonBlocking: waitpid failed for pid=%d, errno=%d", pid, errno);
         return FORK_ERROR;
-    } else {
+    } else if (WIFEXITED(status)) {
         /* 子进程已退出，result 为子进程 PID */
         int exit_status = WEXITSTATUS(status);
+        if (exit_status != 0) {
+            LOGW("waitPidNonBlocking: child %d exited with failure status %d", pid, exit_status);
+            return FORK_ERROR;
+        }
         LOGI("waitPidNonBlocking: child %d exited with status %d", pid, exit_status);
         return (jint)result;
+    } else {
+        LOGW("waitPidNonBlocking: child %d ended without normal exit", pid);
+        return FORK_ERROR;
     }
 }
