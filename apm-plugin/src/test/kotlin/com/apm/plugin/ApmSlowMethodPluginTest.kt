@@ -14,25 +14,11 @@ class ApmSlowMethodPluginTest {
 
     // --- ApmSlowMethodExtension 配置测试 ---
 
-    /** 默认阈值 300ms。 */
-    @Test
-    fun `default thresholdMs is 300`() {
-        val extension = ApmSlowMethodExtension()
-        assertEquals(EXPECTED_DEFAULT_THRESHOLD_MS, extension.thresholdMs)
-    }
-
     /** 默认开启插件。 */
     @Test
     fun `default enabled is true`() {
         val extension = ApmSlowMethodExtension()
         assertTrue(extension.enabled)
-    }
-
-    /** 默认不限制主线程。 */
-    @Test
-    fun `default mainThreadOnly is false`() {
-        val extension = ApmSlowMethodExtension()
-        assertFalse(extension.mainThreadOnly)
     }
 
     /** 默认排除系统包名。 */
@@ -54,14 +40,10 @@ class ApmSlowMethodPluginTest {
     @Test
     fun `custom config overrides defaults`() {
         val extension = ApmSlowMethodExtension()
-        extension.thresholdMs = CUSTOM_THRESHOLD_MS
         extension.enabled = false
-        extension.mainThreadOnly = true
         extension.excludePackages = listOf("com.example.")
         // 验证自定义值
-        assertEquals(CUSTOM_THRESHOLD_MS, extension.thresholdMs)
         assertFalse(extension.enabled)
-        assertTrue(extension.mainThreadOnly)
         assertEquals(listOf("com.example."), extension.excludePackages)
     }
 
@@ -305,10 +287,6 @@ class ApmSlowMethodPluginTest {
     }
 
     companion object {
-        /** 期望的默认阈值：300ms。 */
-        private const val EXPECTED_DEFAULT_THRESHOLD_MS = 300L
-        /** 自定义阈值：500ms。 */
-        private const val CUSTOM_THRESHOLD_MS = 500L
         /** 测试用字节码（非有效 class 文件，仅用于排除逻辑测试）。 */
         private val SIMPLE_CLASS_BYTES = byteArrayOf(0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte(), 0x00, 0x00)
         /** 测试资源文件内容。 */

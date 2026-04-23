@@ -168,9 +168,8 @@
 │  ApmSlowMethodPlugin.apply(project)                        │
 │       │                                                    │
 │       ├── 注册 Extension (apmSlowMethod)                   │
-│       │   ├── includePackages: List<String>  (要插桩的包)  │
-│       │   ├── excludePackages: List<String>  (排除的包)    │
-│       │   └── thresholdMs: Long = 300                      │
+│       │   ├── enabled: Boolean = true                      │
+│       │   └── excludePackages: List<String>  (排除的包)    │
 │       │                                                    │
 │       └── 注册 AsmClassVisitorFactory                      │
 │            │                                               │
@@ -221,6 +220,7 @@
 - `settings.gradle.kts` 通过 `pluginManagement { includeBuild("apm-plugin") }` 解析本地 Gradle 插件。
 - `apm-sample-app/build.gradle.kts` 已应用 `id("com.apm.slow-method")`，sample 构建会实际执行 ASM 插桩链路。
 - 运行时 tracer 目标类为 `com.apm.slowmethod.ApmSlowMethodTracer`，已与插件注入目标保持一致。
+- 插件扩展只控制编译期插桩范围；慢方法阈值、采样和上报策略统一由运行时 `SlowMethodConfig` 控制。
 - 插件已迁移到 AGP instrumentation API，`gradle.properties` 不再需要 legacy Transform 兼容开关。
 
 ## ApmSlowMethodTracer 运行时流程

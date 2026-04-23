@@ -36,7 +36,7 @@ class ApmSlowMethodPlugin : Plugin<Project> {
      * @param project 当前 Gradle project。
      */
     override fun apply(project: Project) {
-        // 注册插件扩展配置，供宿主 build.gradle 调整阈值和排除包名。
+        // 注册插件扩展配置，供宿主 build.gradle 调整插桩开关和排除包名。
         extension = project.extensions.create(
             EXTENSION_NAME,
             ApmSlowMethodExtension::class.java
@@ -77,14 +77,8 @@ class ApmSlowMethodPlugin : Plugin<Project> {
  * 慢方法插件配置扩展。
  */
 open class ApmSlowMethodExtension {
-    /** 方法耗时阈值（毫秒），超过此值上报。 */
-    var thresholdMs: Long = 300L
-
     /** 需要排除的包名前缀列表（不插桩）。 */
     var excludePackages: List<String> = DEFAULT_EXCLUDE_PACKAGES
-
-    /** 是否只插桩主线程方法。 */
-    var mainThreadOnly: Boolean = false
 
     /** 是否启用插件。 */
     var enabled: Boolean = true

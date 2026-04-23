@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-21 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-04-23 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
 >
 > 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；构建单元总数 `21 = 20` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -234,7 +234,7 @@ SlowMethodModule
 │   └── 严重告警分级 — >= 300ms WARN, >= 800ms ERROR
 └── 编译期：apm-plugin（AGP instrumentation + ASM）
     ├── ApmSlowMethodPlugin — Gradle 插件入口
-    │   └── 注册 AsmClassVisitorFactory + Extension（配置包名过滤、阈值）
+    │   └── 注册 AsmClassVisitorFactory + Extension（配置插桩开关、包名过滤）
     └── ApmClassTransformer — ASM ClassVisitor
         └── AdviceAdapter 注入 methodEnter/methodExit 调用
 ```
