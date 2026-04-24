@@ -37,5 +37,7 @@ include(
     ":apm-ipc",
     ":apm-gc-monitor",
     ":apm-render",
+    ":apm-trace",
+    ":apm-otel-exporter",
     ":apm-sample-app"
 )
