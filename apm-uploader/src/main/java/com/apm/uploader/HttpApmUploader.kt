@@ -2,6 +2,8 @@ package com.apm.uploader
 
 import android.util.Log
 import com.apm.model.ApmEvent
+import com.apm.model.ProtobufSerializer
+import com.apm.model.SerializationFormat
 import com.apm.model.toLineProtocol
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -40,32 +42,41 @@ class HttpApmUploader(
     /** HTTP 读取超时（毫秒）。 */
     private val readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS,
     /** 是否启用 Gzip 压缩上传。 */
-    private val enableGzip: Boolean = false
+    private val enableGzip: Boolean = false,
+    /** 事件序列化格式。 */
+    private val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL
 ) : ApmUploader {
 
     /**
      * 上传单条事件到远端服务器。
-     * 将事件序列化为 Line Protocol 格式，通过 HTTP POST 发送。
+     * 根据 [serializationFormat] 选择 Line Protocol 或 Protobuf 编码。
      *
      * @param event 要上传的 APM 事件
      */
     override fun upload(event: ApmEvent): Boolean {
-        val payload = event.toLineProtocol().toByteArray(Charsets.UTF_8)
+        val payload = when (serializationFormat) {
+            SerializationFormat.PROTOBUF -> ProtobufSerializer.serialize(event)
+            SerializationFormat.LINE_PROTOCOL -> event.toLineProtocol().toByteArray(Charsets.UTF_8)
+        }
         return sendHttpPost(payload)
     }
 
     /**
      * 批量上传多条事件。
-     * 将多条事件拼接为 Line Protocol 格式一次性发送，减少 HTTP 请求数。
+     * 根据 [serializationFormat] 选择编码方式，一次性发送减少 HTTP 请求数。
      *
      * @param events 要上传的事件列表
      * @return 上传成功的事件数量
      */
     fun batchUpload(events: List<ApmEvent>): Int {
         if (events.isEmpty()) return 0
-        // 每条事件一行，拼接为批量 payload
-        val payload = events.joinToString(separator = LINE_SEPARATOR) { it.toLineProtocol() }
-            .toByteArray(Charsets.UTF_8)
+        val payload = when (serializationFormat) {
+            SerializationFormat.PROTOBUF -> ProtobufSerializer.serializeBatch(events)
+            SerializationFormat.LINE_PROTOCOL -> {
+                events.joinToString(separator = LINE_SEPARATOR) { it.toLineProtocol() }
+                    .toByteArray(Charsets.UTF_8)
+            }
+        }
         return if (sendHttpPost(payload)) events.size else 0
     }
 
@@ -84,8 +95,12 @@ class HttpApmUploader(
                 requestMethod = METHOD_POST
                 connectTimeout = connectTimeoutMs
                 readTimeout = readTimeoutMs
-                // 请求头
-                setRequestProperty(HEADER_CONTENT_TYPE, CONTENT_TYPE_TEXT)
+                // 根据序列化格式设置 Content-Type
+                val contentType = when (serializationFormat) {
+                    SerializationFormat.PROTOBUF -> CONTENT_TYPE_PROTOBUF
+                    SerializationFormat.LINE_PROTOCOL -> CONTENT_TYPE_TEXT
+                }
+                setRequestProperty(HEADER_CONTENT_TYPE, contentType)
                 setRequestProperty(HEADER_ACCEPT, CONTENT_TYPE_JSON)
                 doOutput = true
                 doInput = true
@@ -166,6 +181,9 @@ class HttpApmUploader(
 
         /** Content-Type: 纯文本（Line Protocol）。 */
         private const val CONTENT_TYPE_TEXT = "text/plain; charset=utf-8"
+
+        /** Content-Type: Protobuf 二进制。 */
+        private const val CONTENT_TYPE_PROTOBUF = "application/x-protobuf"
 
         /** Content-Type: JSON。 */
         private const val CONTENT_TYPE_JSON = "application/json"

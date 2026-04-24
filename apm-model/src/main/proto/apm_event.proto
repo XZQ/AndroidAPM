@@ -1,0 +1,54 @@
+// Copyright 2024 Android APM Contributors
+// SPDX-License-Identifier: Apache-2.0
+//
+// APM 事件 Protobuf 定义。
+// 服务端使用此 .proto 文件反序列化客户端上报的二进制数据。
+// 客户端使用零依赖的 ProtobufSerializer 直接写入 wire format，
+// 保证与此定义完全兼容。
+
+syntax = "proto3";
+
+package com.apm.model;
+
+option java_package = "com.apm.model";
+option java_outer_classname = "ApmEventProto";
+
+// APM 事件。
+// 所有模块通过此消息格式上报性能数据。
+message ApmEventMessage {
+  // 事件时间戳（毫秒 epoch）。
+  int64 timestamp = 1;
+
+  // 模块名，如 "memory"、"crash"。
+  string module = 2;
+
+  // 事件名，如 "memory_snapshot"、"java_crash"。
+  string name = 3;
+
+  // 事件类型枚举名：METRIC / ALERT / FILE。
+  string kind = 4;
+
+  // 严重级别枚举名：DEBUG / INFO / WARN / ERROR / FATAL。
+  string severity = 5;
+
+  // 产生事件的进程名。
+  string process_name = 6;
+
+  // 产生事件的线程名。
+  string thread_name = 7;
+
+  // 当前场景（如 Activity 类名）。
+  string scene = 8;
+
+  // 是否前台。
+  bool foreground = 9;
+
+  // 事件指标数据。值为字符串表示（Any?.toString()）。
+  map<string, string> fields = 10;
+
+  // 全局上下文（默认 + 业务上下文合并）。
+  map<string, string> global_context = 11;
+
+  // 附加键值对。
+  map<string, string> extras = 12;
+}

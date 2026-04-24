@@ -6,6 +6,9 @@ import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.storage.EventStore
 import com.apm.storage.FileEventStore
+import com.apm.core.aggregation.EventAggregator
+import com.apm.core.privacy.DefaultSanitizationRules
+import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.throttle.RateLimiter
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
@@ -84,8 +87,25 @@ object Apm {
             RateLimiter(config.rateLimitEventsPerWindow, config.rateLimitWindowMs)
         } else null
 
+        // 聚合器：高频 METRIC 事件滑动窗口聚合 + ALERT 栈指纹去重
+        val aggregator = if (config.enableAggregation) {
+            EventAggregator(
+                windowMs = config.aggregationWindowMs,
+                enabled = true,
+                logger = logger
+            )
+        } else null
+
+        // PII 脱敏器：上报前自动去除手机号/邮箱/身份证/敏感URL参数
+        val piiSanitizer = if (config.enablePiiSanitization) {
+            PiiSanitizer(
+                rules = DefaultSanitizationRules.all() + config.customSanitizationRules,
+                logger = logger
+            )
+        } else null
+
         // 组装分发器和上下文
-        val dispatcher = ApmDispatcher(store, uploader, logger, rateLimiter)
+        val dispatcher = ApmDispatcher(store, uploader, logger, rateLimiter, aggregator, piiSanitizer)
         val context = ApmContext(
             application = application,
             config = config,

@@ -3,6 +3,7 @@ package com.apm.core
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
 import com.apm.core.throttle.RateLimiter
+import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 
 /** 进程策略：控制 APM 在哪些进程中初始化。 */
@@ -61,6 +62,22 @@ data class ApmConfig(
     /** 灰度发布控制器，按版本/用户/百分比控制功能开关。 */
     val grayController: GrayReleaseController? = null,
 
+    // --- Phase 8: 序列化 ---
+    /** 事件序列化格式：LINE_PROTOCOL（文本）或 PROTOBUF（二进制，体积约 1/3~1/5）。 */
+    val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL,
+
+    // --- Phase 8: 聚合 ---
+    /** 是否启用客户端事件聚合（高频 METRIC 滑动窗口 + ALERT 栈指纹去重）。 */
+    val enableAggregation: Boolean = false,
+    /** 聚合窗口时长（毫秒），默认 5 分钟。 */
+    val aggregationWindowMs: Long = DEFAULT_AGGREGATION_WINDOW_MS,
+
+    // --- Phase 8: PII 脱敏 ---
+    /** 是否启用 PII 脱敏（默认关闭，生产环境建议开启）。 */
+    val enablePiiSanitization: Boolean = false,
+    /** 自定义脱敏规则（追加到内置规则之后）。 */
+    val customSanitizationRules: List<com.apm.core.privacy.SanitizationRule> = emptyList(),
+
     // --- Phase 5: 重试 ---
     /** 是否开启上传重试（指数退避）。 */
     val enableRetry: Boolean = true,
@@ -78,5 +95,8 @@ data class ApmConfig(
         private const val DEFAULT_MAX_RETRIES = 3
         /** 默认重试基础延迟：1 秒。 */
         private const val DEFAULT_RETRY_BASE_DELAY_MS = 1000L
+
+        /** 默认聚合窗口：5 分钟。 */
+        private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L
     }
 }
