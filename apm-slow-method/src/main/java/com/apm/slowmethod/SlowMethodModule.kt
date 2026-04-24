@@ -8,6 +8,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 慢方法检测模块。
@@ -136,7 +137,7 @@ class SlowMethodModule(
             module = MODULE_NAME,
             name = EVENT_SLOW_METHOD,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = fields
         )
         apmContext?.logger?.d("Slow method detected: ${durationMs}ms")
@@ -164,7 +165,7 @@ class SlowMethodModule(
             module = MODULE_NAME,
             name = EVENT_HOT_METHODS,
             kind = ApmEventKind.METRIC,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.NORMAL,
             fields = fields
         )
         apmContext?.logger?.d("Stack sampling complete: ${topMethods.size} hot methods in ${sampleCount} samples")

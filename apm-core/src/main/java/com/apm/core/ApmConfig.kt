@@ -16,6 +16,14 @@ enum class ProcessStrategy {
     CUSTOM
 }
 
+/** 事件存储类型：FILE（ring buffer）或 SQLITE（持久化，50K 容量）。 */
+enum class StorageType {
+    /** 文件存储：500 行 ring buffer + 文件。 */
+    FILE,
+    /** SQLite 存储：50,000 条容量，按优先级淘汰，WAL 模式。 */
+    SQLITE
+}
+
 /**
  * 业务上下文提供者。每次事件上报时调用，将业务动态信息注入事件。
  * 例如：当前用户 ID、设备 ID、AB 实验分组等。
@@ -45,6 +53,8 @@ data class ApmConfig(
     val processStrategy: ProcessStrategy = ProcessStrategy.MAIN_PROCESS_ONLY,
     /** 自定义进程模块映射：进程名 → 允许运行的模块名列表。仅 [ProcessStrategy.CUSTOM] 时生效。 */
     val customProcessModules: Map<String, List<String>> = emptyMap(),
+    /** 事件存储类型：FILE（ring buffer 500 行）或 SQLITE（50,000 条，生产推荐）。 */
+    val storageType: StorageType = StorageType.FILE,
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
     /** 业务上下文提供者，每次 emit 时动态获取。 */

@@ -4,6 +4,7 @@ import android.os.Debug
 import com.apm.core.Apm
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * Native Heap 监控器。
@@ -53,7 +54,7 @@ internal class NativeHeapMonitor {
             module = MODULE,
             name = EVENT_NATIVE_HEAP_STATS,
             kind = ApmEventKind.METRIC,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.HIGH,
             scene = scene,
             fields = mapOf(
                 "nativeCurrentBytes" to stats.currentBytes,

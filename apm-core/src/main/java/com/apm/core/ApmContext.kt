@@ -2,6 +2,7 @@ package com.apm.core
 
 import android.app.Application
 import com.apm.model.ApmEvent
+import com.apm.core.selfmonitor.SdkSelfMonitor
 
 /**
  * APM 模块运行上下文。
@@ -20,6 +21,9 @@ class ApmContext internal constructor(
     /** 事件分发器，内部使用。 */
     private val dispatcher: ApmDispatcher
 ) {
+    /** SDK 自监控组件，用于模块记录自身运行指标。 */
+    var selfMonitor: SdkSelfMonitor? = null
+
     /**
      * 发送事件到 APM 分发通道。
      * 事件会经过限流检查 → 本地存储 → 上传。

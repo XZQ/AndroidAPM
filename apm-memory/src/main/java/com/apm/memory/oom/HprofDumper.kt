@@ -7,6 +7,7 @@ import com.apm.core.ApmLogger
 import com.apm.memory.MemoryConfig
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.io.File
 import java.util.concurrent.Executors
 
@@ -120,7 +121,7 @@ internal class HprofDumper(
             module = MODULE,
             name = EVENT_HPROF_DUMP,
             kind = ApmEventKind.FILE,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.HIGH,
             fields = mapOf(
                 "reason" to reason,
                 "filePath" to uploadFile.absolutePath,

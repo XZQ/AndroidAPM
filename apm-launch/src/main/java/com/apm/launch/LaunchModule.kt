@@ -11,6 +11,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 启动监控模块。
@@ -208,7 +209,7 @@ class LaunchModule(
             module = MODULE_NAME,
             name = EVENT_COLD_START,
             kind = ApmEventKind.METRIC,
-            severity = severity,
+            severity = severity, priority = ApmPriority.HIGH,
             fields = fields
         )
 
@@ -286,7 +287,7 @@ class LaunchModule(
             module = MODULE_NAME,
             name = eventName,
             kind = ApmEventKind.METRIC,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.HIGH,
             fields = mapOf(
                 FIELD_LAUNCH_DURATION_MS to measurement.launchDurationMs,
                 FIELD_BACKGROUND_DURATION_MS to measurement.backgroundDurationMs,
@@ -386,7 +387,7 @@ class LaunchModule(
             module = MODULE_NAME,
             name = EVENT_FIRST_FRAME,
             kind = ApmEventKind.METRIC,
-            severity = severity,
+            severity = severity, priority = ApmPriority.HIGH,
             fields = fields
         )
 
@@ -430,7 +431,7 @@ class LaunchModule(
                 module = MODULE_NAME,
                 name = EVENT_LAUNCH_BOTTLENECK,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                 fields = mapOf(
                     FIELD_BOTTLENECK_PHASE to bottleneck.key,
                     FIELD_BOTTLENECK_DURATION_MS to bottleneck.value,

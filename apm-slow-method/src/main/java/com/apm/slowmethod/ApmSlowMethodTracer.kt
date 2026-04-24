@@ -4,6 +4,7 @@ import android.os.SystemClock
 import com.apm.core.Apm
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -146,7 +147,7 @@ object ApmSlowMethodTracer {
             module = SlowMethodModule.MODULE_NAME_REF,
             name = EVENT_SLOW_METHOD_INSTRUMENTED,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = mapOf(
                 FIELD_METHOD to methodSignature,
                 FIELD_DURATION_MS to durationMs,

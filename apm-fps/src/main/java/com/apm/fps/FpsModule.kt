@@ -10,6 +10,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * FPS 监控模块。
@@ -154,7 +155,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
             module = MODULE_NAME,
             name = EVENT_FPS_STATS,
             kind = ApmEventKind.METRIC,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = fields
         )
     }

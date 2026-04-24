@@ -4,6 +4,7 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmSeverity
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.core.throttle.RateLimiter
 import com.apm.uploader.ApmUploader
@@ -15,6 +16,8 @@ import java.util.concurrent.RejectedExecutionException
  * APM 事件分发器。
  * 负责聚合 → 限流检查 → PII 脱敏 → 本地存储 → 上传的五阶段流水线。
  * 所有事件处理在独立线程 "apm-dispatcher" 上执行，不阻塞调用方。
+ *
+ * 集成 SDK 自监控：在每个关键节点调用 [SdkSelfMonitor] 记录指标。
  */
 internal class ApmDispatcher(
     /** 本地事件存储。 */
@@ -28,7 +31,9 @@ internal class ApmDispatcher(
     /** 可选事件聚合器，null 表示不聚合。 */
     private val aggregator: EventAggregator? = null,
     /** 可选 PII 脱敏器，null 表示不脱敏。 */
-    private val piiSanitizer: PiiSanitizer? = null
+    private val piiSanitizer: PiiSanitizer? = null,
+    /** 可选 SDK 自监控组件，null 表示不自监控。 */
+    var selfMonitor: SdkSelfMonitor? = null
 ) {
     /** 单线程执行器，保证事件按顺序处理。 */
     private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
@@ -53,6 +58,9 @@ internal class ApmDispatcher(
             return
         }
 
+        // 记录事件发射
+        selfMonitor?.recordEmit()
+
         // Phase 8: 聚合检查 — 可能吞入事件或输出聚合结果
         val eventsToDispatch = if (aggregator != null) {
             aggregator.process(event)
@@ -75,6 +83,8 @@ internal class ApmDispatcher(
             val key = "${event.module}/${event.name}"
             if (!rateLimiter.tryAcquire(key)) {
                 logger.d("Rate limited: $key")
+                // 记录事件丢弃
+                selfMonitor?.recordDrop(event.priority)
                 return
             }
         }
@@ -83,19 +93,31 @@ internal class ApmDispatcher(
         try {
             executor.execute {
                 try {
+                    val startTime = System.currentTimeMillis()
+
                     // PII 脱敏：在存储和上传前对文本字段执行脱敏
                     val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
                     store.append(sanitizedEvent)
                     val uploadAccepted = uploader.upload(sanitizedEvent)
+
+                    // 记录上传延迟
+                    val latency = System.currentTimeMillis() - startTime
+                    selfMonitor?.recordUploadLatency(latency)
+
                     if (!uploadAccepted) {
                         logger.w("Uploader rejected ${sanitizedEvent.module}/${sanitizedEvent.name}")
+                        // 上传被拒绝计入丢弃
+                        selfMonitor?.recordDrop(event.priority)
                     }
                 } catch (throwable: Throwable) {
                     logger.e("Failed to dispatch ${event.module}/${event.name}", throwable)
+                    // 异常计入丢弃
+                    selfMonitor?.recordDrop(event.priority)
                 }
             }
         } catch (rejected: RejectedExecutionException) {
             logger.d("Dispatcher rejected ${event.module}/${event.name} after shutdown")
+            selfMonitor?.recordDrop(event.priority)
         }
     }
 

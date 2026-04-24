@@ -4,6 +4,7 @@ import android.os.Looper
 import com.apm.core.Apm
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -199,7 +200,7 @@ class NativeIoHook(private val config: IoConfig) {
                 module = MODULE_IO,
                 name = EVENT_SMALL_BUFFER,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.INFO,
+                severity = ApmSeverity.INFO, priority = ApmPriority.NORMAL,
                 fields = mapOf(
                     FIELD_PATH to path.take(MAX_PATH_LENGTH),
                     FIELD_BUFFER_SIZE to bufferUsed,
@@ -216,7 +217,7 @@ class NativeIoHook(private val config: IoConfig) {
                 module = MODULE_IO,
                 name = EVENT_DUPLICATE_READ,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.NORMAL,
                 fields = mapOf(
                     FIELD_PATH to path.take(MAX_PATH_LENGTH),
                     FIELD_READ_COUNT to readCount,
@@ -248,7 +249,7 @@ class NativeIoHook(private val config: IoConfig) {
                 module = MODULE_IO,
                 name = EVENT_MAIN_THREAD_IO,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.ERROR,
+                severity = ApmSeverity.ERROR, priority = ApmPriority.NORMAL,
                 fields = mapOf(
                     FIELD_PATH to session.path.take(MAX_PATH_LENGTH),
                     FIELD_DURATION_MS to durationMs,
@@ -302,7 +303,7 @@ class NativeIoHook(private val config: IoConfig) {
                         module = MODULE_IO,
                         name = EVENT_FD_LEAK,
                         kind = ApmEventKind.ALERT,
-                        severity = ApmSeverity.ERROR,
+                        severity = ApmSeverity.ERROR, priority = ApmPriority.NORMAL,
                         fields = mapOf(
                             FIELD_FD_COUNT to fdCount,
                             FIELD_THRESHOLD to config.fdLeakThreshold,
@@ -417,7 +418,7 @@ class NativeIoHook(private val config: IoConfig) {
                 module = MODULE_IO,
                 name = EVENT_MAIN_THREAD_IO,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.ERROR,
+                severity = ApmSeverity.ERROR, priority = ApmPriority.NORMAL,
                 fields = mapOf(
                     FIELD_PATH to path.take(MAX_PATH_LENGTH),
                     FIELD_DURATION_MS to durationMs,
@@ -461,7 +462,7 @@ class NativeIoHook(private val config: IoConfig) {
                             module = MODULE_IO,
                             name = EVENT_CLOSEABLE_LEAK,
                             kind = ApmEventKind.ALERT,
-                            severity = ApmSeverity.WARN,
+                            severity = ApmSeverity.WARN, priority = ApmPriority.NORMAL,
                             fields = mapOf(FIELD_PATH to path.take(MAX_PATH_LENGTH))
                         )
                     }
@@ -524,7 +525,7 @@ class NativeIoHook(private val config: IoConfig) {
                                 module = MODULE_IO,
                                 name = EVENT_ZERO_COPY_OPPORTUNITY,
                                 kind = ApmEventKind.ALERT,
-                                severity = ApmSeverity.INFO,
+                                severity = ApmSeverity.INFO, priority = ApmPriority.NORMAL,
                                 fields = mapOf(
                                     FIELD_FROM_PATH to chain.fromPath.take(MAX_PATH_LENGTH),
                                     FIELD_TO_PATH to chain.toPath.take(MAX_PATH_LENGTH),

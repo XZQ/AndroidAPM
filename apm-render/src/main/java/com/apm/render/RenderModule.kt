@@ -12,6 +12,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 渲染监控模块。
@@ -122,7 +123,7 @@ class RenderModule(
             module = MODULE_NAME,
             name = EVENT_VIEW_COUNT_SPIKE,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_VIEW_COUNT to stats.viewCount,
                 FIELD_ACTIVITY to stats.activityName,
@@ -137,7 +138,7 @@ class RenderModule(
             module = MODULE_NAME,
             name = EVENT_DEEP_HIERARCHY,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_MAX_DEPTH to stats.maxDepth,
                 FIELD_VIEW_COUNT to stats.viewCount,

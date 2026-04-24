@@ -2,8 +2,9 @@ package com.apm.uploader
 
 import android.util.Log
 import com.apm.model.ApmEvent
+import com.apm.model.ApmPriority
 import java.util.concurrent.Executors
-import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.TimeUnit
 
 /**
@@ -41,9 +42,11 @@ data class RetryPolicy(
 
 /**
  * 带重试和批量的上传器。
- * 包装底层上传器，提供：队列缓冲、批量发送、指数退避重试。
+ * 包装底层上传器，提供：优先级队列缓冲、批量发送、指数退避重试。
  *
- * 线程安全：内部使用单线程执行器 + 阻塞队列。
+ * 线程安全：内部使用单线程执行器 + PriorityBlockingQueue。
+ * 队列按 priority.value DESC 排序（CRITICAL 优先出队），
+ * 队列超容量时丢弃 LOW 优先级事件。
  */
 class RetryingApmUploader(
     /** 被包装的底层上传器。 */
@@ -56,8 +59,16 @@ class RetryingApmUploader(
     private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS
 ) : ApmUploader {
 
-    /** 事件缓冲队列，满时丢弃新事件。 */
-    private val queue = LinkedBlockingQueue<ApmEvent>(QUEUE_CAPACITY)
+    /**
+     * 事件优先级队列，按 priority.value DESC 排序。
+     * CRITICAL(3) 最先出队，LOW(0) 最后出队。
+     * PriorityBlockingQueue 是无界的，通过显式容量检查控制内存。
+     */
+    private val queue = PriorityBlockingQueue<ApmEvent>(
+        QUEUE_INITIAL_CAPACITY,
+        compareByDescending<ApmEvent> { it.priority.value }
+            .thenByDescending { it.timestamp }
+    )
 
     /** 单线程执行器，保证上传顺序。 */
     private val executor = Executors.newSingleThreadExecutor { runnable ->
@@ -75,17 +86,22 @@ class RetryingApmUploader(
 
     /**
      * 将事件加入上传队列。
-     * 队列满时丢弃并打印警告，不阻塞调用方。
+     * 队列超容量时丢弃 LOW 优先级事件，非 LOW 优先级仍接受。
+     *
+     * @param event 待上传事件
+     * @return true 表示成功入队，false 表示被丢弃
      */
     override fun upload(event: ApmEvent): Boolean {
         // 关闭后拒绝新的上传请求，避免 stop 之后继续积压事件。
         if (!running) {
             return false
         }
-        if (!queue.offer(event)) {
-            Log.w(TAG, "Upload queue full, dropping event: ${event.name}")
+        // 容量控制：超过阈值时丢弃 LOW 优先级事件
+        if (queue.size >= QUEUE_CAPACITY && event.priority == ApmPriority.LOW) {
+            Log.w(TAG, "Queue over capacity ($QUEUE_CAPACITY), dropping LOW priority event: ${event.name}")
             return false
         }
+        queue.put(event)
         return true
     }
 
@@ -171,7 +187,10 @@ class RetryingApmUploader(
         /** 工作线程名。 */
         private const val THREAD_NAME = "apm-upload-retry"
 
-        /** 队列容量。 */
+        /** 队列初始容量（PriorityBlockingQueue 会自动扩容）。 */
+        private const val QUEUE_INITIAL_CAPACITY = 500
+
+        /** 队列最大容量阈值，超过时丢弃 LOW 优先级事件。 */
         private const val QUEUE_CAPACITY = 500
 
         /** 默认批量大小。 */

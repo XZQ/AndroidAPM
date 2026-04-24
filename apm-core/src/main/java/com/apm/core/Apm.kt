@@ -3,9 +3,12 @@ package com.apm.core
 import android.app.Application
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
+import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import com.apm.storage.EventDbHelper
 import com.apm.storage.EventStore
 import com.apm.storage.FileEventStore
+import com.apm.storage.SQLiteEventStore
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
@@ -76,8 +79,14 @@ object Apm {
             return
         }
 
-        // 创建本地存储（延迟加载，不在 init 时读文件）
-        val store: EventStore = FileEventStore(application)
+        // 创建本地存储：根据配置选择文件存储或 SQLite 持久化存储
+        val store: EventStore = when (config.storageType) {
+            StorageType.SQLITE -> {
+                val dbHelper = EventDbHelper(application)
+                SQLiteEventStore(dbHelper)
+            }
+            StorageType.FILE -> FileEventStore(application)
+        }
 
         // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。
         val uploader: ApmUploader = UploaderFactory.create(config)
@@ -160,6 +169,7 @@ object Apm {
      * @param name 事件名，如 "memory_snapshot"、"java_crash"
      * @param kind 事件类型（METRIC/ALERT/FILE）
      * @param severity 严重级别（DEBUG/INFO/WARN/ERROR/FATAL）
+     * @param priority 事件优先级（LOW/NORMAL/HIGH/CRITICAL）
      * @param scene 当前场景（如 Activity 类名）
      * @param foreground 是否前台
      * @param fields 事件指标数据
@@ -170,6 +180,7 @@ object Apm {
         name: String,
         kind: ApmEventKind = ApmEventKind.METRIC,
         severity: ApmSeverity = ApmSeverity.INFO,
+        priority: ApmPriority = ApmPriority.NORMAL,
         scene: String? = null,
         foreground: Boolean? = null,
         fields: Map<String, Any?> = emptyMap(),
@@ -187,6 +198,7 @@ object Apm {
                 name = name,
                 kind = kind,
                 severity = severity,
+                priority = priority,
                 processName = currentState.context.processName,
                 threadName = callerThread,
                 scene = scene,

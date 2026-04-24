@@ -6,6 +6,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * SQLite 监控模块。
@@ -112,7 +113,7 @@ class SqliteModule(
             module = MODULE_NAME,
             name = eventName,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = fields
         )
     }

@@ -4,6 +4,7 @@ import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
+import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -73,7 +74,7 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
                 // 将堆栈转为字符串并截断
                 val stackTrace = stackTraceToString(throwable).take(config.maxStackTraceLength)
                 Apm.emit(
-                    module = MODULE_NAME, name = EVENT_JAVA_CRASH, kind = ApmEventKind.ALERT, severity = ApmSeverity.FATAL, fields = mapOf(
+                    module = MODULE_NAME, name = EVENT_JAVA_CRASH, kind = ApmEventKind.ALERT, severity = ApmSeverity.FATAL, priority = ApmPriority.CRITICAL, fields = mapOf(
                         FIELD_EXCEPTION_CLASS to throwable.javaClass.name,
                         FIELD_EXCEPTION_MESSAGE to (throwable.message.orEmpty()),
                         FIELD_STACK_TRACE to stackTrace,

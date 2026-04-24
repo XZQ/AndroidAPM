@@ -2,6 +2,7 @@ package com.apm.crash
 
 import com.apm.core.Apm
 import com.apm.model.ApmEventKind
+import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import java.io.File
 
@@ -149,7 +150,7 @@ object NativeCrashMonitor {
             module = MODULE,
             name = EVENT_NATIVE_CRASH,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.FATAL,
+            severity = ApmSeverity.FATAL, priority = ApmPriority.CRITICAL,
             fields = mutableMapOf<String, Any?>(
                 FIELD_SIGNAL to signal,
                 FIELD_SIGNAL_NAME to signalName(signal),
@@ -254,7 +255,7 @@ object NativeCrashMonitor {
                 module = MODULE,
                 name = EVENT_TOMBSTONE_CRASH,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.FATAL,
+                severity = ApmSeverity.FATAL, priority = ApmPriority.CRITICAL,
                 fields = mutableMapOf<String, Any?>(
                     FIELD_SIGNAL to signal,
                     FIELD_SIGNAL_NAME to (signalName.ifEmpty { signalName(signal) }),

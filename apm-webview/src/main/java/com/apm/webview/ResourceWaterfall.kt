@@ -5,6 +5,7 @@ import android.webkit.WebResourceResponse
 import com.apm.core.Apm
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -124,7 +125,7 @@ class ResourceWaterfall(private val config: WebviewConfig) {
                 module = MODULE_WEBVIEW,
                 name = EVENT_SLOW_RESOURCE,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                 fields = mapOf(
                     FIELD_URL to url.take(config.maxUrlLength),
                     FIELD_PAGE_URL to pageUrl.take(config.maxUrlLength),
@@ -181,7 +182,7 @@ class ResourceWaterfall(private val config: WebviewConfig) {
             module = MODULE_WEBVIEW,
             name = EVENT_RESOURCE_WATERFALL,
             kind = ApmEventKind.METRIC,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_PAGE_URL to url.take(config.maxUrlLength),
                 FIELD_TOTAL_COUNT to result.totalCount,

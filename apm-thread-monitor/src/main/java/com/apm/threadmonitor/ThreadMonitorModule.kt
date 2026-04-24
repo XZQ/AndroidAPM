@@ -7,6 +7,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 线程监控模块。
@@ -100,7 +101,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             module = MODULE_NAME,
             name = EVENT_THREAD_COUNT_SPIKE,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_THREAD_COUNT to count,
                 FIELD_THRESHOLD to config.threadCountThreshold
@@ -114,7 +115,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             module = MODULE_NAME,
             name = EVENT_DUPLICATE_THREAD,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_THREAD_NAME to name,
                 FIELD_THREAD_COUNT to count,
@@ -135,7 +136,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             module = MODULE_NAME,
             name = EVENT_BLOCKED_THREAD,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.ERROR,
+            severity = ApmSeverity.ERROR, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_BLOCKED_COUNT to blockedThreads.size,
                 FIELD_THREAD_INFO to threadInfos.take(config.maxStackTraceLength)

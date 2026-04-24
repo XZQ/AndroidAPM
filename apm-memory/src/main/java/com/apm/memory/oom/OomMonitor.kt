@@ -6,6 +6,7 @@ import com.apm.memory.MemoryConfig
 import com.apm.memory.MemorySnapshot
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -53,7 +54,7 @@ internal class OomMonitor(
                     module = MODULE,
                     name = EVENT_OOM_CRITICAL,
                     kind = ApmEventKind.ALERT,
-                    severity = ApmSeverity.ERROR,
+                    severity = ApmSeverity.ERROR, priority = ApmPriority.HIGH,
                     scene = snapshot.scene,
                     foreground = snapshot.foreground,
                     fields = mapOf(
@@ -70,7 +71,7 @@ internal class OomMonitor(
                     module = MODULE,
                     name = EVENT_OOM_WARN,
                     kind = ApmEventKind.ALERT,
-                    severity = ApmSeverity.WARN,
+                    severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                     scene = snapshot.scene,
                     foreground = snapshot.foreground,
                     fields = mapOf(
@@ -95,7 +96,7 @@ internal class OomMonitor(
                 module = MODULE,
                 name = EVENT_SYSTEM_LOW_MEMORY,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = mapOf(
@@ -113,7 +114,7 @@ internal class OomMonitor(
                 module = MODULE,
                 name = EVENT_SYSTEM_MEM_WARN,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = mapOf(
@@ -133,7 +134,7 @@ internal class OomMonitor(
                 module = MODULE,
                 name = EVENT_NATIVE_HEAP_WARN,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = mapOf(

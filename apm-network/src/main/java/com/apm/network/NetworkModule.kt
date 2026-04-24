@@ -5,6 +5,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
@@ -162,7 +163,7 @@ class NetworkModule(
             module = MODULE_NAME,
             name = EVENT_NETWORK_AGGREGATE,
             kind = ApmEventKind.METRIC,
-            severity = ApmSeverity.INFO,
+            severity = ApmSeverity.INFO, priority = ApmPriority.NORMAL,
             fields = mapOf(
                 FIELD_TOTAL_REQUESTS to stats.totalRequests,
                 FIELD_SUCCESS_COUNT to stats.successCount,

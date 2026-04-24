@@ -5,6 +5,7 @@ import com.apm.memory.leak.LeakResult
 import com.apm.memory.leak.LeakType
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 内存事件上报器。
@@ -32,7 +33,7 @@ internal class MemoryReporter(
                 module = MODULE,
                 name = SNAPSHOT_EVENT,
                 kind = ApmEventKind.METRIC,
-                severity = ApmSeverity.INFO,
+                severity = ApmSeverity.INFO, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = snapshot.toFields(reason)
@@ -57,7 +58,7 @@ internal class MemoryReporter(
                 module = MODULE,
                 name = ALERT_EVENT,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = snapshot.toFields(reason) + mapOf(
@@ -78,7 +79,7 @@ internal class MemoryReporter(
             module = MODULE,
             name = LEAK_EVENT,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
             scene = result.scene,
             fields = mapOf(
                 "leakClass" to result.leakClass,

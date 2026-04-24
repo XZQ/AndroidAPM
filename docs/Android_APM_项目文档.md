@@ -1,6 +1,8 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-23 | `20` 个 root Gradle subproject + `1` 个 included build | 86 个主源码文件 | 40 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-04-24 | `20` 个 root Gradle subproject + `1` 个 included build | 103 个主源码文件 | 47 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+>
+> 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；构建单元总数 `21 = 20` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 >
 > 说明：当前代码实际为 `15` 个监控模块，不是旧文档中的 `16` 个；构建单元总数 `21 = 20` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 

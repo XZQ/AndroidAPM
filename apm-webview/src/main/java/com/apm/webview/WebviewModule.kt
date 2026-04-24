@@ -5,6 +5,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * WebView 监控模块。
@@ -89,7 +90,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
                 module = MODULE_NAME,
                 name = EVENT_SLOW_PAGE_LOAD,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                 fields = mapOf(
                     FIELD_URL to url.take(config.maxUrlLength),
                     FIELD_DURATION_MS to duration,
@@ -115,7 +116,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             module = MODULE_NAME,
             name = EVENT_SLOW_JS,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_URL to url.take(config.maxUrlLength),
                 FIELD_JS_SNIPPET to jsSnippet.take(MAX_JS_SNIPPET_LENGTH),
@@ -134,7 +135,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             module = MODULE_NAME,
             name = EVENT_WHITE_SCREEN,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.ERROR,
+            severity = ApmSeverity.ERROR, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_URL to url.take(config.maxUrlLength),
                 FIELD_DURATION_MS to durationMs
@@ -171,7 +172,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             module = MODULE_NAME,
             name = EVENT_SLOW_JS_BRIDGE,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.WARN,
+            severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
             fields = mapOf(
                 FIELD_URL to url.take(config.maxUrlLength),
                 FIELD_BRIDGE_NAME to bridgeName.take(MAX_BRIDGE_NAME_LENGTH),
@@ -220,7 +221,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             module = MODULE_NAME,
             name = EVENT_JS_CONSOLE_ERROR,
             kind = ApmEventKind.ALERT,
-            severity = ApmSeverity.ERROR,
+            severity = ApmSeverity.ERROR, priority = ApmPriority.LOW,
             fields = fields
         )
     }

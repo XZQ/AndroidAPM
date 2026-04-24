@@ -38,6 +38,8 @@ data class ApmEvent(
     val kind: ApmEventKind = ApmEventKind.METRIC,
     /** 严重级别。 */
     val severity: ApmSeverity = ApmSeverity.INFO,
+    /** 事件优先级，决定上传队列排序和丢弃策略。 */
+    val priority: ApmPriority = ApmPriority.NORMAL,
     /** 事件时间戳（毫秒）。 */
     val timestamp: Long = System.currentTimeMillis(),
     /** 产生事件的进程名。 */
@@ -68,6 +70,7 @@ fun ApmEvent.toLineProtocol(): String {
         "name=${name.sanitize()}",
         "kind=${kind.name}",
         "severity=${severity.name}",
+        "priority=${priority.name}",
         "process=${processName.sanitize()}",
         "thread=${threadName.sanitize()}"
     )

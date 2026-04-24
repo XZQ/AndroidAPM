@@ -6,6 +6,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * IPC/Binder 监控模块。
@@ -89,7 +90,7 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
             module = MODULE_NAME,
             name = EVENT_SLOW_BINDER,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = fields
         )
     }

@@ -13,6 +13,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * 电量监控模块。
@@ -122,7 +123,7 @@ class BatteryModule(
                 module = MODULE_NAME,
                 name = EVENT_WAKELOCK_HELD,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                 fields = mapOf(
                     FIELD_WAKELOCK_TAG to tag,
                     FIELD_DURATION_MS to duration,
@@ -151,7 +152,7 @@ class BatteryModule(
                 module = MODULE_NAME,
                 name = EVENT_BATTERY_DRAIN,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                 fields = mapOf(
                     FIELD_DROP_PERCENT to drop,
                     FIELD_DURATION_MS to duration,
@@ -174,7 +175,7 @@ class BatteryModule(
                     module = MODULE_NAME,
                     name = EVENT_WAKELOCK_STILL_HELD,
                     kind = ApmEventKind.ALERT,
-                    severity = ApmSeverity.WARN,
+                    severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                     fields = mapOf(
                         FIELD_WAKELOCK_TAG to tag,
                         FIELD_DURATION_MS to duration

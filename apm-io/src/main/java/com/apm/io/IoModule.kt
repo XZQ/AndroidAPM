@@ -6,6 +6,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.io.InputStream
 import java.io.OutputStream
 
@@ -154,7 +155,7 @@ class IoModule(
             module = MODULE_NAME,
             name = EVENT_IO_ISSUE,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.NORMAL,
             fields = fields
         )
     }

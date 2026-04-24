@@ -7,6 +7,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -297,7 +298,7 @@ class AnrModule(
             module = MODULE_NAME,
             name = EVENT_ANR_DETECTED,
             kind = ApmEventKind.ALERT,
-            severity = severity,
+            severity = severity, priority = ApmPriority.CRITICAL,
             fields = fields
         )
 

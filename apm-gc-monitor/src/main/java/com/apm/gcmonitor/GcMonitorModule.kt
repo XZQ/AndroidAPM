@@ -8,6 +8,7 @@ import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmPriority
 
 /**
  * GC 监控模块（Memory Churn 检测）。
@@ -125,7 +126,7 @@ class GcMonitorModule(
                 module = MODULE_NAME,
                 name = EVENT_MEMORY_CHURN,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN,
+                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
                 fields = mapOf(
                     FIELD_GC_COUNT_DELTA to gcCountDelta,
                     FIELD_GC_TIME_DELTA_MS to gcTimeDelta,
