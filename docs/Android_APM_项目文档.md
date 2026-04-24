@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-24 | `22` 个 root Gradle subproject + `1` 个 included build | 163 个主源码文件 | 51 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-04-24 | `22` 个 root Gradle subproject + `1` 个 included build | 113 个主源码文件（112 Kotlin + 1 proto） | 51 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
