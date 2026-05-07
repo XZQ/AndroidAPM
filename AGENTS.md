@@ -20,6 +20,7 @@ Read this file first, then follow the read order below.
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
 - Main source files: `119`
 - Test files: `54`
+- Recent implementation commit: `f253605 Build: Harden project verification baseline`
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`
