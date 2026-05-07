@@ -15,16 +15,16 @@ Read this file first, then follow the read order below.
 
 ## Current Verified Baseline
 
-- Verification date: `2026-04-24`
+- Verification date: `2026-05-07`
 - Build units: `23`
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
-- Main source files: `113`
-- Test files: `51`
+- Main source files: `119`
+- Test files: `54`
 - Verified commands:
-  - `JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew assembleDebug`
-  - `JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest`
-  - `JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew -p apm-plugin test`
-- Result: all three commands passed on `2026-04-24`
+  - `./gradlew assembleDebug`
+  - `./gradlew testDebugUnitTest`
+  - `./gradlew -p apm-plugin test`
+- Result: all three commands passed on `2026-05-07`
 
 ## Important Reality Check
 

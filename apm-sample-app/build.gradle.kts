@@ -52,9 +52,9 @@ dependencies {
     implementation(project(":apm-ipc"))
     implementation(project(":apm-gc-monitor"))
     implementation(project(":apm-render"))
-    implementation("androidx.core:core-ktx:1.7.0")
-    implementation("androidx.appcompat:appcompat:1.4.1")
-    implementation("com.google.android.material:material:1.5.0")
+    implementation(libs.android.core.ktx)
+    implementation(libs.android.appcompat)
+    implementation(libs.material)
     testImplementation(libs.junit)
-    testImplementation("org.mockito:mockito-core:4.8.0")
+    testImplementation(libs.mockito.core)
 }

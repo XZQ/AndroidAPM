@@ -36,6 +36,9 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest
 
+      - name: Gradle plugin tests
+        run: ./gradlew -p apm-plugin test
+
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()

@@ -1,6 +1,6 @@
 # apm-battery 模块架构
 
-> 电量监控：WakeLock 追踪 + 电量下降速率 + CPU Jiffies 采样 + Alarm 泛洪
+> 电量监控：WakeLock 追踪 + 电量下降速率 + CPU Jiffies 采样；Alarm 泛洪列入 Roadmap
 
 ---
 
@@ -66,8 +66,8 @@
 │     if (cpuPercent >= 80% 持续 30s)                │
 │     → emit("cpu_high_usage", WARN)                 │
 │                                                    │
-│  4. Alarm 泛洪 (预留)                              │
-│     config.alarmFloodThreshold = 12                │
+│  4. Alarm 泛洪 (Roadmap)                           │
+│     需要接入 AlarmManager 调用侧埋点或平台代理后实现 │
 │                                                    │
 └────────────────────────────────────────────────────┘
 ```

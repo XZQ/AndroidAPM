@@ -66,8 +66,7 @@ class RetryingApmUploader(
      */
     private val queue = PriorityBlockingQueue<ApmEvent>(
         QUEUE_INITIAL_CAPACITY,
-        compareByDescending<ApmEvent> { it.priority.value }
-            .thenByDescending { it.timestamp }
+        UploadPriorityComparator
     )
 
     /** 单线程执行器，保证上传顺序。 */

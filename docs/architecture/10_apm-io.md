@@ -65,6 +65,7 @@
 │                                                           │
 │ Native Hook 状态:                                         │
 │ nativeHookInstalled: Boolean @Volatile                    │
+│ nativeHookInstaller: NativeIoHookInstaller                │
 │ initialized: Boolean @Volatile                            │
 ├──────────────────────────────────────────────────────────┤
 │ + init()                                                  │
@@ -90,6 +91,7 @@
 ├──────────────────────────────────────────────────────────┤
 │ «data» IoSession(path, openTime, threadName, isMainThread)│
 │ «class» ThroughputStats(path, readBytes, writeBytes, ops) │
+│ «class» NativeIoHookInstaller(load/install/uninstall)      │
 └──────────────────────────────────────────────────────────┘
 ```
 
@@ -100,6 +102,7 @@ init()
        │
        ├── if (enableNativePltHook)
        │   └── installNativePltHook()
+       │       ├── NativeIoHookInstaller.install()
        │       ├── System.loadLibrary("apm-io")
        │       ├── nativeInstallIoHooks()
        │       │   └── 动态解析 libxhook.so

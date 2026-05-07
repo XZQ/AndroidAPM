@@ -18,8 +18,8 @@ dependencies {
     compileOnly(project(":apm-core"))
     compileOnly(project(":apm-model"))
     // OpenTelemetry SDK — compileOnly 软依赖，宿主自行提供
-    compileOnly("io.opentelemetry:opentelemetry-sdk:1.36.0")
-    compileOnly("io.opentelemetry:opentelemetry-exporter-otlp:1.36.0")
+    compileOnly(libs.otel.sdk)
+    compileOnly(libs.otel.exporter.otlp)
     testImplementation(project(":apm-core"))
     testImplementation(project(":apm-model"))
     testImplementation(libs.junit)

@@ -2,6 +2,11 @@ package com.apm.plugin
 
 import org.junit.Assert.*
 import org.junit.Test
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.MethodVisitor
+import org.objectweb.asm.Opcodes
 import java.io.File
 import java.util.jar.JarFile
 import java.util.jar.JarOutputStream
@@ -132,6 +137,23 @@ class ApmSlowMethodPluginTest {
         assertTrue(ApmClassTransformer.isInstrumentable("com/example/MyClass.class", listOf("com.apm.slowmethod.")))
     }
 
+    /** 有效 class 字节码应注入 methodEnter 和 methodExit 调用。 */
+    @Test
+    fun `valid class bytecode receives tracer enter and exit calls`() {
+        val extension = ApmSlowMethodExtension()
+        val originalBytes = createValidClassBytes()
+
+        val transformed = transformClassWithBytes(
+            bytes = originalBytes,
+            classFilePath = "com/example/ValidClass.class",
+            config = extension
+        )
+
+        val calls = collectTracerCalls(transformed)
+        assertTrue(calls.contains("methodEnter"))
+        assertTrue(calls.contains("methodExit"))
+    }
+
     // --- 目录转换测试 ---
 
     /** 转换目录时非 class 文件应原样复制。 */
@@ -246,6 +268,22 @@ class ApmSlowMethodPluginTest {
         classFilePath: String,
         config: ApmSlowMethodExtension
     ): ByteArray {
+        return transformClassWithBytes(SIMPLE_CLASS_BYTES, classFilePath, config)
+    }
+
+    /**
+     * 通过反射转换指定 class 字节。
+     *
+     * @param bytes 原始字节码。
+     * @param classFilePath class 文件路径。
+     * @param config 插件配置。
+     * @return 转换后的字节码。
+     */
+    private fun transformClassWithBytes(
+        bytes: ByteArray,
+        classFilePath: String,
+        config: ApmSlowMethodExtension
+    ): ByteArray {
         // 通过反射调用 private transformClass 方法
         val method = ApmClassTransformer::class.java.getDeclaredMethod(
             "transformClass",
@@ -254,7 +292,83 @@ class ApmSlowMethodPluginTest {
             ApmSlowMethodExtension::class.java
         )
         method.isAccessible = true
-        return method.invoke(ApmClassTransformer, SIMPLE_CLASS_BYTES, classFilePath, config) as ByteArray
+        return method.invoke(ApmClassTransformer, bytes, classFilePath, config) as ByteArray
+    }
+
+    /**
+     * 构造一个有效的测试 class。
+     *
+     * @return class 字节码。
+     */
+    private fun createValidClassBytes(): ByteArray {
+        val classWriter = ClassWriter(0)
+        classWriter.visit(
+            Opcodes.V1_8,
+            Opcodes.ACC_PUBLIC,
+            "com/example/ValidClass",
+            null,
+            "java/lang/Object",
+            null
+        )
+
+        // 构造函数不应被插桩，但需要保证 class 可校验。
+        classWriter.visitMethod(Opcodes.ACC_PUBLIC, "<init>", "()V", null, null).apply {
+            visitCode()
+            visitVarInsn(Opcodes.ALOAD, 0)
+            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/Object", "<init>", "()V", false)
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(1, 1)
+            visitEnd()
+        }
+
+        // 普通方法用于验证 methodEnter/methodExit 注入。
+        classWriter.visitMethod(Opcodes.ACC_PUBLIC, "work", "()V", null, null).apply {
+            visitCode()
+            visitInsn(Opcodes.RETURN)
+            visitMaxs(0, 1)
+            visitEnd()
+        }
+
+        classWriter.visitEnd()
+        return classWriter.toByteArray()
+    }
+
+    /**
+     * 收集转换后字节码中的 Tracer 方法调用。
+     *
+     * @param bytes 转换后的 class 字节码。
+     * @return 调用到的 Tracer 方法名。
+     */
+    private fun collectTracerCalls(bytes: ByteArray): List<String> {
+        val calls = mutableListOf<String>()
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<String>?
+                ): MethodVisitor {
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitMethodInsn(
+                            opcode: Int,
+                            owner: String,
+                            name: String,
+                            descriptor: String,
+                            isInterface: Boolean
+                        ) {
+                            // 只记录慢方法 tracer 的调用，避免构造函数干扰断言。
+                            if (owner == TRACER_CLASS) {
+                                calls += name
+                            }
+                        }
+                    }
+                }
+            },
+            0
+        )
+        return calls
     }
 
     /**
@@ -291,5 +405,7 @@ class ApmSlowMethodPluginTest {
         private val SIMPLE_CLASS_BYTES = byteArrayOf(0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte(), 0x00, 0x00)
         /** 测试资源文件内容。 */
         private const val TEST_RESOURCE_CONTENT = "test resource"
+        /** 慢方法 Tracer 内部类名。 */
+        private const val TRACER_CLASS = "com/apm/slowmethod/ApmSlowMethodTracer"
     }
 }

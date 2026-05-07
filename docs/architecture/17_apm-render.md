@@ -1,6 +1,6 @@
 # apm-render 模块架构
 
-> 渲染监控：View 树数量/层级深度检测 + 过度绘制
+> 渲染监控：View 树数量/层级深度检测；过度绘制列入 Roadmap
 
 ---
 
@@ -95,9 +95,9 @@ onActivityCreated(activity)
 │     → measure/layout 递归开销大                  │
 │     → emit("deep_hierarchy", WARN)               │
 │                                                  │
-│  3. 过度绘制检测 (预留)                          │
-│     config.detectOverdraw = false (默认关闭)      │
-│     → 需开启系统 "显示过度绘制" 才能检测         │
+│  3. 过度绘制检测 (Roadmap)                       │
+│     Android 无稳定公开 API 直接读取系统过度绘制层 │
+│     后续需通过可选调试构建或自定义绘制采样实现   │
 │                                                  │
 │  事件字段:                                       │
 │  {                                               │
