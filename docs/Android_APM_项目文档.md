@@ -93,11 +93,14 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 ### 1.2 Git 提交历史
 
 ```
+f253605 Build: Harden project verification baseline
+e75e109 Docs: Add recording archive
+0516382 Docs: Correct source file count from 163 to 113
+d01dc98 Docs: Update architecture docs for Phase 10-11
+8f0c7e5 Feat: Add OpenTelemetry exporter module
+e315055 Feat: Add apm-trace module with Span/Trace API
+aed3246 Feat: Add SQLite storage, priority queue, multi-process coordination and SDK self-monitoring
 de499c6 Refactor: Align slow method plugin extension
-ee168a6 Refactor: Harden native hooks and migrate slow method plugin
-117bafa Fix: Repair uploader lifecycle and measurement semantics
-372d7e7 Docs: Add mandatory MEMORY.md sync rule after each commit
-2b73c8b Feat: Full project optimization - tests, version catalog, CI
 ```
 
 ### 1.3 当前已验证关键接线
