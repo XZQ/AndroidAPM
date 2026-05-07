@@ -36,6 +36,6 @@ dependencies {
     implementation(project(":apm-core"))
     implementation(project(":apm-model"))
     implementation(libs.lifecycle.process)
-    implementation("androidx.fragment:fragment-ktx:1.6.2")
+    implementation(libs.fragment.ktx)
     testImplementation(libs.junit)
 }

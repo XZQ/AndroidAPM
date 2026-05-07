@@ -16,6 +16,6 @@ android {
 dependencies {
     implementation(project(":apm-core"))
     implementation(project(":apm-model"))
-    compileOnly("com.squareup.okhttp3:okhttp:4.11.0")
+    compileOnly(libs.okhttp)
     testImplementation(libs.junit)
 }

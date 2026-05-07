@@ -2,7 +2,11 @@ package com.apm.core
 
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
+import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import com.apm.core.privacy.DefaultSanitizationRules
+import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.uploader.ApmUploader
 import org.junit.Assert.assertEquals
@@ -57,20 +61,69 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
     }
 
+    /** 存储和上传前应先执行 PII 脱敏。 */
+    @Test
+    fun `dispatch sanitizes event before store and upload`() {
+        val latch = CountDownLatch(1)
+        val store = RecordingStore()
+        val uploader = RecordingUploader(latch)
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = uploader,
+            logger = RecordingLogger(),
+            piiSanitizer = PiiSanitizer(DefaultSanitizationRules.all())
+        )
+
+        dispatcher.dispatch(createEvent(name = "pii", fields = mapOf("phone" to RAW_PHONE)))
+
+        assertTrue(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertEquals(MASKED_PHONE, store.events.single().fields["phone"])
+        assertEquals(MASKED_PHONE, uploader.events.single().fields["phone"])
+
+        dispatcher.shutdown()
+    }
+
+    /** uploader 拒绝事件时应计入 SDK 自监控丢弃数。 */
+    @Test
+    fun `dispatch records drop when uploader rejects event`() {
+        val latch = CountDownLatch(1)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = RecordingStore(),
+            uploader = RejectingUploader(latch),
+            logger = RecordingLogger()
+        )
+        dispatcher.selfMonitor = selfMonitor
+
+        dispatcher.dispatch(createEvent(name = "reject", priority = ApmPriority.HIGH))
+
+        assertTrue(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        waitUntil { selfMonitor.getTotalDropCount() == 1L }
+        assertEquals(1L, selfMonitor.getTotalDropCount())
+
+        dispatcher.shutdown()
+    }
+
     /**
      * 构造测试事件。
      *
      * @param name 事件名
      * @return 标准 APM 事件
      */
-    private fun createEvent(name: String): ApmEvent {
+    private fun createEvent(
+        name: String,
+        priority: ApmPriority = ApmPriority.NORMAL,
+        fields: Map<String, Any?> = emptyMap()
+    ): ApmEvent {
         return ApmEvent(
             module = "core",
             name = name,
             kind = ApmEventKind.METRIC,
             severity = ApmSeverity.INFO,
+            priority = priority,
             processName = "process",
-            threadName = "main"
+            threadName = "main",
+            fields = fields
         )
     }
 
@@ -133,6 +186,27 @@ class ApmDispatcherTest {
     }
 
     /**
+     * 拒绝型上传器。
+     */
+    private class RejectingUploader(
+        /** 拒绝后的同步信号。 */
+        private val latch: CountDownLatch
+    ) : ApmUploader {
+
+        /**
+         * 拒绝上传事件。
+         *
+         * @param event 待上传事件
+         * @return 始终返回 false
+         */
+        override fun upload(event: ApmEvent): Boolean {
+            // 明确触发 dispatcher 的 uploader rejected 分支。
+            latch.countDown()
+            return false
+        }
+    }
+
+    /**
      * 空日志实现。
      */
     private class RecordingLogger : ApmLogger {
@@ -160,11 +234,37 @@ class ApmDispatcherTest {
         override fun e(message: String, throwable: Throwable?) = Unit
     }
 
+    /**
+     * 等待异步断言条件成立。
+     *
+     * @param predicate 需要满足的条件。
+     */
+    private fun waitUntil(predicate: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_SECONDS * MILLIS_PER_SECOND
+        while (System.currentTimeMillis() < deadline) {
+            // dispatcher 在后台线程更新自监控，测试侧短轮询等待可见结果。
+            if (predicate()) return
+            Thread.sleep(WAIT_POLL_INTERVAL_MS)
+        }
+    }
+
     companion object {
         /** 异步断言前的短暂等待。 */
         private const val WAIT_BRIEFLY_MS = 100L
 
         /** 等待异步上传完成的超时秒数。 */
         private const val AWAIT_TIMEOUT_SECONDS = 2L
+
+        /** 秒到毫秒换算。 */
+        private const val MILLIS_PER_SECOND = 1000L
+
+        /** 异步断言轮询间隔。 */
+        private const val WAIT_POLL_INTERVAL_MS = 10L
+
+        /** 脱敏前手机号。 */
+        private const val RAW_PHONE = "13812345678"
+
+        /** 脱敏后手机号。 */
+        private const val MASKED_PHONE = "138****5678"
     }
 }

@@ -19,13 +19,13 @@
 | [08_apm-fps.md](08_apm-fps.md) | FPS监控：Choreographer VSync、Window FrameMetrics、掉帧/卡顿/冻结分级 |
 | [09_apm-slow-method.md](09_apm-slow-method.md) | 慢方法检测：反射Hook Looper.mLogging、ASM字节码插桩、栈采样、热点方法统计 |
 | [10_apm-io.md](10_apm-io.md) | IO监控：Native PLT Hook(双层架构)、FD泄漏(/proc/self/fd)、吞吐量统计、Closeable泄漏 |
-| [11_apm-battery.md](11_apm-battery.md) | 电量监控：WakeLock追踪、电量下降速率、CPU Jiffies采样(/proc/self/stat)、Alarm泛洪 |
+| [11_apm-battery.md](11_apm-battery.md) | 电量监控：WakeLock追踪、电量下降速率、CPU Jiffies采样(/proc/self/stat)；Alarm泛洪列入Roadmap |
 | [12_apm-sqlite.md](12_apm-sqlite.md) | SQLite监控：慢查询、主线程DB、大数据量操作、QueryPlan分析(全表扫描/临时BTree/自动索引) |
 | [13_apm-webview.md](13_apm-webview.md) | WebView监控：页面加载耗时、JS执行耗时、白屏检测 |
 | [14_apm-ipc.md](14_apm-ipc.md) | IPC/Binder监控：Binder调用耗时、主线程阈值分级、聚合统计 |
 | [15_apm-thread-monitor.md](15_apm-thread-monitor.md) | 线程监控：线程数膨胀、同名泄漏、BLOCKED死锁检测 |
 | [16_apm-gc-monitor.md](16_apm-gc-monitor.md) | GC监控：GC频次飙升、GC耗时占比、Heap增长、分配频率、GC回收率 |
-| [17_apm-render.md](17_apm-render.md) | 渲染监控：View树数量检测、层级深度检测、过度绘制(预留) |
+| [17_apm-render.md](17_apm-render.md) | 渲染监控：View树数量检测、层级深度检测；过度绘制列入Roadmap |
 
 ## 图表类型
 

@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-04-24 | `22` 个 root Gradle subproject + `1` 个 included build | 113 个主源码文件（112 Kotlin + 1 proto） | 51 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-05-07 | `22` 个 root Gradle subproject + `1` 个 included build | 119 个主源码文件（115 Kotlin + 3 C + 1 proto） | 54 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -84,7 +84,7 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 | Phase 4: 高级模块 | 已完成 | gc-monitor, render |
 | Phase 5: 全面对标重构 | 已完成 | 15 个监控模块对标微信 Matrix + KOOM + Google 最佳实践 |
 | Phase 6: 三大核心增强 | 已完成 | ANR SIGQUIT、ASM 字节码插桩、IO Native Hook；sample 已完成 slow-method 插件接线 |
-| Phase 7: 测试覆盖 | 已完成 | 40 个测试文件，覆盖 Config + Module + Plugin 核心逻辑 |
+| Phase 7: 测试覆盖 | 已完成 | 54 个测试文件，覆盖 Config + Module + Plugin 核心逻辑，并补充 dispatcher/uploader/storage/native fallback/ASM 插桩高风险路径 |
 | Phase 8: 生产级序列化 | 已完成 | Protobuf 序列化 + 客户端事件聚合 + PII 脱敏 |
 | Phase 9: 生产级存储 | 已完成 | SQLite 50K 存储 + 优先级队列 + 多进程协调 + SDK 自监控 |
 | Phase 10: Trace API | 已完成 | apm-trace 手动埋点 Span/Trace API |
@@ -114,6 +114,11 @@ ee168a6 Refactor: Harden native hooks and migrate slow method plugin
 10. `LaunchModule` 的热/温启动已改为“后台停留时长决定类型，前台恢复链路耗时决定上报值”，并附带 `backgroundDurationMs`。
 11. `FileEventStore` 已改为按真实 append 次数触发重写，避免缓冲区打满后每次 append 都整文件重写。
 12. `apm-core` 已将 `apm-uploader` 提升为 `api` 依赖，保证 `ApmConfig.uploader` 暴露的公开类型能被下游应用正常编译解析。
+13. CI 已补充 `./gradlew -p apm-plugin test`，与仓库验证基线保持一致。
+14. `NativeIoHook` 已抽出 `NativeIoHookInstaller`，JNI 库缺失或安装失败时可单测验证自动降级到 Java 代理。
+15. `SQLiteEventStore` 的 severity → 存储优先级映射已集中到 `StoragePriorityMapper`，避免存储排序和淘汰口径分叉。
+16. `RetryingApmUploader` 已抽出 `UploadPriorityComparator`，高优先级和同优先级新事件排序策略有独立测试覆盖。
+17. Battery Alarm 泛洪和 Render 过度绘制不再标为已完成能力，统一降级为 Roadmap 口径。
 
 ### 1.4 编码规范（CLAUDE.md 强制）
 
@@ -196,12 +201,12 @@ ee168a6 Refactor: Harden native hooks and migrate slow method plugin
 | apm-slow-method | com.apm.slowmethod | SlowMethodModule, ApmSlowMethodTracer(ASM运行时), StackSamplingProfiler, SlowMethodConfig | 4 |
 | apm-io | com.apm.io | IoModule, NativeIoHook(PLT Hook+FD+吞吐量+零拷贝), IoConfig | 3 + JNI |
 | apm-thread-monitor | com.apm.threadmonitor | ThreadMonitorModule, ThreadMonitorConfig | 2 |
-| apm-battery | com.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler | 3 |
+| apm-battery | com.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler（Alarm 泛洪列入 Roadmap） | 3 |
 | apm-sqlite | com.apm.sqlite | SqliteModule, SqliteConfig, QueryPlanAnalyzer | 3 |
 | apm-webview | com.apm.webview | WebviewModule(JS Bridge+Console Error), WebviewConfig, ResourceWaterfall | 3 |
 | apm-ipc | com.apm.ipc | IpcModule, IpcConfig | 2 |
 | apm-gc-monitor | com.apm.gcmonitor | GcMonitorModule, GcStats, GcMonitorConfig | 3 |
-| apm-render | com.apm.render | RenderModule, RenderConfig, RenderStats | 3 |
+| apm-render | com.apm.render | RenderModule, RenderConfig, RenderStats（过度绘制列入 Roadmap） | 3 |
 
 ### 3.3 扩展模块层
 
@@ -422,8 +427,8 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 | 指标 | 数值 |
 |------|------|
 | 构建单元数 | 23（22 个 root Gradle subproject + 1 个 included build: apm-plugin） |
-| Kotlin 源文件 | 163 |
-| 测试文件 | 51 |
+| 主源码文件 | 119（115 Kotlin + 3 C + 1 proto） |
+| 测试文件 | 54 |
 | 总代码行数 | ~12000+ |
 | 编译结果 | `assembleDebug` 通过 |
 | 测试结果 | `testDebugUnitTest` + `./gradlew -p apm-plugin test` 通过 |

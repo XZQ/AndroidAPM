@@ -37,7 +37,7 @@ class SQLiteEventStore(
     override fun append(event: ApmEvent) {
         val db = dbHelper.writableDatabase
         val values = ContentValues().apply {
-            put(COLUMN_PRIORITY, event.priorityValue)
+            put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
             put(COLUMN_MODULE, event.module)
             put(COLUMN_NAME, event.name)
             put(COLUMN_SEVERITY, event.severity.name)
@@ -229,16 +229,3 @@ class SQLiteEventStore(
         private const val COLUMN_RETRY_COUNT = "retry_count"
     }
 }
-
-/**
- * ApmEvent 的优先级数值映射。
- * 用于 SQLite 存储和排序。
- */
-private val ApmEvent.priorityValue: Int
-    get() = when (severity) {
-        com.apm.model.ApmSeverity.FATAL -> 3
-        com.apm.model.ApmSeverity.ERROR -> 3
-        com.apm.model.ApmSeverity.WARN -> 2
-        com.apm.model.ApmSeverity.INFO -> 1
-        com.apm.model.ApmSeverity.DEBUG -> 0
-    }

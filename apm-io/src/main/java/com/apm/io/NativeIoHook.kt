@@ -79,6 +79,13 @@ class NativeIoHook(private val config: IoConfig) {
     @Volatile
     private var nativeHookInstalled = false
 
+    /** Native Hook 安装器，封装 JNI 加载和降级判断。 */
+    private val nativeHookInstaller = NativeIoHookInstaller(
+        loadLibrary = { System.loadLibrary(NATIVE_LIB_NAME) },
+        installHooks = { nativeInstallIoHooks() },
+        uninstallHooks = { nativeUninstallIoHooks() }
+    )
+
     // --- 零拷贝检测 ---
     /** Buffer 拷贝操作追踪：sourcePath → CopyChain。 */
     private val copyChains = ConcurrentHashMap<String, CopyChain>()
@@ -383,15 +390,8 @@ class NativeIoHook(private val config: IoConfig) {
      * 需要预编译的 libapm-io.so 库。
      */
     private fun installNativePltHook() {
-        try {
-            System.loadLibrary(NATIVE_LIB_NAME)
-            nativeInstallIoHooks()
-            nativeHookInstalled = true
-        } catch (_: UnsatisfiedLinkError) {
-            // JNI 库不存在，使用 Java 层代理降级
-        } catch (_: Exception) {
-            // 安装失败，降级
-        }
+        // Native 不可用时保持 false，调用方继续使用 Java 代理路径。
+        nativeHookInstalled = nativeHookInstaller.install()
     }
 
     /**
@@ -558,11 +558,7 @@ class NativeIoHook(private val config: IoConfig) {
         zeroCopyReported.clear()
         // 卸载 Native Hook
         if (nativeHookInstalled) {
-            try {
-                nativeUninstallIoHooks()
-            } catch (_: Exception) {
-                // 忽略
-            }
+            nativeHookInstaller.uninstall()
             nativeHookInstalled = false
         }
     }

@@ -41,13 +41,13 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 | 6 | [FPS](docs/architecture/08_apm-fps.md) | apm-fps | Choreographer VSync + FrameMetrics 双引擎、掉帧/卡顿/冻结三级分级 |
 | 7 | [慢方法](docs/architecture/09_apm-slow-method.md) | apm-slow-method | 反射 Hook Looper.mLogging + ASM 字节码插桩双引擎、栈采样、热点方法统计 |
 | 8 | [IO](docs/architecture/10_apm-io.md) | apm-io | Native PLT Hook 双层架构、FD 泄漏(/proc/self/fd)、吞吐量统计、Closeable 泄漏(PhantomReference) |
-| 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | WakeLock 追踪、电量下降速率、CPU Jiffies 采样(/proc/self/stat)、Alarm 泛洪检测 |
+| 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | WakeLock 追踪、电量下降速率、CPU Jiffies 采样(/proc/self/stat)；Alarm 泛洪列入 Roadmap |
 | 10 | [SQLite](docs/architecture/12_apm-sqlite.md) | apm-sqlite | 慢查询检测、主线程 DB 操作、大数据量操作、QueryPlan 分析(全表扫描/临时BTree) |
 | 11 | [WebView](docs/architecture/13_apm-webview.md) | apm-webview | 页面加载耗时、JS 执行耗时、白屏检测 |
 | 12 | [IPC](docs/architecture/14_apm-ipc.md) | apm-ipc | Binder 调用耗时监控、主线程阈值分级、聚合统计 |
 | 13 | [线程](docs/architecture/15_apm-thread-monitor.md) | apm-thread-monitor | 线程数膨胀、同名泄漏、BLOCKED 死锁检测 |
 | 14 | [GC](docs/architecture/16_apm-gc-monitor.md) | apm-gc-monitor | GC 频次飙升、GC 耗时占比、Heap 增长、分配频率、GC 回收率 |
-| 15 | [渲染](docs/architecture/17_apm-render.md) | apm-render | View 树数量检测、层级深度检测、过度绘制(预留) |
+| 15 | [渲染](docs/architecture/17_apm-render.md) | apm-render | View 树数量检测、层级深度检测；过度绘制列入 Roadmap |
 
 ### 核心能力
 
@@ -236,7 +236,7 @@ val okHttpClient = OkHttpClient.Builder()
 | apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
 | apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
 | apm-io | IO 监控 | Native PLT Hook + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
-| apm-battery | 电量监控 | WakeLock + CPU Jiffies + Alarm 泛洪 |
+| apm-battery | 电量监控 | WakeLock + CPU Jiffies；Alarm 泛洪列入 Roadmap |
 | apm-sqlite | SQLite 监控 | 慢查询 + QueryPlan 分析 |
 | apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |
 | apm-ipc | IPC 监控 | Binder 调用耗时 |
