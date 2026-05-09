@@ -27,6 +27,16 @@
 | [16_apm-gc-monitor.md](16_apm-gc-monitor.md) | GC监控：GC频次飙升、GC耗时占比、Heap增长、分配频率、GC回收率 |
 | [17_apm-render.md](17_apm-render.md) | 渲染监控：View树数量检测、层级深度检测；过度绘制列入Roadmap |
 
+## 生成图谱
+
+| 文件 | 内容 |
+|------|------|
+| [generated-diagrams/android-apm-overview.svg](generated-diagrams/android-apm-overview.svg) / [PNG](generated-diagrams/android-apm-overview.png) | 全局分层架构：宿主接入、15 个监控模块、Core 管线、扩展和构建工具 |
+| [generated-diagrams/android-apm-event-pipeline.svg](generated-diagrams/android-apm-event-pipeline.svg) / [PNG](generated-diagrams/android-apm-event-pipeline.png) | 运行时事件流：Apm.emit、ApmEvent、聚合、限流、脱敏、存储、上传 |
+| [generated-diagrams/android-apm-module-dependencies.svg](generated-diagrams/android-apm-module-dependencies.svg) / [PNG](generated-diagrams/android-apm-module-dependencies.png) | Gradle 模块依赖：Sample、监控模块、基础模块、扩展模块、included build |
+| [generated-diagrams/android-apm-monitoring-modules.svg](generated-diagrams/android-apm-monitoring-modules.svg) / [PNG](generated-diagrams/android-apm-monitoring-modules.png) | 15 个监控模块能力分组图 |
+| [generated-diagrams/android-apm-slow-method-instrumentation.svg](generated-diagrams/android-apm-slow-method-instrumentation.svg) / [PNG](generated-diagrams/android-apm-slow-method-instrumentation.png) | slow-method 编译期 ASM 插桩与运行时上报链路 |
+
 ## 图表类型
 
 每个模块文档包含：

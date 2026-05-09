@@ -70,6 +70,10 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
          → RetryingApmUploader（优先级队列 → 批量 + 指数退避）
 ```
 
+### 生成图谱
+
+`docs/architecture/generated-diagrams/` 已补充 SVG + PNG 可视化图谱，覆盖全局架构、运行时事件管线、Gradle 模块依赖、15 个监控模块能力分组和 slow-method ASM 插桩链路。
+
 ---
 
 ## 一、项目当前状态
