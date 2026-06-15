@@ -15,17 +15,21 @@ Read this file first, then follow the read order below.
 
 ## Current Verified Baseline
 
-- Verification date: `2026-05-07`
+- Verification date: `2026-06-15`
 - Build units: `23`
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
-- Main source files: `119`
-- Test files: `54`
-- Recent implementation commit: `f253605 Build: Harden project verification baseline`
+- Main source files: `121`
+- Test files: `57`
+- Recent implementation commit: `7a98468 Refactor: Harden APM reliability and delivery`
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`
   - `./gradlew -p apm-plugin test`
-- Result: all three commands passed on `2026-05-07`
+  - `./gradlew lintDebug`
+  - `./gradlew assembleRelease`
+  - `./gradlew publishToMavenLocal`
+  - `./gradlew -p smoke-tests/maven-consumer clean assembleDebug`
+- Result: all commands passed on `2026-06-15`
 
 ## Important Reality Check
 
@@ -57,7 +61,7 @@ Read this file first, then follow the read order below.
 ## Quick Orientation
 
 - Project type: multi-module Android APM framework
-- Build stack: Kotlin `1.8.10`, AGP `7.4.2`, JDK `11`, compileSdk `34`
+- Build stack: Kotlin `2.2.21`, AGP `8.13.2`, Gradle `8.13`, JDK `21`, JVM bytecode target `11`, compileSdk `34`
 - Current package namespace: `com.apm`
 - Sample app: `apm-sample-app`
 - Gradle plugin build: `apm-plugin` via `pluginManagement { includeBuild("apm-plugin") }`

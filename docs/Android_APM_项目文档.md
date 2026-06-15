@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-05-07 | `22` 个 root Gradle subproject + `1` 个 included build | 119 个主源码文件（115 Kotlin + 3 C + 1 proto） | 54 个测试文件 | `assembleDebug` / `testDebugUnitTest` / `./gradlew -p apm-plugin test` 本轮均已通过
+> 最后校验：2026-06-15 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -16,9 +16,10 @@
 
 | 依赖 | 版本 |
 |------|------|
-| JDK | 11 |
-| Android Gradle Plugin | 7.4.2 |
-| Kotlin | 1.8.10 |
+| JDK | 21（JVM 字节码目标 11） |
+| Gradle | 8.13 |
+| Android Gradle Plugin | 8.13.2 |
+| Kotlin | 2.2.21 |
 | compileSdk | 34 |
 | minSdk | 24 |
 | targetSdk | 34 |
@@ -26,14 +27,14 @@
 ### 构建命令
 
 ```bash
-# 编译全部模块
-JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew assembleDebug
-
-# 运行单元测试
-JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
-
-# 如果系统已安装 JDK 11，可直接：
+# 编译全部模块并运行单元测试
 ./gradlew assembleDebug testDebugUnitTest
+
+# 完整质量与发布验证
+./gradlew lintDebug assembleRelease
+./gradlew -p apm-plugin test
+./gradlew publishToMavenLocal
+./gradlew -p smoke-tests/maven-consumer clean assembleDebug
 ```
 
 ### 30 秒看架构
@@ -53,7 +54,7 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 ├───────────────────────────────────────────────────────────────────────┤
 │                       Extension 层（2 扩展模块）                        │
 │  apm-trace          — 手动埋点 Span/Trace API                         │
-│  apm-otel-exporter  — OpenTelemetry 桥接 (Span/Metric/Log)            │
+│  apm-otel-exporter  — OpenTelemetry 语义映射 (Span/Metric/Log Map)    │
 ├───────────────────────────────────────────────────────────────────────┤
 │                       Demo / Build Tool 层                            │
 │  apm-sample-app — 集成全部模块的示例应用                                 │
@@ -65,9 +66,10 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 
 ```
 业务模块 → Apm.emit(module, name, kind, severity, priority, fields)
-         → ApmDispatcher（聚合 → 限流 → PII脱敏 → 本地存储 → 上传）
-         → EventStore（SQLite 50K WAL / File ring buffer）
-         → RetryingApmUploader（优先级队列 → 批量 + 指数退避）
+         → ApmDispatcher（聚合 → 限流 → PII脱敏 → 持久化）
+         → SQLite PendingEventStore（默认，成功确认后删除；重启回放）
+         → PersistentUploadWorker（批量 + Gzip + 指数退避）
+         → FileEventStore / RetryingApmUploader（显式 FILE 配置时）
 ```
 
 ### 生成图谱
@@ -87,16 +89,21 @@ JAVA_HOME=/home/didi/.jdks/jbr_dcevm-11.0.16 ./gradlew testDebugUnitTest
 | Phase 3: 扩展模块 | 已完成 | fps, slow-method, io, thread-monitor, battery, sqlite, webview, ipc |
 | Phase 4: 高级模块 | 已完成 | gc-monitor, render |
 | Phase 5: 全面对标重构 | 已完成 | 15 个监控模块对标微信 Matrix + KOOM + Google 最佳实践 |
-| Phase 6: 三大核心增强 | 已完成 | ANR SIGQUIT、ASM 字节码插桩、IO Native Hook；sample 已完成 slow-method 插件接线 |
-| Phase 7: 测试覆盖 | 已完成 | 54 个测试文件，覆盖 Config + Module + Plugin 核心逻辑，并补充 dispatcher/uploader/storage/native fallback/ASM 插桩高风险路径 |
+| Phase 6: 三大核心增强 | 已完成 | ANR Watchdog + 可选 SIGQUIT 回调、ASM 字节码插桩、IO Native Hook；sample 已完成 slow-method 插件接线 |
+| Phase 7: 测试覆盖 | 已完成 | 57 个测试文件，新增持久化出箱、事件编解码、真实批量 Gzip HTTP、ASM 异常出口路径 |
 | Phase 8: 生产级序列化 | 已完成 | Protobuf 序列化 + 客户端事件聚合 + PII 脱敏 |
 | Phase 9: 生产级存储 | 已完成 | SQLite 50K 存储 + 优先级队列 + 多进程协调 + SDK 自监控 |
 | Phase 10: Trace API | 已完成 | apm-trace 手动埋点 Span/Trace API |
-| Phase 11: OTel 对接 | 已完成 | apm-otel-exporter OpenTelemetry 桥接 |
+| Phase 11: OTel 对接 | 已完成 | apm-otel-exporter 提供无 SDK 依赖的 Span/Metric/Log 映射结果；网络发送由宿主适配层负责 |
 
 ### 1.2 Git 提交历史
 
+> 当前全量优化实现提交：`7a98468 Refactor: Harden APM reliability and delivery`。
+
 ```
+7a98468 Refactor: Harden APM reliability and delivery
+99e8f06 Docs: Add generated architecture diagrams
+3122384 Docs: Sync verification history
 f253605 Build: Harden project verification baseline
 e75e109 Docs: Add recording archive
 0516382 Docs: Correct source file count from 163 to 113
@@ -117,7 +124,7 @@ de499c6 Refactor: Align slow method plugin extension
 6. `gradle.properties` 已移除 `android.experimental.legacyTransform.forceNonIncremental`，slow-method 插件不再依赖旧 Transform 兼容开关。
 7. `ApmConfig` 已支持显式注入 `uploader`；未注入时按 `endpoint` 自动选择 `HttpApmUploader` 或 `LogcatApmUploader`。
 8. `RetryingApmUploader` 已将 `delegate.upload()` 返回 `false` 也纳入重试判定，`Apm.stop()` 同时关闭 dispatcher 和 uploader。
-9. `AnrModule` 的 SIGQUIT 路径已切到独立分析线程，不再依赖主线程消息队列恢复后才处理。
+9. `AnrModule` 默认使用 Watchdog；宿主提供 SIGQUIT native 回调时，分析路径会切到独立线程，不依赖主线程消息队列恢复。
 10. `LaunchModule` 的热/温启动已改为“后台停留时长决定类型，前台恢复链路耗时决定上报值”，并附带 `backgroundDurationMs`。
 11. `FileEventStore` 已改为按真实 append 次数触发重写，避免缓冲区打满后每次 append 都整文件重写。
 12. `apm-core` 已将 `apm-uploader` 提升为 `api` 依赖，保证 `ApmConfig.uploader` 暴露的公开类型能被下游应用正常编译解析。
@@ -125,9 +132,26 @@ de499c6 Refactor: Align slow method plugin extension
 14. `NativeIoHook` 已抽出 `NativeIoHookInstaller`，JNI 库缺失或安装失败时可单测验证自动降级到 Java 代理。
 15. `SQLiteEventStore` 的 severity → 存储优先级映射已集中到 `StoragePriorityMapper`，避免存储排序和淘汰口径分叉。
 16. `RetryingApmUploader` 已抽出 `UploadPriorityComparator`，高优先级和同优先级新事件排序策略有独立测试覆盖。
-17. Battery Alarm 泛洪和 Render 过度绘制不再标为已完成能力，统一降级为 Roadmap 口径。
+17. Battery 已提供 WakeLock/GPS/Alarm 的宿主回调 API，CPU Jiffies 采样已由定时任务实际驱动。
+18. 默认存储切换为 SQLite 持久化出箱；事件仅在完整批次上传成功后确认删除，失败保留并在当前或下次进程启动时回放。
+19. Crash 事件通过 `emitCriticalSync()` 同步落盘，避免进程终止前仍停留在异步队列。
+20. `HttpApmUploader` 的批量上传为单次 HTTP 请求，Gzip header 在建立输出流前设置，并有真实 socket 回归测试。
+21. 聚合桶、字段样本、栈指纹和上传队列均设置硬上限，避免长时间运行造成无界内存增长。
+22. `Apm.stop()` 会先停止新事件，再有界排空 dispatcher，最后关闭 worker、uploader 与 store。
+23. 动态模块开关、灰度控制、多进程协调、SDK 自监控和自动降级均接入运行时初始化/生命周期。
+24. 全部 Android/JVM 模块统一 Kotlin 2.2.21、AGP 8.13.2、Gradle 8.13 与 JDK 21 构建，字节码目标保持 Java 11。
+25. 所有发布模块生成 sources JAR/AAR Maven 元数据；独立 smoke consumer 已验证传递依赖与公开 API。
 
-### 1.4 编码规范（CLAUDE.md 强制）
+### 1.4 2026-06-15 全量优化摘要
+
+- **可靠性**：SQLite 可逆事件编码、持久化 outbox、成功确认、失败重试、关键事件同步落盘、优雅关闭。
+- **准确性**：FPS 使用实际帧间隔，网络避免 Interceptor/EventListener 双重汇总，线程采样覆盖所有活动线程，ANR Watchdog 不再依赖缺失 JNI。
+- **资源安全**：IO 流代理自动统计 read/write/close 并取消已关闭对象的泄漏引用；WebView 资源瀑布支持并发页面和重复 URL。
+- **插桩**：慢方法 ASM 为正常返回与传播异常都注入平衡的 `methodExit`，方法签名包含 descriptor。
+- **集成**：Memory Hprof 初始化、Battery CPU/GPS/Alarm/WakeLock 回调、动态配置/灰度/多进程/自监控接线完成。
+- **工程化**：发布元数据、consumer ProGuard、CI lint/release/publish/smoke、独立 Maven 消费工程均已补齐。
+
+### 1.5 编码规范（CLAUDE.md 强制）
 
 1. **规则一**：所有 `public/internal/private` 成员变量和方法必须添加 KDoc 注释
 2. **规则二**：方法内分支/循环/异常/回调等关键节点必须添加行内注释
@@ -142,7 +166,7 @@ de499c6 Refactor: Align slow method plugin extension
 | **FPS / 卡顿** | Choreographer VSync + 掉帧/卡顿/冻结分级 | Choreographer 回调 | - | 推荐 (Jank) |
 | **慢方法** | 反射 Hook Looper.mLogging + **ASM 字节码插桩** + 热点方法统计 | 方法插桩 + 栈采样 | - | 推荐 |
 | **IO 监控** | 主线程 IO + 大 buffer + **Native PLT Hook** + FD 泄漏 + 吞吐量 + Closeable 泄漏 + **零拷贝检测** | File I/O 耗时统计 | - | 推荐 |
-| **ANR** | **SIGQUIT 信号检测** + Watchdog 双重检测 + **traces.txt 解析** + 5 种原因分类 + 堆栈采样 + 去重 | Watchdog + 堆栈分析 | - | - |
+| **ANR** | Watchdog 默认检测 + 可选 **SIGQUIT 回调** + **traces.txt 解析** + 5 种原因分类 + 堆栈采样 + 去重 | Watchdog + 堆栈分析 | - | - |
 | **内存泄漏** | WeakRef + Activity/Fragment/ViewModel 泄漏 + **引用链分析**(Hprof BFS) | Activity/Fragment/Root | 监控 + 自动回收 |
 | **OOM 预警** | OomMonitor + HprofDumper + **fork 子进程 dump（显式开启）** + HprofStripProcessor | Hprof Stripper | **fork 子进程 dump** + Strip |
 | **Crash** | UncaughtExceptionHandler + NativeCrashMonitor(**安全信号重抛** + Tombstone 降级，unsafe JNI 回调可选) | Java + Native + ANR | - |
@@ -158,7 +182,7 @@ de499c6 Refactor: Align slow method plugin extension
 
 ### 核心增强亮点（超越 Matrix）
 
-1. **ANR 双重检测**：SIGQUIT 信号 + Watchdog 线程互补，不漏检不误报
+1. **ANR 检测**：Watchdog 默认可用；宿主接入 SIGQUIT native 回调后可形成双通道互补
 2. **ANR 原因分类**：自动归因为 CPU/IO/LOCK/DEADLOCK/BINDER 五类
 3. **ASM 字节码插桩**：AGP instrumentation API + ASM，编译期零侵入注入 methodEnter/methodExit
 4. **IO Native PLT Hook**：CMake 构建 `libapm-io.so`，运行时动态解析 xhook 拦截 libc open/read/write/close，Java 层自动降级
@@ -176,7 +200,7 @@ de499c6 Refactor: Align slow method plugin extension
 16. **SQLite 50K 存储**：WAL 模式 + 优先级水位线淘汰
 17. **SDK 自监控**：emit/drop/latency 计数 + 自动降级
 18. **手动埋点 Trace API**：W3C 兼容 128-bit traceId + 嵌套 Span
-19. **OpenTelemetry 桥接**：ALERT→Span、METRIC→Gauge、全类型→LogRecord
+19. **OpenTelemetry 映射**：ALERT→Span Map、METRIC→Gauge Map、全类型→LogRecord Map，由宿主负责 SDK 发送
 
 ---
 
@@ -186,14 +210,14 @@ de499c6 Refactor: Align slow method plugin extension
 
 | 模块 | 包名 | 核心类 | 源文件数 |
 |------|------|--------|---------|
-| apm-model | com.apm.model | ApmEvent, ApmEventKind, ApmSeverity, ApmPriority, Line Protocol, ProtobufSerializer, ProtobufWriter | 6 |
-| apm-core | com.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter, UploaderFactory | 10 |
+| apm-model | com.apm.model | ApmEvent, ApmEventKind, ApmSeverity, ApmPriority, Line Protocol, ProtobufSerializer, ProtobufWriter, ApmEventCodec | 7 |
+| apm-core | com.apm.core | Apm, ApmModule, ApmConfig, ApmDispatcher, PersistentUploadWorker, ApmLogger, ApmContext, ProcessUtils, ApmInitProvider, ProcessModuleFilter, UploaderFactory | 11 |
 | apm-core/throttle | com.apm.core.throttle | RateLimiter(令牌桶), SampleController(灰度+采样) | 2 |
 | apm-core/aggregation | com.apm.core.aggregation | EventAggregator(滑动窗口), StackFingerprinter(栈指纹), AggregatedEvent | 3 |
 | apm-core/privacy | com.apm.core.privacy | PiiSanitizer, SanitizationRule, DefaultSanitizationRules | 3 |
 | apm-core/selfmonitor | com.apm.core.selfmonitor | SdkSelfMonitor, SdkHealthReport, AutoThrottle | 3 |
-| apm-storage | com.apm.storage | EventStore, FileEventStore, SQLiteEventStore(50K WAL), EventDbHelper | 4 |
-| apm-uploader | com.apm.uploader | ApmUploader, LogcatApmUploader, HttpApmUploader(LP+Protobuf), RetryingApmUploader(优先级队列) | 4 |
+| apm-storage | com.apm.storage | EventStore/PendingEventStore, FileEventStore, SQLiteEventStore(50K WAL outbox), EventDbHelper, StoragePriorityMapper | 6 |
+| apm-uploader | com.apm.uploader | ApmUploader/BatchApmUploader, LogcatApmUploader, HttpApmUploader(LP+Protobuf+Gzip), RetryingApmUploader(有界优先级队列) | 5 |
 
 ### 3.2 功能模块层
 
@@ -201,14 +225,14 @@ de499c6 Refactor: Align slow method plugin extension
 |------|------|--------|---------|
 | apm-memory | com.apm.memory | MemoryModule, MemorySampler, MemoryScheduler, MemorySnapshot, MemoryReporter, MemoryConfig | 17 + JNI |
 | apm-crash | com.apm.crash | CrashModule, CrashConfig, NativeCrashMonitor(信号处理器+Tombstone降级) | 3 + JNI |
-| apm-anr | com.apm.anr | AnrModule(SIGQUIT+Watchdog+traces.txt+分类+去重), SigquitAnalysisDispatcher, AnrConfig | 3 |
+| apm-anr | com.apm.anr | AnrModule(Watchdog+可选SIGQUIT+traces.txt+分类+去重), SigquitAnalysisDispatcher, AnrConfig | 3 |
 | apm-launch | com.apm.launch | LaunchModule(6阶段冷启动+热启动+首帧), RelaunchTracker, LaunchConfig | 3 |
 | apm-network | com.apm.network | NetworkModule, ApmNetworkInterceptor, ApmEventListener, NetworkConfig, NetworkStats, NetworkRequestStats | 6 |
 | apm-fps | com.apm.fps | FpsModule, FpsMonitor(Choreographer VSync), FpsConfig, FrameStats | 4 |
 | apm-slow-method | com.apm.slowmethod | SlowMethodModule, ApmSlowMethodTracer(ASM运行时), StackSamplingProfiler, SlowMethodConfig | 4 |
 | apm-io | com.apm.io | IoModule, NativeIoHook(PLT Hook+FD+吞吐量+零拷贝), IoConfig | 3 + JNI |
 | apm-thread-monitor | com.apm.threadmonitor | ThreadMonitorModule, ThreadMonitorConfig | 2 |
-| apm-battery | com.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler（Alarm 泛洪列入 Roadmap） | 3 |
+| apm-battery | com.apm.battery | BatteryModule, BatteryConfig, CpuJiffiesSampler（WakeLock/GPS/Alarm 由宿主回调接入） | 3 |
 | apm-sqlite | com.apm.sqlite | SqliteModule, SqliteConfig, QueryPlanAnalyzer | 3 |
 | apm-webview | com.apm.webview | WebviewModule(JS Bridge+Console Error), WebviewConfig, ResourceWaterfall | 3 |
 | apm-ipc | com.apm.ipc | IpcModule, IpcConfig | 2 |
@@ -242,8 +266,8 @@ de499c6 Refactor: Align slow method plugin extension
 
 ```
 AnrModule（双重检测 + 原因分类 + traces.txt + 去重）
-├── SIGQUIT 信号检测
-│   └── 注册 SIGQUIT handler，收到信号 → 调度到独立分析线程执行 ANR 分析
+├── 可选 SIGQUIT 信号回调
+│   └── 宿主 native 层接入后，收到信号 → 调度到独立分析线程执行 ANR 分析
 ├── Watchdog 线程
 │   └── 主线程 tick 标记，超时未响应 → 触发 ANR 分析
 ├── ANR 原因分类
@@ -351,7 +375,7 @@ apm-sample-app
         └── apm-uploader
 
 apm-trace → apm-core → apm-model
-apm-otel-exporter → apm-core (compileOnly), OTel SDK (compileOnly)
+apm-otel-exporter → apm-model (api)，输出 OTel 语义兼容 Map，不直接依赖或调用 OTel SDK
 
 apm-plugin（独立 Gradle included build，编译期使用，不参与运行时依赖）
 ```
