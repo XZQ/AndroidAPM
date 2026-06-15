@@ -2,7 +2,6 @@ package com.apm.core
 
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
-import com.apm.core.throttle.RateLimiter
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 
@@ -54,7 +53,7 @@ data class ApmConfig(
     /** 自定义进程模块映射：进程名 → 允许运行的模块名列表。仅 [ProcessStrategy.CUSTOM] 时生效。 */
     val customProcessModules: Map<String, List<String>> = emptyMap(),
     /** 事件存储类型：FILE（ring buffer 500 行）或 SQLITE（50,000 条，生产推荐）。 */
-    val storageType: StorageType = StorageType.FILE,
+    val storageType: StorageType = StorageType.SQLITE,
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
     /** 业务上下文提供者，每次 emit 时动态获取。 */
@@ -93,8 +92,18 @@ data class ApmConfig(
     val enableRetry: Boolean = true,
     /** 最大重试次数。 */
     val maxRetries: Int = DEFAULT_MAX_RETRIES,
-    /** 重试基础延迟（毫秒），实际延迟 = baseDelay * (multiplier ^ attempt)。 */
-    val retryBaseDelayMs: Long = DEFAULT_RETRY_BASE_DELAY_MS
+    /** 重试基础延迟（毫秒），第一次重试等待该值，后续按倍率递增。 */
+    val retryBaseDelayMs: Long = DEFAULT_RETRY_BASE_DELAY_MS,
+    /** Persistent or in-memory upload batch size. */
+    val uploadBatchSize: Int = DEFAULT_UPLOAD_BATCH_SIZE,
+    /** Enables SDK health reporting. */
+    val enableSelfMonitoring: Boolean = true,
+    /** SDK health report interval. */
+    val selfMonitorIntervalMs: Long = DEFAULT_SELF_MONITOR_INTERVAL_MS,
+    /** Enables automatic module throttling when SDK health degrades. */
+    val enableAutoThrottle: Boolean = true,
+    /** Enables file-based cross-process event forwarding. */
+    val enableMultiProcessCoordination: Boolean = false
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -105,6 +114,12 @@ data class ApmConfig(
         private const val DEFAULT_MAX_RETRIES = 3
         /** 默认重试基础延迟：1 秒。 */
         private const val DEFAULT_RETRY_BASE_DELAY_MS = 1000L
+
+        /** Default number of events per upload request. */
+        private const val DEFAULT_UPLOAD_BATCH_SIZE = 20
+
+        /** Default SDK health report interval. */
+        private const val DEFAULT_SELF_MONITOR_INTERVAL_MS = 60_000L
 
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L

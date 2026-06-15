@@ -154,6 +154,21 @@ class ApmSlowMethodPluginTest {
         assertTrue(calls.contains("methodExit"))
     }
 
+    /** Instrumented methods balance tracer state on propagated exceptions. */
+    @Test
+    fun `valid class bytecode adds catch all exit handler`() {
+        val transformed = transformClassWithBytes(
+            bytes = createValidClassBytes(),
+            classFilePath = "com/example/ValidClass.class",
+            config = ApmSlowMethodExtension()
+        )
+        val inspection = inspectWorkMethod(transformed)
+
+        assertEquals(1, inspection.catchAllHandlers)
+        assertTrue(inspection.constants.contains("com.example.ValidClass#work()V"))
+        assertEquals(2, inspection.calls.count { it == "methodExit" })
+    }
+
     // --- 目录转换测试 ---
 
     /** 转换目录时非 class 文件应原样复制。 */
@@ -370,6 +385,70 @@ class ApmSlowMethodPluginTest {
         )
         return calls
     }
+
+    /**
+     * Inspects the transformed work method.
+     *
+     * @param bytes transformed class bytes
+     * @return relevant bytecode details
+     */
+    private fun inspectWorkMethod(bytes: ByteArray): MethodInspection {
+        val calls = mutableListOf<String>()
+        val constants = mutableListOf<String>()
+        var catchAllHandlers = 0
+        ClassReader(bytes).accept(
+            object : ClassVisitor(Opcodes.ASM9) {
+                override fun visitMethod(
+                    access: Int,
+                    name: String,
+                    descriptor: String,
+                    signature: String?,
+                    exceptions: Array<String>?
+                ): MethodVisitor? {
+                    if (name != "work") return null
+                    return object : MethodVisitor(Opcodes.ASM9) {
+                        override fun visitLdcInsn(value: Any?) {
+                            if (value is String) constants += value
+                        }
+
+                        override fun visitMethodInsn(
+                            opcode: Int,
+                            owner: String,
+                            name: String,
+                            descriptor: String,
+                            isInterface: Boolean
+                        ) {
+                            if (owner == TRACER_CLASS) calls += name
+                        }
+
+                        override fun visitTryCatchBlock(
+                            start: org.objectweb.asm.Label,
+                            end: org.objectweb.asm.Label,
+                            handler: org.objectweb.asm.Label,
+                            type: String?
+                        ) {
+                            if (type == null) catchAllHandlers++
+                        }
+                    }
+                }
+            },
+            0
+        )
+        return MethodInspection(calls, constants, catchAllHandlers)
+    }
+
+    /**
+     * Relevant transformed method details.
+     *
+     * @property calls tracer method calls
+     * @property constants string constants
+     * @property catchAllHandlers number of catch-all handlers
+     */
+    private data class MethodInspection(
+        val calls: List<String>,
+        val constants: List<String>,
+        val catchAllHandlers: Int
+    )
 
     /**
      * 创建测试用 jar 文件。

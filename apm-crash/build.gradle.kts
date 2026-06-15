@@ -23,13 +23,13 @@ android {
     externalNativeBuild {
         cmake {
             path = file("src/main/jni/CMakeLists.txt")
-            version = "3.18.1"
+            version = "3.22.1"
         }
     }
 }
 
 dependencies {
-    implementation(project(":apm-core"))
+    api(project(":apm-core"))
     implementation(project(":apm-model"))
     testImplementation(libs.junit)
 }

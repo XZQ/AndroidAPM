@@ -11,13 +11,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions {
-        jvmTarget = "11"
-    }
 }
 
 dependencies {
-    implementation(project(":apm-core"))
+    api(project(":apm-core"))
     implementation(project(":apm-model"))
     testImplementation(libs.junit)
 }

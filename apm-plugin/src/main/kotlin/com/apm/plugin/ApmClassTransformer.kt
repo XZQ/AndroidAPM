@@ -4,6 +4,7 @@ import org.objectweb.asm.ClassReader
 import org.objectweb.asm.ClassWriter
 import org.objectweb.asm.MethodVisitor
 import org.objectweb.asm.Opcodes
+import org.objectweb.asm.Label
 import org.objectweb.asm.commons.AdviceAdapter
 import java.io.File
 import java.io.FileOutputStream
@@ -154,7 +155,10 @@ object ApmClassTransformer {
 
         try {
             val classReader = ClassReader(bytes)
-            val classWriter = ClassWriter(classReader, ClassWriter.COMPUTE_MAXS)
+            val classWriter = ClassWriter(
+                classReader,
+                ClassWriter.COMPUTE_MAXS or ClassWriter.COMPUTE_FRAMES
+            )
 
             val visitor = ApmClassVisitor(
                 api = Opcodes.ASM9,
@@ -256,8 +260,17 @@ object ApmClassTransformer {
         private val className: String
     ) : AdviceAdapter(api, methodVisitor, access, name, descriptor) {
 
-        /** 方法签名（className#methodName 格式）。 */
-        private val methodSignature = "$className#$name"
+        /** 方法签名（className#methodName+descriptor 格式）。 */
+        private val methodSignature = "$className#$name$descriptor"
+
+        /** Start of the method body protected by the catch-all handler. */
+        private val protectedStart = Label()
+
+        /** End of the protected method body. */
+        private val protectedEnd = Label()
+
+        /** Catch-all handler that balances the tracer stack. */
+        private val exceptionHandler = Label()
 
         override fun onMethodEnter() {
             super.onMethodEnter()
@@ -270,10 +283,18 @@ object ApmClassTransformer {
                 METHOD_DESC,
                 false
             )
+            mv.visitLabel(protectedStart)
         }
 
         override fun onMethodExit(opcode: Int) {
             super.onMethodExit(opcode)
+            // Explicit and propagated exceptions are balanced by the catch-all handler.
+            if (opcode == Opcodes.ATHROW) return
+            emitMethodExit()
+        }
+
+        /** Emits one tracer exit call. */
+        private fun emitMethodExit() {
             // 注入：ApmSlowMethodTracer.methodExit("className#methodName")
             mv.visitLdcInsn(methodSignature)
             mv.visitMethodInsn(
@@ -283,6 +304,19 @@ object ApmClassTransformer {
                 METHOD_DESC,
                 false
             )
+        }
+
+        /**
+         * Adds a catch-all handler so exceptions propagated from callees still
+         * balance the ThreadLocal method stack.
+         */
+        override fun visitMaxs(maxStack: Int, maxLocals: Int) {
+            mv.visitLabel(protectedEnd)
+            mv.visitTryCatchBlock(protectedStart, protectedEnd, exceptionHandler, null)
+            mv.visitLabel(exceptionHandler)
+            emitMethodExit()
+            mv.visitInsn(Opcodes.ATHROW)
+            super.visitMaxs(maxStack, maxLocals)
         }
     }
 }

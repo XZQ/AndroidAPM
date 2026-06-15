@@ -1,16 +1,16 @@
-# 20. apm-otel-exporter — OpenTelemetry 标准对接
+# 20. apm-otel-exporter — OpenTelemetry 映射适配层
 
 ## 模块概述
 
-apm-otel-exporter 将 APM 事件桥接到 OpenTelemetry 生态，打通 Jaeger/Grafana/Prometheus 可观测性平台。
+apm-otel-exporter 将 APM 事件转换为 OpenTelemetry 语义兼容的结构化 Map。模块不依赖 OTel SDK、不创建 exporter，也不直接连接 Collector；宿主应用负责把映射结果交给自己的 OTel SDK/OTLP 管线。
 
 ## 核心类
 
 | 类 | 职责 |
 |---|------|
-| `OtelEventBridge` | 事件桥接入口，按类型路由到对应 Exporter |
-| `OtelSpanExporter` | ALERT 事件 → OTel SpanData |
-| `OtelMetricExporter` | METRIC 事件 → OTel Gauge 数据点 |
+| `OtelEventBridge` | 映射入口，按类型生成 Span/Metric/Log 兼容结构 |
+| `OtelSpanExporter` | ALERT 事件 → SpanData 兼容 Map |
+| `OtelMetricExporter` | METRIC 事件 → Gauge 数据点兼容 Map |
 | `OtelConfig` | 桥接配置 |
 
 ## 事件映射规则
@@ -48,12 +48,10 @@ attributes = { apm.severity, apm.priority, apm.scene, ... }
 ## 依赖设计
 
 ```kotlin
-// compileOnly 软依赖 — 宿主 App 自行引入 OTel SDK
-compileOnly("io.opentelemetry:opentelemetry-sdk:1.36.0")
-compileOnly("io.opentelemetry:opentelemetry-exporter-otlp:1.36.0")
+api(project(":apm-model"))
 ```
 
-输出为标准 Map 结构，宿主 App 的 OTel 集成层据此构建真正的 SpanData/MetricData。
+输出为标准 Map 结构，包含 resource、service.name 和 collectorEndpoint 元数据。宿主 OTel 集成层据此构建真正的 SpanData/MetricData/LogRecord 并发送。
 
 ## 使用方式
 
@@ -66,10 +64,10 @@ val bridge = OtelEventBridge(OtelConfig(
     exportLogs = true
 ))
 
-// 单条导出
+// 单条映射
 val result = bridge.export(apmEvent)
 
-// 批量导出
+// 批量映射，保留每条事件的日志结果
 val batchResult = bridge.exportBatch(eventList)
 ```
 

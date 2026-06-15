@@ -1,13 +1,14 @@
 package com.apm.threadmonitor
 
-import android.os.Handler
-import android.os.Looper
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 线程监控模块。
@@ -26,21 +27,12 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
     /** APM 上下文引用。 */
     private var apmContext: ApmContext? = null
 
-    /** 定时检测 Handler。 */
-    private val mainHandler = Handler(Looper.getMainLooper())
+    /** Background scheduler used for thread snapshots. */
+    private var scheduler: ScheduledExecutorService? = null
 
     /** 是否正在监控。 */
     @Volatile
     private var monitoring = false
-
-    /** 定时检测任务。 */
-    private val checkTask = object : Runnable {
-        override fun run() {
-            if (!monitoring) return
-            checkThreads()
-            mainHandler.postDelayed(this, config.checkIntervalMs)
-        }
-    }
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
@@ -51,14 +43,23 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             return
         }
         monitoring = true
-        // 延迟一个周期后开始首次检测
-        mainHandler.postDelayed(checkTask, config.checkIntervalMs)
+        scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, THREAD_NAME)
+        }.apply {
+            scheduleWithFixedDelay(
+                { if (monitoring) checkThreads() },
+                config.checkIntervalMs,
+                config.checkIntervalMs,
+                TimeUnit.MILLISECONDS
+            )
+        }
         apmContext?.logger?.d("ThreadMonitor module started")
     }
 
     override fun onStop() {
         monitoring = false
-        mainHandler.removeCallbacks(checkTask)
+        scheduler?.shutdownNow()
+        scheduler = null
     }
 
     /**
@@ -66,17 +67,13 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
      * 扫描所有线程，统计数量和分组信息。
      */
     private fun checkThreads() {
-        val threadGroup = Thread.currentThread().threadGroup
-        val activeCount = threadGroup?.activeCount() ?: 0
+        val threads = Thread.getAllStackTraces().keys.toList()
+        val activeCount = threads.size
 
         // 线程数量告警
         if (activeCount >= config.threadCountThreshold) {
             reportThreadCountSpike(activeCount)
         }
-
-        // 获取所有线程快照
-        val threads = mutableListOf<Thread>()
-        threadGroup?.enumerate(threads.toTypedArray(), true)
 
         // 按 thread name 分组统计
         val nameGroups = threads.groupingBy { it.name.orEmpty() }.eachCount()
@@ -174,5 +171,8 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
+
+        /** Background scanner thread name. */
+        private const val THREAD_NAME = "apm-thread-monitor"
     }
 }

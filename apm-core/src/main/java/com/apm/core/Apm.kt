@@ -13,8 +13,14 @@ import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.throttle.RateLimiter
+import com.apm.core.selfmonitor.AutoThrottle
+import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CopyOnWriteArraySet
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * APM 框架统一入口。单例对象。
@@ -89,7 +95,10 @@ object Apm {
         }
 
         // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。
-        val uploader: ApmUploader = UploaderFactory.create(config)
+        val uploader: ApmUploader = UploaderFactory.create(
+            config = config,
+            durableStore = store is com.apm.storage.PendingEventStore
+        )
 
         // 限流器：按 module/name 分桶，超出配额的事件被丢弃
         val rateLimiter = if (config.rateLimitEventsPerWindow > 0) {
@@ -113,16 +122,53 @@ object Apm {
             )
         } else null
 
+        // SDK self monitoring is wired before worker construction so queue and
+        // upload metrics include restart replay from the first cycle.
+        val selfMonitor = if (config.enableSelfMonitoring) SdkSelfMonitor() else null
+
         // 组装分发器和上下文
-        val dispatcher = ApmDispatcher(store, uploader, logger, rateLimiter, aggregator, piiSanitizer)
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = uploader,
+            logger = logger,
+            rateLimiter = rateLimiter,
+            aggregator = aggregator,
+            piiSanitizer = piiSanitizer,
+            selfMonitor = selfMonitor,
+            retryPolicy = com.apm.uploader.RetryPolicy(
+                maxRetries = if (config.enableRetry) config.maxRetries else 0,
+                baseDelayMs = config.retryBaseDelayMs
+            ),
+            uploadBatchSize = config.uploadBatchSize
+        )
+        val isUploaderProcess = application.isMainProcessCompat()
+        val processCoordinator = if (config.enableMultiProcessCoordination) {
+            ProcessEventCoordinator(application, isUploaderProcess).apply {
+                onRemoteEvent = dispatcher::dispatch
+                start()
+            }
+        } else {
+            null
+        }
         val context = ApmContext(
             application = application,
             config = config,
             processName = processName,
             logger = logger,
-            dispatcher = dispatcher
+            dispatcher = dispatcher,
+            processCoordinator = processCoordinator,
+            isUploaderProcess = isUploaderProcess
         )
-        state = State(context, store, dispatcher, uploader)
+        context.selfMonitor = selfMonitor
+        val monitoringExecutor = createSelfMonitoringExecutor(config, selfMonitor)
+        val newState = State(
+            context = context,
+            store = store,
+            dispatcher = dispatcher,
+            processCoordinator = processCoordinator,
+            selfMonitorExecutor = monitoringExecutor
+        )
+        state = newState
 
         // 启动所有已注册的模块
         modules.forEach(::startModule)
@@ -138,12 +184,14 @@ object Apm {
      * @param module 要注册的模块实例
      */
     fun register(module: ApmModule) {
-        // 防止同名模块重复注册
-        if (modules.any { it.name == module.name }) return
-        modules += module
-        // 如果框架已初始化，立即启动新注册的模块
-        if (state != null) {
-            startModule(module)
+        synchronized(initLock) {
+            // The duplicate check and insertion must be one atomic operation.
+            if (modules.any { it.name == module.name }) return
+            modules += module
+            // 如果框架已初始化，立即启动新注册的模块
+            if (state != null) {
+                startModule(module)
+            }
         }
     }
 
@@ -152,14 +200,19 @@ object Apm {
      * 调用后框架进入未初始化状态，可重新 init。
      */
     fun stop() {
-        val currentState = state ?: return
-        // 先切断新的事件入口，避免 stop 过程中继续接收上报。
-        state = null
-        modules.forEach {
+        val currentState = synchronized(initLock) {
+            val active = state ?: return
+            // 先切断新的事件入口，避免 stop 过程中继续接收上报。
+            state = null
+            active
+        }
+        currentState.selfMonitorExecutor?.shutdownNow()
+        currentState.processCoordinator?.stop()
+        currentState.startedModules.forEach {
             runCatching { it.onStop() }
         }
+        currentState.startedModules.clear()
         currentState.dispatcher.shutdown()
-        currentState.uploader.shutdown()
     }
 
     /**
@@ -187,27 +240,32 @@ object Apm {
         extras: Map<String, String> = emptyMap()
     ) {
         val currentState = state ?: return
-        val config = currentState.context.config
-        // 合并静态上下文 + 业务动态上下文
-        val mergedContext = config.defaultContext + config.bizContextProvider.currentContext()
-        // 在调用线程捕获线程名，避免在 dispatcher 线程中丢失原始调用方信息
-        val callerThread = Thread.currentThread().name
         currentState.context.emit(
-            ApmEvent(
-                module = module,
-                name = name,
-                kind = kind,
-                severity = severity,
-                priority = priority,
-                processName = currentState.context.processName,
-                threadName = callerThread,
-                scene = scene,
-                foreground = foreground,
-                fields = fields,
-                globalContext = mergedContext,
-                extras = extras
-            )
+            buildEvent(currentState, module, name, kind, severity, priority, scene, foreground, fields, extras)
         )
+    }
+
+    /**
+     * Synchronously persists a critical event before process termination.
+     *
+     * @return true when local persistence completed
+     */
+    fun emitCriticalSync(
+        module: String,
+        name: String,
+        kind: ApmEventKind = ApmEventKind.ALERT,
+        severity: ApmSeverity = ApmSeverity.FATAL,
+        priority: ApmPriority = ApmPriority.CRITICAL,
+        scene: String? = null,
+        foreground: Boolean? = null,
+        fields: Map<String, Any?> = emptyMap(),
+        extras: Map<String, String> = emptyMap()
+    ): Boolean {
+        val currentState = state ?: return false
+        val event = buildEvent(
+            currentState, module, name, kind, severity, priority, scene, foreground, fields, extras
+        )
+        return currentState.dispatcher.dispatchCriticalSync(event)
     }
 
     /**
@@ -229,6 +287,7 @@ object Apm {
      */
     private fun startModule(module: ApmModule) {
         val currentState = state ?: return
+        if (currentState.startedModules.any { it.name == module.name }) return
         val config = currentState.context.config
         val shouldRun = ProcessModuleFilter.shouldRunInCurrentProcess(
             moduleName = module.name,
@@ -242,12 +301,123 @@ object Apm {
             )
             return
         }
+        val dynamicEnabled = config.dynamicConfigProvider.getBoolean(
+            "apm.module.${module.name}.enabled",
+            true
+        )
+        if (!dynamicEnabled) {
+            currentState.context.logger.d("Skip module=${module.name}: disabled by dynamic config")
+            return
+        }
+        val userId = config.defaultContext[CONTEXT_USER_ID]
+        val grayEnabled = config.grayController?.isEnabled(
+            feature = "module.${module.name}",
+            userId = userId,
+            defaultValue = true
+        ) ?: true
+        if (!grayEnabled) {
+            currentState.context.logger.d("Skip module=${module.name}: excluded by gray release")
+            return
+        }
         runCatching {
             module.onInitialize(currentState.context)
             module.onStart()
+            currentState.startedModules += module
             currentState.context.logger.d("Started module=${module.name}")
         }.onFailure {
             currentState.context.logger.e("Failed to start module=${module.name}", it)
+        }
+    }
+
+    /**
+     * Builds an event with a consistent caller and business context snapshot.
+     */
+    private fun buildEvent(
+        currentState: State,
+        module: String,
+        name: String,
+        kind: ApmEventKind,
+        severity: ApmSeverity,
+        priority: ApmPriority,
+        scene: String?,
+        foreground: Boolean?,
+        fields: Map<String, Any?>,
+        extras: Map<String, String>
+    ): ApmEvent {
+        val config = currentState.context.config
+        val mergedContext = config.defaultContext + config.bizContextProvider.currentContext()
+        return ApmEvent(
+            module = module,
+            name = name,
+            kind = kind,
+            severity = severity,
+            priority = priority,
+            processName = currentState.context.processName,
+            threadName = Thread.currentThread().name,
+            scene = scene,
+            foreground = foreground,
+            fields = fields,
+            globalContext = mergedContext,
+            extras = extras
+        )
+    }
+
+    /**
+     * Creates periodic SDK health reporting and automatic throttling.
+     */
+    private fun createSelfMonitoringExecutor(
+        config: ApmConfig,
+        monitor: SdkSelfMonitor?
+    ): ScheduledExecutorService? {
+        if (monitor == null || config.selfMonitorIntervalMs <= 0L) return null
+        return Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, SELF_MONITOR_THREAD_NAME)
+        }.apply {
+            scheduleWithFixedDelay(
+                {
+                    val report = monitor.generateReport()
+                    emit(
+                        module = CORE_MODULE,
+                        name = EVENT_SDK_HEALTH,
+                        severity = ApmSeverity.INFO,
+                        priority = ApmPriority.LOW,
+                        fields = mapOf(
+                            FIELD_EMIT_COUNT to report.emitCount,
+                            FIELD_DROP_COUNT to report.dropCount,
+                            FIELD_DROP_RATE to report.dropRate,
+                            FIELD_QUEUE_SIZE to report.queueSize,
+                            FIELD_AVG_UPLOAD_LATENCY to report.avgUploadLatencyMs,
+                            FIELD_MAX_UPLOAD_LATENCY to report.maxUploadLatencyMs
+                        )
+                    )
+                    if (config.enableAutoThrottle) {
+                        applyAutoThrottle(AutoThrottle.computeModulesToDisable(report))
+                    }
+                },
+                config.selfMonitorIntervalMs,
+                config.selfMonitorIntervalMs,
+                TimeUnit.MILLISECONDS
+            )
+        }
+    }
+
+    /**
+     * Stops modules selected by the automatic health policy.
+     *
+     * @param moduleNames module names to stop
+     */
+    private fun applyAutoThrottle(moduleNames: List<String>) {
+        val currentState = state ?: return
+        for (module in currentState.startedModules.toList()) {
+            if (module.name !in moduleNames) continue
+            runCatching { module.onStop() }
+                .onSuccess {
+                    currentState.startedModules.remove(module)
+                    currentState.context.logger.w("Auto-throttled module=${module.name}")
+                }
+                .onFailure {
+                    currentState.context.logger.e("Failed to auto-throttle module=${module.name}", it)
+                }
         }
     }
 
@@ -259,7 +429,41 @@ object Apm {
         val store: EventStore,
         /** 事件分发器。 */
         val dispatcher: ApmDispatcher,
-        /** 上传器。 */
-        val uploader: ApmUploader
+        /** Cross-process event coordinator. */
+        val processCoordinator: ProcessEventCoordinator?,
+        /** SDK self-monitor scheduler. */
+        val selfMonitorExecutor: ScheduledExecutorService?,
+        /** Modules that completed initialization and start successfully. */
+        val startedModules: CopyOnWriteArraySet<ApmModule> = CopyOnWriteArraySet()
     )
+
+    /** SDK self-monitor thread name. */
+    private const val SELF_MONITOR_THREAD_NAME = "apm-self-monitor"
+
+    /** Core module name used by health events. */
+    private const val CORE_MODULE = "core"
+
+    /** SDK health event name. */
+    private const val EVENT_SDK_HEALTH = "sdk_health"
+
+    /** Health field: emitted events. */
+    private const val FIELD_EMIT_COUNT = "emitCount"
+
+    /** Health field: dropped events. */
+    private const val FIELD_DROP_COUNT = "dropCount"
+
+    /** Health field: drop ratio. */
+    private const val FIELD_DROP_RATE = "dropRate"
+
+    /** Health field: durable or in-memory queue size. */
+    private const val FIELD_QUEUE_SIZE = "queueSize"
+
+    /** Health field: average upload latency. */
+    private const val FIELD_AVG_UPLOAD_LATENCY = "avgUploadLatencyMs"
+
+    /** Health field: maximum upload latency. */
+    private const val FIELD_MAX_UPLOAD_LATENCY = "maxUploadLatencyMs"
+
+    /** Conventional context key used for stable gray-release assignment. */
+    private const val CONTEXT_USER_ID = "userId"
 }

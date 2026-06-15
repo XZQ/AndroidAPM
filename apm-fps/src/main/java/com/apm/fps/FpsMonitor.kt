@@ -46,6 +46,10 @@ class FpsMonitor(
     private var frozenCount = 0
     /** 上一帧的时间戳（纳秒）。 */
     private var lastFrameTimeNanos: Long = 0L
+    /** Sum of actual frame intervals in the current window. */
+    private var totalFrameIntervalNanos: Long = 0L
+    /** Number of actual frame intervals in the current window. */
+    private var measuredFrameIntervals: Int = 0
     /** 窗口内最高丢帧严重程度。 */
     private var maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
     /** 设备刷新率（Hz）。 */
@@ -74,9 +78,9 @@ class FpsMonitor(
      * @param rate 刷新率（Hz）
      */
     fun setRefreshRate(rate: Float) {
-        refreshRate = rate
+        refreshRate = if (rate.isFinite() && rate > 0f) rate else FrameStats.DEFAULT_REFRESH_RATE
         // 根据刷新率计算单帧标准时间
-        frameDurationNanos = (NANOS_PER_SECOND / rate).toLong()
+        frameDurationNanos = (NANOS_PER_SECOND / refreshRate).toLong()
     }
 
     /**
@@ -118,6 +122,8 @@ class FpsMonitor(
         jankCount = 0
         frozenCount = 0
         lastFrameTimeNanos = 0L
+        totalFrameIntervalNanos = 0L
+        measuredFrameIntervals = 0
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
         frameMetricsQueue.clear()
         metricsDelayedFrames = 0
@@ -149,6 +155,10 @@ class FpsMonitor(
                 // 计算帧间隔（纳秒）
                 val intervalNanos = frameTimeNanos - lastFrameTimeNanos
                 val intervalMs = intervalNanos / NANOS_PER_MS
+                if (intervalNanos > 0L) {
+                    totalFrameIntervalNanos += intervalNanos
+                    measuredFrameIntervals++
+                }
 
                 // 根据设备刷新率计算掉帧数
                 val expectedFrames = intervalNanos / frameDurationNanos
@@ -199,13 +209,8 @@ class FpsMonitor(
      */
     private fun reportAndReset() {
         // 根据实际刷新率计算 FPS
-        val fps = if (frameCount > 0) {
-            val theoreticalDurationMs = frameCount * (frameDurationNanos / NANOS_PER_MS)
-            if (theoreticalDurationMs > 0) {
-                (frameCount * 1000L / theoreticalDurationMs).toInt()
-            } else {
-                0
-            }
+        val fps = if (measuredFrameIntervals > 0 && totalFrameIntervalNanos > 0L) {
+            ((measuredFrameIntervals * NANOS_PER_SECOND) / totalFrameIntervalNanos).toInt()
         } else {
             0
         }
@@ -234,6 +239,8 @@ class FpsMonitor(
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
         frameMetricsQueue.clear()
         metricsDelayedFrames = 0
+        totalFrameIntervalNanos = 0L
+        measuredFrameIntervals = 0
     }
 
     /**
@@ -336,7 +343,7 @@ class FpsMonitor(
         // measure + layout = 总耗时 - draw - sync - swap（近似）
         val measureLayout = try {
             val total = frameMetrics.getMetric(FrameMetrics.TOTAL_DURATION)
-            total - draw - sync - swap
+            (total - draw - sync - swap).coerceAtLeast(0L)
         } catch (_: Exception) {
             0L
         }

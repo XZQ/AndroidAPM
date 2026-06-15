@@ -55,6 +55,8 @@ class AnrModule(
     private val anrDetected = AtomicBoolean(false)
     /** Watchdog 线程的 tick 标记。 */
     private val tick = AtomicBoolean(false)
+    /** First observed main-thread blockage time. */
+    private val blockedSinceMs = AtomicLong(0L)
     /** 是否正在运行。 */
     @Volatile private var running = false
     /** Watchdog 线程引用。 */
@@ -93,10 +95,8 @@ class AnrModule(
             false
         }
 
-        // SIGQUIT 不可用时降级为 Watchdog
-        if (!sigquitReady) {
-            startWatchdog()
-        }
+        // Watchdog remains active as the public, portable detection channel.
+        startWatchdog()
 
         apmContext?.logger?.d("ANR module started, sigquit=$sigquitReady")
     }
@@ -216,13 +216,21 @@ class AnrModule(
             if (!running) break
 
             // tick 未被消费且尚未报告过 ANR
-            if (!tick.get() && !anrDetected.getAndSet(true)) {
-                handleAnrDetection(DETECTION_WATCHDOG)
+            if (!tick.get()) {
+                val now = System.currentTimeMillis()
+                val blockedSince = blockedSinceMs.updateAndGet { previous ->
+                    if (previous == 0L) now - config.checkIntervalMs else previous
+                }
+                val blockedDurationMs = now - blockedSince
+                if (blockedDurationMs >= config.anrTimeoutMs && !anrDetected.getAndSet(true)) {
+                    handleAnrDetection(DETECTION_WATCHDOG, blockedDurationMs)
+                }
             }
 
             // tick 已被消费，重置 ANR 状态
             if (tick.get()) {
                 anrDetected.set(false)
+                blockedSinceMs.set(0L)
             }
         }
     }
@@ -237,7 +245,7 @@ class AnrModule(
      *
      * @param source 检测来源（"sigquit" 或 "watchdog"）。
      */
-    private fun handleAnrDetection(source: String) {
+    private fun handleAnrDetection(source: String, blockedDurationMs: Long = config.anrTimeoutMs) {
         val now = System.currentTimeMillis()
         val mainStack = captureMainThreadStack()
 
@@ -270,10 +278,10 @@ class AnrModule(
         }
 
         // 判断严重级别
-        val severity = if (config.anrSevereThresholdMs <= config.checkIntervalMs) {
+        val severity = if (blockedDurationMs >= config.anrSevereThresholdMs) {
             ApmSeverity.ERROR
         } else {
-            ApmSeverity.ERROR
+            ApmSeverity.WARN
         }
 
         // 构建上报字段
@@ -281,7 +289,8 @@ class AnrModule(
             FIELD_MAIN_THREAD_STACK to mainStack,
             FIELD_ANR_SOURCE to source,
             FIELD_ANR_CAUSE to cause,
-            FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty())
+            FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty()),
+            FIELD_DURATION_MS to blockedDurationMs
         )
 
         // 附加 traces.txt 内容（如果有）
@@ -501,6 +510,8 @@ class AnrModule(
         private const val FIELD_TRACES_CONTENT = "tracesContent"
         /** 字段：堆栈采样。 */
         private const val FIELD_STACK_SAMPLES = "stackSamples"
+        /** 字段：主线程阻塞时长。 */
+        private const val FIELD_DURATION_MS = "durationMs"
 
         // --- 检测来源 ---
         /** SIGQUIT 信号检测。 */

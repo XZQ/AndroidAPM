@@ -10,16 +10,15 @@
 3. **命名常量**：魔法数字/字符串提取为 `const val`（0/1/-1 除外）；禁止裸包名反射引入类
 
 ## 项目信息
-- Multi-module Gradle (Kotlin, AGP 7.4.2, compileSdk 34, minSdk 24)
-- 构建命令见 MEMORY.md 或 AGENTS.md
+- Multi-module Gradle (Kotlin 2.2.21, AGP 8.13.2, Gradle 8.13, JDK 21, compileSdk 34, minSdk 24)
+- JVM 字节码目标保持 Java 11；构建与验证命令见 `AGENTS.md`
 
 ## Git 提交
 英文，格式 `Type: Subject`。Type：Feat / Fix / Refactor / Perf / Style / Docs / Revert / Build。
 
 ## 变更后同步（强制）
 代码/架构/构建变更后，同步更新：
-1. `~/.claude/projects/-home-didi-AI-APM/memory/MEMORY.md`（日期、hash、状态）
-2. `AGENTS.md` + `docs/Android_APM_项目文档.md`（事实源）
-3. 如有必要：`README.md`、`docs/architecture/*.md`
+1. `AGENTS.md` + `docs/Android_APM_项目文档.md`（仓库内事实源）
+2. 如有必要：`README.md`、`docs/architecture/*.md`
 
 CLAUDE.md 只放长期规则，不放临时进度。

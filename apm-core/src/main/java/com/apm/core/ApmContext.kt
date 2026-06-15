@@ -19,7 +19,11 @@ class ApmContext internal constructor(
     /** 日志接口。 */
     val logger: ApmLogger,
     /** 事件分发器，内部使用。 */
-    private val dispatcher: ApmDispatcher
+    private val dispatcher: ApmDispatcher,
+    /** Optional cross-process event bridge. */
+    private val processCoordinator: ProcessEventCoordinator? = null,
+    /** Whether the current process owns network upload. */
+    private val isUploaderProcess: Boolean = true
 ) {
     /** SDK 自监控组件，用于模块记录自身运行指标。 */
     var selfMonitor: SdkSelfMonitor? = null
@@ -31,6 +35,10 @@ class ApmContext internal constructor(
      * @param event 已构造完成的 APM 事件
      */
     fun emit(event: ApmEvent) {
-        dispatcher.dispatch(event)
+        if (processCoordinator != null && !isUploaderProcess) {
+            processCoordinator.writeEvent(event)
+        } else {
+            dispatcher.dispatch(event)
+        }
     }
 }

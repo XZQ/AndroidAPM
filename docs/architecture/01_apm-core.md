@@ -2,6 +2,16 @@
 
 > 核心框架层：初始化、模块注册、事件分发、限流、灰度
 
+## 2026-06-15 实现状态
+
+- `ApmConfig.storageType` 默认 `SQLITE`，持久化存储使用独立 `PersistentUploadWorker` 回放和确认。
+- `Apm.emitCriticalSync()` 用于崩溃等进程终止前事件，只同步落盘，不阻塞等待网络。
+- `Apm.register()` 的同名检查与插入在同一锁内；只有初始化和启动成功的模块进入停止列表。
+- 模块启动会实际消费动态开关 `apm.module.<name>.enabled` 和灰度控制结果。
+- `Apm.stop()` 先阻止新事件，再排空 dispatcher，最后关闭 worker、uploader 与 store。
+- SDK 健康报告周期输出 emit/drop/queue/latency，并可按 `AutoThrottle` 结果停止高开销模块。
+- 聚合窗口由维护线程按固定延迟刷新，避免无后续事件时聚合桶永久滞留。
+
 ---
 
 ## 类图

@@ -1,8 +1,9 @@
 package com.apm.core
 
 import android.content.Context
+import android.util.Base64
 import com.apm.model.ApmEvent
-import com.apm.model.toLineProtocol
+import com.apm.model.ApmEventCodec
 import java.io.File
 import java.io.FileWriter
 import java.util.concurrent.Executors
@@ -70,7 +71,7 @@ class ProcessEventCoordinator(
             scanExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
                 Thread(runnable, THREAD_NAME_SCAN)
             }
-            scanExecutor?.scheduleAtFixedRate(
+            scanExecutor?.scheduleWithFixedDelay(
                 { scanAndConsume() },
                 scanIntervalMs,
                 scanIntervalMs,
@@ -91,7 +92,7 @@ class ProcessEventCoordinator(
 
         writeExecutor.execute {
             try {
-                val line = event.toLineProtocol()
+                val line = Base64.encodeToString(ApmEventCodec.encode(event), Base64.NO_WRAP)
                 val file = getOrCreateWriteFile()
                 // 追加写入，每个事件一行
                 FileWriter(file, true).use { writer ->
@@ -167,7 +168,7 @@ class ProcessEventCoordinator(
         for (line in lines) {
             if (line.isBlank()) continue
             try {
-                // 解析 line protocol 为基本事件（提取 module、name 等字段）
+                // Decode the complete event so no fields are lost across processes.
                 val event = parseLineProtocol(line)
                 event?.let { onRemoteEvent?.invoke(it) }
             } catch (_: Exception) {
@@ -177,39 +178,15 @@ class ProcessEventCoordinator(
     }
 
     /**
-     * 简单解析 line protocol 为 ApmEvent。
-     * 仅提取 ts、module、name、kind、severity、priority 等核心字段，
-     * fields 以原始文本保留在 extras 中。
+     * Decodes one Base64-wrapped durable event payload.
      *
      * @param line line protocol 格式的行
      * @return 解析后的 ApmEvent，解析失败返回 null
      */
     private fun parseLineProtocol(line: String): ApmEvent? {
-        val segments = line.split("|")
-        if (segments.size < MIN_PARSE_SEGMENTS) return null
-
-        var timestamp = System.currentTimeMillis()
-        var module = "unknown"
-        var name = "unknown"
-
-        for (segment in segments) {
-            val eqIdx = segment.indexOf('=')
-            if (eqIdx < 0) continue
-            val key = segment.substring(0, eqIdx)
-            val value = segment.substring(eqIdx + 1)
-            when (key) {
-                "ts" -> value.toLongOrNull()?.let { timestamp = it }
-                "module" -> module = value
-                "name" -> name = value
-            }
-        }
-
-        return ApmEvent(
-            module = module,
-            name = name,
-            timestamp = timestamp,
-            extras = mapOf("ipc_source" to "remote_process")
-        )
+        val payload = Base64.decode(line, Base64.NO_WRAP)
+        val event = ApmEventCodec.decode(payload)
+        return event.copy(extras = event.extras + ("ipc_source" to "remote_process"))
     }
 
     /**
@@ -217,8 +194,17 @@ class ProcessEventCoordinator(
      */
     fun stop() {
         started = false
-        writeExecutor.shutdownNow()
-        scanExecutor?.shutdownNow()
+        writeExecutor.shutdown()
+        scanExecutor?.shutdown()
+        try {
+            writeExecutor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            scanExecutor?.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        } finally {
+            writeExecutor.shutdownNow()
+            scanExecutor?.shutdownNow()
+        }
         scanExecutor = null
     }
 
@@ -239,11 +225,11 @@ class ProcessEventCoordinator(
         private const val THREAD_NAME_WRITE = "apm-ipc-write"
         /** 扫描线程名。 */
         private const val THREAD_NAME_SCAN = "apm-ipc-scan"
-        /** 最小合法行段数（ts + module + name）。 */
-        private const val MIN_PARSE_SEGMENTS = 3
         /** 非字母数字正则。 */
         private const val NON_ALPHA_REGEX = "[^a-zA-Z0-9_.-]"
         /** 替换字符。 */
         private const val REPLACEMENT_UNDERSCORE = "_"
+        /** Maximum time allowed for pending IPC writes. */
+        private const val SHUTDOWN_TIMEOUT_MS = 1_000L
     }
 }

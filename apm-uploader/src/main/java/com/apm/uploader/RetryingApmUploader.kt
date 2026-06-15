@@ -5,6 +5,7 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
 import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
 /**
@@ -17,7 +18,7 @@ data class RetryPolicy(
     val baseDelayMs: Long = DEFAULT_BASE_DELAY_MS,
     /** 最大延迟上限（毫秒），防止指数增长过大。 */
     val maxDelayMs: Long = DEFAULT_MAX_DELAY_MS,
-    /** 退避倍数。delay = baseDelay * (multiplier ^ attempt)。 */
+    /** 退避倍数。delay = baseDelay * (multiplier ^ (attempt - 1))。 */
     val backoffMultiplier: Float = DEFAULT_BACKOFF_MULTIPLIER
 ) {
     /**
@@ -28,14 +29,23 @@ data class RetryPolicy(
     fun delayForAttempt(attempt: Int): Long {
         if (attempt <= 0) return 0L
         var delay = baseDelayMs.toFloat()
-        repeat(attempt) { delay *= backoffMultiplier }
+        repeat(attempt - 1) {
+            delay = (delay * backoffMultiplier).coerceAtMost(maxDelayMs.toFloat())
+        }
         return delay.toLong().coerceAtMost(maxDelayMs)
     }
 
     companion object {
+        /** Default retry count after the initial attempt. */
         private const val DEFAULT_MAX_RETRIES = 3
+
+        /** Default delay before the first retry. */
         private const val DEFAULT_BASE_DELAY_MS = 1000L
+
+        /** Maximum retry delay. */
         private const val DEFAULT_MAX_DELAY_MS = 30_000L
+
+        /** Default exponential backoff multiplier. */
         private const val DEFAULT_BACKOFF_MULTIPLIER = 2.0f
     }
 }
@@ -69,6 +79,12 @@ class RetryingApmUploader(
         UploadPriorityComparator
     )
 
+    /** Hard capacity permits shared by producers and the worker. */
+    private val capacityPermits = Semaphore(QUEUE_CAPACITY)
+
+    /** Serializes event acceptance with the shutdown state transition. */
+    private val acceptanceLock = Any()
+
     /** 单线程执行器，保证上传顺序。 */
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, THREAD_NAME)
@@ -85,31 +101,76 @@ class RetryingApmUploader(
 
     /**
      * 将事件加入上传队列。
-     * 队列超容量时丢弃 LOW 优先级事件，非 LOW 优先级仍接受。
+     * 队列满时仅允许更高优先级事件淘汰当前最低优先级事件。
      *
      * @param event 待上传事件
      * @return true 表示成功入队，false 表示被丢弃
      */
     override fun upload(event: ApmEvent): Boolean {
-        // 关闭后拒绝新的上传请求，避免 stop 之后继续积压事件。
-        if (!running) {
-            return false
+        synchronized(acceptanceLock) {
+            // Shutdown cannot overtake an accepted event before it reaches the queue.
+            if (!running) {
+                return false
+            }
+            if (!capacityPermits.tryAcquire()) {
+                val evicted = evictLowerPriority(event)
+                if (!evicted || !capacityPermits.tryAcquire()) {
+                    Log.w(
+                        TAG,
+                        "Queue at hard capacity ($QUEUE_CAPACITY), dropping ${event.priority} event: ${event.name}"
+                    )
+                    return false
+                }
+            }
+            queue.offer(event)
+            return true
         }
-        // 容量控制：超过阈值时丢弃 LOW 优先级事件
-        if (queue.size >= QUEUE_CAPACITY && event.priority == ApmPriority.LOW) {
-            Log.w(TAG, "Queue over capacity ($QUEUE_CAPACITY), dropping LOW priority event: ${event.name}")
-            return false
-        }
-        queue.put(event)
-        return true
     }
 
-    /** 关闭上传器，停止工作线程。 */
+    /**
+     * Closes the uploader after a bounded queue drain.
+     */
     override fun shutdown() {
-        running = false
-        // 立即打断 poll/sleep，避免 stop 后后台线程继续持有资源。
+        synchronized(acceptanceLock) {
+            running = false
+        }
+        // Wake poll/sleep so the worker can drain already accepted events.
         executor.shutdownNow()
+        try {
+            if (!executor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
+                Log.w(TAG, "Uploader did not drain within ${SHUTDOWN_TIMEOUT_MS}ms")
+            }
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
         delegate.shutdown()
+    }
+
+    /**
+     * Returns the current in-memory queue size.
+     *
+     * @return accepted events waiting for upload
+     */
+    fun queueSize(): Int = queue.size
+
+    /**
+     * Evicts one lower-priority event when the queue is full.
+     *
+     * @param incoming event competing for capacity
+     * @return true when an event was removed
+     */
+    private fun evictLowerPriority(incoming: ApmEvent): Boolean {
+        synchronized(queue) {
+            val candidate = queue
+                .filter { it.priority.value < incoming.priority.value }
+                .minWithOrNull(compareBy<ApmEvent> { it.priority.value }.thenBy { it.timestamp })
+                ?: return false
+            if (queue.remove(candidate)) {
+                capacityPermits.release()
+                return true
+            }
+            return false
+        }
     }
 
     /**
@@ -127,15 +188,22 @@ class RetryingApmUploader(
                 // 阻塞等待第一条（超时后继续循环检查 running）
                 val first = queue.poll(flushIntervalMs, TimeUnit.MILLISECONDS)
                 if (first != null) {
+                    capacityPermits.release()
                     batch.add(first)
                     // 非阻塞取出更多事件凑够一批
-                    queue.drainTo(batch, batchSize - 1)
+                    val drained = queue.drainTo(batch, batchSize - 1)
+                    if (drained > 0) {
+                        capacityPermits.release(drained)
+                    }
                 }
                 if (batch.isEmpty()) continue
                 uploadBatchWithRetry(batch.toList())
             } catch (_: InterruptedException) {
-                // 被中断，退出循环
-                break
+                if (running) {
+                    Thread.currentThread().interrupt()
+                    break
+                }
+                // shutdown wakes the worker; continue draining accepted events.
             }
         }
     }
@@ -150,7 +218,11 @@ class RetryingApmUploader(
         while (attempt <= retryPolicy.maxRetries) {
             try {
                 // 只有整批事件都被底层 uploader 成功接收时才算本轮成功。
-                val uploadSucceeded = events.all { delegate.upload(it) }
+                val uploadSucceeded = if (delegate is BatchApmUploader) {
+                    delegate.uploadBatch(events)
+                } else {
+                    events.all { delegate.upload(it) }
+                }
                 if (uploadSucceeded) {
                     return
                 }
@@ -172,9 +244,11 @@ class RetryingApmUploader(
                 val delay = retryPolicy.delayForAttempt(attempt)
                 Thread.sleep(delay)
             } catch (_: InterruptedException) {
-                // 关闭上传器时立即结束重试循环。
-                Thread.currentThread().interrupt()
-                return
+                if (running) {
+                    Thread.currentThread().interrupt()
+                    return
+                }
+                // During shutdown skip the delay and make the final retry immediately.
             }
         }
     }
@@ -197,5 +271,8 @@ class RetryingApmUploader(
 
         /** 默认刷盘间隔：30 秒。 */
         private const val DEFAULT_FLUSH_INTERVAL_MS = 30_000L
+
+        /** Maximum time allowed for a graceful in-memory drain. */
+        private const val SHUTDOWN_TIMEOUT_MS = 5_000L
     }
 }

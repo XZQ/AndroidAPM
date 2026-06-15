@@ -1,6 +1,13 @@
 # apm-battery 模块架构
 
-> 电量监控：WakeLock 追踪 + 电量下降速率 + CPU Jiffies 采样；Alarm 泛洪列入 Roadmap
+> 电量监控：电量下降 + CPU Jiffies + 宿主回调接入的 WakeLock/GPS/Alarm
+
+## 2026-06-15 实现状态
+
+- CPU Jiffies sampler 已由周期任务实际调用并输出持续高 CPU 事件。
+- WakeLock、GPS 和 AlarmManager 无稳定公共全局 hook，因此提供 `onWakeLockAcquired/Released`、`onGpsStarted/Stopped`、`onAlarmScheduled` 给宿主包装层调用。
+- Alarm 泛洪按 `checkIntervalMs` 滑动窗口计数，达到 `alarmFloodThreshold` 后上报并清空当前窗口。
+- 活跃集合使用并发容器，停止模块时统一清理。
 
 ---
 
@@ -12,7 +19,9 @@
 │      (implements ApmModule)           │
 ├──────────────────────────────────────┤
 │ - config: BatteryConfig              │
-│ - activeWakeLocks: HashMap<Tag, Time>│
+│ - activeWakeLocks: ConcurrentHashMap │
+│ - activeGpsSessions: ConcurrentHashMap│
+│ - alarmTimestamps: ConcurrentLinkedQueue│
 │ - lastBatteryLevel: Int              │
 │ - lastBatteryTime: Long              │
 │ - batteryReceiver: BroadcastReceiver │
@@ -22,6 +31,8 @@
 │ + onStop() → 注销接收器              │
 │ + onWakeLockAcquired(tag)            │
 │ + onWakeLockReleased(tag)            │
+│ + onGpsStarted(tag) / onGpsStopped(tag)│
+│ + onAlarmScheduled()                 │
 │ + onBatteryLevelChanged(percent)     │
 │ + checkWakeLocks()  → 定期检查       │
 │ + checkBatteryDrain() → 检测电量下降 │
@@ -66,8 +77,9 @@
 │     if (cpuPercent >= 80% 持续 30s)                │
 │     → emit("cpu_high_usage", WARN)                 │
 │                                                    │
-│  4. Alarm 泛洪 (Roadmap)                           │
-│     需要接入 AlarmManager 调用侧埋点或平台代理后实现 │
+│  4. GPS/Alarm 宿主回调                             │
+│     GPS 超时 → gps_used_too_long/gps_still_active │
+│     Alarm 窗口计数超阈值 → alarm_schedule_flood    │
 │                                                    │
 └────────────────────────────────────────────────────┘
 ```

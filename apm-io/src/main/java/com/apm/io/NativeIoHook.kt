@@ -11,7 +11,10 @@ import java.io.OutputStream
 import java.lang.ref.PhantomReference
 import java.lang.ref.ReferenceQueue
 import java.util.Collections
+import java.util.Locale
+import java.util.WeakHashMap
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -41,8 +44,14 @@ class NativeIoHook(private val config: IoConfig) {
     /** 文件读取计数器：path → 读取次数。 */
     private val readFileCounts = ConcurrentHashMap<String, Int>()
 
-    /** Closeable 泄漏追踪：PhantomReference → 描述信息。 */
-    private val closeableRefs = ConcurrentHashMap<PhantomReference<Any>, String>()
+    /** Closeable leak tracking metadata keyed by phantom reference. */
+    private val closeableRefs = ConcurrentHashMap<PhantomReference<Any>, CloseableMetadata>()
+
+    /** Session-to-reference index used to cancel tracking on explicit close. */
+    private val sessionRefs = ConcurrentHashMap<Int, PhantomReference<Any>>()
+
+    /** Weak proxy-to-session lookup used by explicit close callbacks. */
+    private val proxySessionIds = Collections.synchronizedMap(WeakHashMap<Any, Int>())
 
     /** Closeable 泄漏检测队列。 */
     private val closeableQueue = ReferenceQueue<Any>()
@@ -60,6 +69,9 @@ class NativeIoHook(private val config: IoConfig) {
 
     /** FD 释放计数器。 */
     private val fdReleaseCount = AtomicLong(0L)
+
+    /** Unique Java proxy session identifier generator. */
+    private val nextSessionId = AtomicInteger(0)
 
     // --- 吞吐量统计 ---
     /** 总读取字节数。 */
@@ -140,23 +152,63 @@ class NativeIoHook(private val config: IoConfig) {
      * @return 代理后的 InputStream。
      */
     fun wrapInputStream(source: InputStream, path: String): InputStream {
-        val sessionId = System.identityHashCode(source)
-        val session = IoSession(
-            path = path,
-            openTime = System.currentTimeMillis(),
-            threadName = Thread.currentThread().name,
-            isMainThread = Looper.myLooper() == Looper.getMainLooper()
-        )
-        activeSessions[sessionId] = session
-        // 注册 Closeable 泄漏追踪
-        if (config.enableCloseableLeak) {
-            closeableRefs[PhantomReference(source, closeableQueue)] = path
+        val wrapper = object : InputStream() {
+            /** Total bytes read through this proxy. */
+            private var totalBytes = 0L
+
+            /** Explicit close guard. */
+            private var closed = false
+
+            /** Reads one byte and records the operation. */
+            override fun read(): Int {
+                val value = source.read()
+                if (value >= 0) {
+                    totalBytes++
+                    onRead(path, 1, 1)
+                }
+                return value
+            }
+
+            /** Reads a byte range and records the actual byte count. */
+            override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+                val count = source.read(buffer, offset, length)
+                if (count > 0) {
+                    totalBytes += count
+                    onRead(path, count, length)
+                }
+                return count
+            }
+
+            /** Skips bytes through the source stream. */
+            override fun skip(byteCount: Long): Long = source.skip(byteCount)
+
+            /** Returns the source stream's available byte count. */
+            override fun available(): Int = source.available()
+
+            /** Reports whether mark/reset is supported by the source. */
+            override fun markSupported(): Boolean = source.markSupported()
+
+            /** Marks the source stream. */
+            @Synchronized
+            override fun mark(readLimit: Int) = source.mark(readLimit)
+
+            /** Resets the source stream to its mark. */
+            @Synchronized
+            override fun reset() = source.reset()
+
+            /** Closes the source and completes the tracking session once. */
+            override fun close() {
+                if (closed) return
+                closed = true
+                try {
+                    source.close()
+                } finally {
+                    onClose(this, totalBytes)
+                }
+            }
         }
-        // 记录 FD 打开
-        if (config.enableFdLeakDetection) {
-            recordFdOpen(path)
-        }
-        return source
+        registerSession(wrapper, path)
+        return wrapper
     }
 
     /**
@@ -167,21 +219,70 @@ class NativeIoHook(private val config: IoConfig) {
      * @return 代理后的 OutputStream。
      */
     fun wrapOutputStream(source: OutputStream, path: String): OutputStream {
-        val sessionId = System.identityHashCode(source)
-        val session = IoSession(
+        val wrapper = object : OutputStream() {
+            /** Total bytes written through this proxy. */
+            private var totalBytes = 0L
+
+            /** Explicit close guard. */
+            private var closed = false
+
+            /** Writes one byte and records the operation. */
+            override fun write(value: Int) {
+                source.write(value)
+                totalBytes++
+                onWrite(path, 1, 1)
+            }
+
+            /** Writes a byte range without per-byte double counting. */
+            override fun write(buffer: ByteArray, offset: Int, length: Int) {
+                source.write(buffer, offset, length)
+                totalBytes += length
+                onWrite(path, length, length)
+            }
+
+            /** Flushes the source stream. */
+            override fun flush() = source.flush()
+
+            /** Closes the source and completes the tracking session once. */
+            override fun close() {
+                if (closed) return
+                closed = true
+                try {
+                    source.close()
+                } finally {
+                    onClose(this, totalBytes)
+                }
+            }
+        }
+        registerSession(wrapper, path)
+        return wrapper
+    }
+
+    /**
+     * Registers one Java proxy session and optional leak tracking.
+     *
+     * @param proxy proxy object returned to the caller
+     * @param path logical file path
+     * @return unique session identifier
+     */
+    private fun registerSession(proxy: Any, path: String): Int {
+        val sessionId = nextSessionId.incrementAndGet()
+        proxySessionIds[proxy] = sessionId
+        activeSessions[sessionId] = IoSession(
             path = path,
             openTime = System.currentTimeMillis(),
             threadName = Thread.currentThread().name,
             isMainThread = Looper.myLooper() == Looper.getMainLooper()
         )
-        activeSessions[sessionId] = session
         if (config.enableCloseableLeak) {
-            closeableRefs[PhantomReference(source, closeableQueue)] = path
+            val reference = PhantomReference(proxy, closeableQueue)
+            closeableRefs[reference] = CloseableMetadata(sessionId, path)
+            sessionRefs[sessionId] = reference
         }
         if (config.enableFdLeakDetection) {
-            recordFdOpen(path)
+            recordFdOpen(sessionId, path)
         }
-        return source
+        return sessionId
     }
 
     /**
@@ -193,6 +294,7 @@ class NativeIoHook(private val config: IoConfig) {
      */
     fun onRead(path: String, bytesRead: Int, bufferUsed: Int) {
         if (!initialized) return
+        if (bytesRead <= 0) return
 
         // 更新吞吐量统计
         if (config.enableThroughputStats) {
@@ -235,19 +337,54 @@ class NativeIoHook(private val config: IoConfig) {
     }
 
     /**
+     * Records one proxied write operation.
+     *
+     * @param path file path
+     * @param bytesWritten written byte count
+     * @param bufferUsed caller buffer size
+     */
+    fun onWrite(path: String, bytesWritten: Int, bufferUsed: Int) {
+        if (!initialized || bytesWritten <= 0) return
+        if (config.enableThroughputStats) {
+            totalWriteBytes.addAndGet(bytesWritten.toLong())
+            totalIoOps.incrementAndGet()
+            updatePathThroughput(path, bytesWritten.toLong(), isWrite = true)
+        }
+        if (bufferUsed in 1 until config.smallBufferThreshold) {
+            Apm.emit(
+                module = MODULE_IO,
+                name = EVENT_SMALL_BUFFER,
+                kind = ApmEventKind.ALERT,
+                severity = ApmSeverity.INFO,
+                priority = ApmPriority.NORMAL,
+                fields = mapOf(
+                    FIELD_PATH to path.take(MAX_PATH_LENGTH),
+                    FIELD_BUFFER_SIZE to bufferUsed,
+                    FIELD_THRESHOLD to config.smallBufferThreshold,
+                    FIELD_OPERATION to OP_WRITE
+                )
+            )
+        }
+    }
+
+    /**
      * 记录流关闭，分析 IO 会话数据。
      *
      * @param source 原始流对象。
      * @param totalBytes 总字节数。
      */
     fun onClose(source: Any, totalBytes: Long) {
-        val sessionId = System.identityHashCode(source)
+        val sessionId = proxySessionIds.remove(source) ?: return
         val session = activeSessions.remove(sessionId) ?: return
+        sessionRefs.remove(sessionId)?.let { reference ->
+            closeableRefs.remove(reference)
+            reference.clear()
+        }
         val durationMs = System.currentTimeMillis() - session.openTime
 
         // 记录 FD 关闭
         if (config.enableFdLeakDetection) {
-            recordFdClose(session.path)
+            recordFdClose(sessionId)
         }
 
         // 主线程 IO 耗时检测
@@ -274,19 +411,16 @@ class NativeIoHook(private val config: IoConfig) {
      * 记录 FD 打开。
      * 追踪每个打开的文件描述符对应的路径。
      */
-    private fun recordFdOpen(path: String) {
-        // 使用路径 hashCode 作为伪 fd（真实 fd 需 native hook 获取）
-        val pseudoFd = path.hashCode()
-        openFdPaths[pseudoFd] = path
+    private fun recordFdOpen(sessionId: Int, path: String) {
+        openFdPaths[sessionId] = path
         fdAllocCount.incrementAndGet()
     }
 
     /**
      * 记录 FD 关闭。
      */
-    private fun recordFdClose(path: String) {
-        val pseudoFd = path.hashCode()
-        openFdPaths.remove(pseudoFd)
+    private fun recordFdClose(sessionId: Int) {
+        openFdPaths.remove(sessionId)
         fdReleaseCount.incrementAndGet()
     }
 
@@ -456,14 +590,17 @@ class NativeIoHook(private val config: IoConfig) {
             try {
                 val ref = closeableQueue.remove(CLOSEABLE_CHECK_INTERVAL_MS)
                 if (ref != null) {
-                    val path = closeableRefs.remove(ref)
-                    if (path != null) {
+                    val metadata = closeableRefs.remove(ref)
+                    if (metadata != null) {
+                        sessionRefs.remove(metadata.sessionId)
+                        activeSessions.remove(metadata.sessionId)
+                        openFdPaths.remove(metadata.sessionId)
                         Apm.emit(
                             module = MODULE_IO,
                             name = EVENT_CLOSEABLE_LEAK,
                             kind = ApmEventKind.ALERT,
                             severity = ApmSeverity.WARN, priority = ApmPriority.NORMAL,
-                            fields = mapOf(FIELD_PATH to path.take(MAX_PATH_LENGTH))
+                            fields = mapOf(FIELD_PATH to metadata.path.take(MAX_PATH_LENGTH))
                         )
                     }
                 }
@@ -531,7 +668,7 @@ class NativeIoHook(private val config: IoConfig) {
                                     FIELD_TO_PATH to chain.toPath.take(MAX_PATH_LENGTH),
                                     FIELD_TOTAL_BYTES to chain.totalBytes.get(),
                                     FIELD_COPY_COUNT to copyCount,
-                                    FIELD_AVG_BUFFERS to String.format("%.1f", avgBuffers),
+                                    FIELD_AVG_BUFFERS to String.format(Locale.ROOT, "%.1f", avgBuffers),
                                     FIELD_SUGGESTION to SUGGESTION_ZERO_COPY
                                 )
                             )
@@ -552,6 +689,8 @@ class NativeIoHook(private val config: IoConfig) {
         activeSessions.clear()
         readFileCounts.clear()
         closeableRefs.clear()
+        sessionRefs.clear()
+        proxySessionIds.clear()
         openFdPaths.clear()
         pathThroughput.clear()
         copyChains.clear()
@@ -573,6 +712,17 @@ class NativeIoHook(private val config: IoConfig) {
         val threadName: String,
         /** 是否主线程。 */
         val isMainThread: Boolean
+    )
+
+    /**
+     * Metadata retained without strongly referencing the tracked proxy.
+     *
+     * @property sessionId unique proxy session id
+     * @property path logical file path
+     */
+    private data class CloseableMetadata(
+        val sessionId: Int,
+        val path: String
     )
 
     /** 路径维度的吞吐量统计。 */

@@ -7,6 +7,8 @@ import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * WebView 资源加载瀑布图追踪器。
@@ -35,13 +37,13 @@ class ResourceWaterfall(private val config: WebviewConfig) {
      * 当前页面的资源记录集合：pageUrl → 资源列表。
      * 使用 ConcurrentHashMap 保证线程安全（资源加载可能在不同线程完成）。
      */
-    private val pageResources = ConcurrentHashMap<String, MutableList<ResourceRecord>>()
+    private val pageResources = ConcurrentHashMap<String, CopyOnWriteArrayList<ResourceRecord>>()
 
     /**
      * 资源开始加载时间缓存：resourceUrl → startTimeMs。
      * 用于在 onResourceEnd 时计算加载耗时。
      */
-    private val resourceStartTimes = ConcurrentHashMap<String, Long>()
+    private val resourceStartTimes = ConcurrentHashMap<String, ConcurrentLinkedQueue<Long>>()
 
     /**
      * 当前活跃页面的 URL。
@@ -57,23 +59,33 @@ class ResourceWaterfall(private val config: WebviewConfig) {
      * @param request WebView 资源请求对象
      */
     fun onResourceStart(request: WebResourceRequest) {
+        onResourceStart(activePageUrl, request)
+    }
+
+    /**
+     * Records a resource start for an explicit page.
+     *
+     * @param pageUrl owning page URL
+     * @param request WebView resource request
+     */
+    fun onResourceStart(pageUrl: String, request: WebResourceRequest) {
         // 忽略非 HTTP 请求（如 data:、blob: 等）
         val url = request.url.toString()
         if (!url.startsWith(HTTP_PREFIX) && !url.startsWith(HTTPS_PREFIX)) return
+        if (pageUrl.isEmpty()) return
 
-        // 记录资源开始加载时间
-        resourceStartTimes[url] = System.currentTimeMillis()
+        val startedAt = System.currentTimeMillis()
+        resourceStartTimes.getOrPut(resourceKey(pageUrl, url)) {
+            ConcurrentLinkedQueue()
+        }.offer(startedAt)
 
         // 推断资源类型
         val resourceType = inferResourceType(url)
 
         // 获取或创建当前页面的资源列表
-        val pageUrl = activePageUrl
-        if (pageUrl.isEmpty()) return
-
         val records = pageResources.getOrPut(pageUrl) {
             // 限制最大追踪资源数，防止内存溢出
-            mutableListOf()
+            CopyOnWriteArrayList()
         }
 
         // 检查资源数量是否已达上限
@@ -82,9 +94,10 @@ class ResourceWaterfall(private val config: WebviewConfig) {
         // 添加资源记录
         records.add(
             ResourceRecord(
+                pageUrl = pageUrl,
                 url = url,
                 resourceType = resourceType,
-                startTimeMs = System.currentTimeMillis()
+                startTimeMs = startedAt
             )
         )
     }
@@ -96,18 +109,32 @@ class ResourceWaterfall(private val config: WebviewConfig) {
      * @param response 资源响应，可为 null（表示加载失败）
      */
     fun onResourceEnd(url: String, response: WebResourceResponse?) {
+        onResourceEnd(activePageUrl, url, response)
+    }
+
+    /**
+     * Completes the oldest matching resource request for an explicit page.
+     *
+     * @param pageUrl owning page URL
+     * @param url resource URL
+     * @param response optional response
+     */
+    fun onResourceEnd(pageUrl: String, url: String, response: WebResourceResponse?) {
         // 查找并移除开始时间
-        val startTime = resourceStartTimes.remove(url) ?: return
+        if (pageUrl.isEmpty()) return
+        val key = resourceKey(pageUrl, url)
+        val starts = resourceStartTimes[key] ?: return
+        val startTime = starts.poll() ?: return
+        if (starts.isEmpty()) {
+            resourceStartTimes.remove(key, starts)
+        }
         val endTime = System.currentTimeMillis()
         val duration = endTime - startTime
 
         // 查找对应的资源记录并更新
-        val pageUrl = activePageUrl
-        if (pageUrl.isEmpty()) return
-
         val records = pageResources[pageUrl] ?: return
         // 遍历查找匹配的资源记录
-        val record = records.find { it.url == url }
+        val record = records.firstOrNull { it.url == url && it.endTimeMs == 0L }
         if (record != null) {
             record.endTimeMs = endTime
             record.durationMs = duration
@@ -160,8 +187,10 @@ class ResourceWaterfall(private val config: WebviewConfig) {
 
         // 关键路径分析：识别阻塞渲染的资源（CSS 和同步 JS）
         val criticalPathResources = completedRecords.filter {
+            val earliestStart = completedRecords.minOf { record -> record.startTimeMs }
             it.resourceType == RESOURCE_TYPE_STYLESHEET ||
-                (it.resourceType == RESOURCE_TYPE_SCRIPT && it.startTimeMs < completedRecords.minOf { r -> r.startTimeMs })
+                (it.resourceType == RESOURCE_TYPE_SCRIPT &&
+                    it.startTimeMs - earliestStart <= CRITICAL_START_WINDOW_MS)
         }
 
         // 计算总加载时间（从最早开始到最后结束）
@@ -211,8 +240,19 @@ class ResourceWaterfall(private val config: WebviewConfig) {
     private fun cleanupStartTimes(records: List<ResourceRecord>) {
         // 遍历移除每个资源的开始时间缓存
         records.forEach { record ->
-            resourceStartTimes.remove(record.url)
+            resourceStartTimes.remove(resourceKey(record.pageUrl, record.url))
         }
+    }
+
+    /**
+     * Creates a collision-safe page/resource lookup key.
+     *
+     * @param pageUrl page URL
+     * @param resourceUrl resource URL
+     * @return composite key
+     */
+    private fun resourceKey(pageUrl: String, resourceUrl: String): String {
+        return "$pageUrl$RESOURCE_KEY_SEPARATOR$resourceUrl"
     }
 
     /**
@@ -376,6 +416,12 @@ class ResourceWaterfall(private val config: WebviewConfig) {
 
         /** Content-Length 响应头名称。 */
         private const val HEADER_CONTENT_LENGTH = "Content-Length"
+
+        /** Scripts starting near navigation start are treated as critical. */
+        private const val CRITICAL_START_WINDOW_MS = 1_000L
+
+        /** Composite resource key separator. */
+        private const val RESOURCE_KEY_SEPARATOR = "\u0000"
     }
 }
 
@@ -384,6 +430,8 @@ class ResourceWaterfall(private val config: WebviewConfig) {
  * 记录每个子资源的 URL、类型、开始/结束时间、耗时等信息。
  */
 data class ResourceRecord(
+    /** Owning page URL. */
+    val pageUrl: String = "",
     /** 资源 URL。 */
     val url: String,
     /** 资源类型：script、stylesheet、image、xhr、other。 */

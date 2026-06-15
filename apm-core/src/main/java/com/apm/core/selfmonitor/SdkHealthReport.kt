@@ -4,6 +4,7 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import java.util.Locale
 
 /**
  * SDK 健康报告数据类。
@@ -53,7 +54,7 @@ data class SdkHealthReport(
                 FIELD_EMIT_COUNT to emitCount,
                 FIELD_DROP_COUNT to dropCount,
                 FIELD_QUEUE_SIZE to queueSize,
-                FIELD_DROP_RATE to String.format("%.4f", dropRate),
+                FIELD_DROP_RATE to String.format(Locale.ROOT, "%.4f", dropRate),
                 FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
                 FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs
             )

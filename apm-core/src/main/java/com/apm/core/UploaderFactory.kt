@@ -23,9 +23,10 @@ internal object UploaderFactory {
      * @param config APM 全局配置
      * @return 可直接交给分发器使用的 uploader
      */
-    fun create(config: ApmConfig): ApmUploader {
+    fun create(config: ApmConfig, durableStore: Boolean = false): ApmUploader {
         val baseUploader = config.uploader ?: createDefaultUploader(config.endpoint, config)
-        if (!config.enableRetry) {
+        // The persistent worker owns retries so wrapping it would create two queues.
+        if (!config.enableRetry || durableStore) {
             return baseUploader
         }
         return RetryingApmUploader(
