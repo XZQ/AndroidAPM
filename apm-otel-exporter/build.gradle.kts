@@ -11,16 +11,9 @@ android {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
     }
-    kotlinOptions { jvmTarget = "11" }
 }
 
 dependencies {
-    compileOnly(project(":apm-core"))
-    compileOnly(project(":apm-model"))
-    // OpenTelemetry SDK — compileOnly 软依赖，宿主自行提供
-    compileOnly(libs.otel.sdk)
-    compileOnly(libs.otel.exporter.otlp)
-    testImplementation(project(":apm-core"))
-    testImplementation(project(":apm-model"))
+    api(project(":apm-model"))
     testImplementation(libs.junit)
 }

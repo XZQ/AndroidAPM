@@ -23,7 +23,9 @@ class ApmEventListener(
     /** 网络模块引用，用于上报数据。 */
     private val networkModule: NetworkModule,
     /** 慢请求阈值（毫秒）。 */
-    private val slowThresholdMs: Long
+    private val slowThresholdMs: Long,
+    /** Whether this listener also owns the request summary event. */
+    private val reportSummary: Boolean = false
 ) : EventListener() {
 
     /** 按 Call 存储的计时数据。 */
@@ -60,7 +62,11 @@ class ApmEventListener(
         /** 请求 URL。 */
         var url: String = "",
         /** HTTP 方法。 */
-        var method: String = ""
+        var method: String = "",
+        /** HTTP response code when headers were received. */
+        var statusCode: Int = STATUS_CODE_UNKNOWN,
+        /** Most recent connection failure detail. */
+        var connectionError: String? = null
     )
 
     override fun callStart(call: Call) {
@@ -93,7 +99,7 @@ class ApmEventListener(
     }
 
     override fun connectFailed(call: Call, address: InetSocketAddress, proxy: Proxy, protocol: Protocol?, ioe: IOException) {
-        callTimings.remove(call)
+        callTimings[call]?.connectionError = ioe.message ?: ioe.javaClass.simpleName
     }
 
     override fun secureConnectStart(call: Call) {
@@ -123,6 +129,7 @@ class ApmEventListener(
     override fun responseHeadersEnd(call: Call, response: Response) {
         callTimings[call]?.let {
             it.responseHeaderMs = elapsedMs(it.responseHeaderStartNs)
+            it.statusCode = response.code
         }
     }
 
@@ -143,7 +150,7 @@ class ApmEventListener(
     override fun callEnd(call: Call) {
         val timing = callTimings.remove(call) ?: return
         val totalMs = elapsedMs(timing.callStartNs)
-        reportNetworkStats(timing, totalMs, null)
+        reportNetworkStats(timing, totalMs, timing.connectionError)
     }
 
     override fun callFailed(call: Call, ioe: IOException) {
@@ -158,19 +165,22 @@ class ApmEventListener(
      * 同时额外上报分阶段耗时。
      */
     private fun reportNetworkStats(timing: CallTiming, totalMs: Long, error: String?) {
-        // 调用原有接口（兼容）
-        networkModule.onRequestComplete(
-            url = timing.url,
-            method = timing.method,
-            statusCode = if (error != null) STATUS_CODE_NETWORK_ERROR else STATUS_CODE_SUCCESS,
-            durationMs = totalMs,
-            error = error
-        )
+        val statusCode = if (error != null) STATUS_CODE_NETWORK_ERROR else timing.statusCode
+        // The interceptor normally owns the summary to avoid double counting.
+        if (reportSummary) {
+            networkModule.onRequestComplete(
+                url = timing.url,
+                method = timing.method,
+                statusCode = statusCode,
+                durationMs = totalMs,
+                error = error
+            )
+        }
         // 上报分阶段耗时
         val stats = NetworkRequestStats(
             url = timing.url.take(MAX_URL_LENGTH),
             method = timing.method,
-            statusCode = if (error != null) STATUS_CODE_NETWORK_ERROR else STATUS_CODE_SUCCESS,
+            statusCode = statusCode,
             dnsMs = timing.dnsMs,
             tcpMs = timing.tcpMs,
             tlsMs = timing.tlsMs,
@@ -180,7 +190,9 @@ class ApmEventListener(
             totalMs = totalMs,
             error = error
         )
-        networkModule.onNetworkPhaseStats(stats)
+        if (totalMs >= slowThresholdMs || error != null) {
+            networkModule.onNetworkPhaseStats(stats)
+        }
     }
 
     /** 计算经过时间（纳秒 → 毫秒）。 */
@@ -196,14 +208,20 @@ class ApmEventListener(
         /** 网络错误状态码。 */
         private const val STATUS_CODE_NETWORK_ERROR = -1
         /** 成功状态码。 */
-        private const val STATUS_CODE_SUCCESS = 200
+        private const val STATUS_CODE_UNKNOWN = 0
 
         /**
          * 创建 EventListener.Factory。
          * 用于 OkHttp Builder 的 eventListenerFactory 方法。
          */
-        fun factory(networkModule: NetworkModule, slowThresholdMs: Long = 3000L): EventListener.Factory {
-            return EventListener.Factory { ApmEventListener(networkModule, slowThresholdMs) }
+        fun factory(
+            networkModule: NetworkModule,
+            slowThresholdMs: Long = 3000L,
+            reportSummary: Boolean = false
+        ): EventListener.Factory {
+            return EventListener.Factory {
+                ApmEventListener(networkModule, slowThresholdMs, reportSummary)
+            }
         }
     }
 }

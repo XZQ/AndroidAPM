@@ -14,7 +14,7 @@ android {
 }
 
 dependencies {
-    implementation(project(":apm-core"))
+    api(project(":apm-core"))
     implementation(project(":apm-model"))
     testImplementation(libs.junit)
 }

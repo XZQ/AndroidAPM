@@ -36,8 +36,8 @@ class SlowMethodModule(
     /** 当前消息开始处理的时间戳。 */
     @Volatile
     private var dispatchStartTime: Long = 0L
-    /** 栈采样分析器。 */
-    private val samplingProfiler = StackSamplingProfiler(config)
+    /** Restartable stack sampling profiler. */
+    private var samplingProfiler: StackSamplingProfiler? = null
 
     /** Looper 的 mLogging 字段（反射获取）。 */
     private val loggingField by lazy {
@@ -48,10 +48,6 @@ class SlowMethodModule(
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
-        // 设置栈采样完成回调
-        samplingProfiler.onSamplingComplete = { topMethods, sampleCount ->
-            onSamplingResult(topMethods, sampleCount)
-        }
     }
 
     /**
@@ -61,10 +57,17 @@ class SlowMethodModule(
     override fun onStart() {
         if (!config.enableSlowMethod) return
         monitoring = true
-        // 保存原始 Printer
-        originPrinter = loggingField.get(Looper.getMainLooper()) as? Printer
-        // 设置自定义 Printer 监控消息分发
-        loggingField.set(Looper.getMainLooper(), looperPrinter)
+        // Reflection is used only to preserve an existing logger; installation
+        // itself uses the supported public API.
+        originPrinter = runCatching {
+            loggingField.get(Looper.getMainLooper()) as? Printer
+        }.getOrNull()
+        samplingProfiler = StackSamplingProfiler(config).also { profiler ->
+            profiler.onSamplingComplete = { topMethods, sampleCount ->
+                onSamplingResult(topMethods, sampleCount)
+            }
+        }
+        Looper.getMainLooper().setMessageLogging(looperPrinter)
         // 初始化 ASM 插桩 Tracer
         ApmSlowMethodTracer.init(config.thresholdMs)
         apmContext?.logger?.d("SlowMethod module started, threshold=${config.thresholdMs}ms, sampling=${config.enableStackSampling}")
@@ -76,35 +79,39 @@ class SlowMethodModule(
         // 禁用 ASM Tracer
         ApmSlowMethodTracer.disable()
         // 恢复原始 Printer
-        val current = loggingField.get(Looper.getMainLooper())
-        if (current === looperPrinter) {
-            loggingField.set(Looper.getMainLooper(), originPrinter)
-        }
-        samplingProfiler.destroy()
+        Looper.getMainLooper().setMessageLogging(originPrinter)
+        samplingProfiler?.destroy()
+        samplingProfiler = null
     }
 
     /**
      * 自定义 Printer，拦截主线程 Looper 消息分发日志。
      * 检测到慢方法时触发栈采样。
      */
-    private val looperPrinter = Printer { log ->
-        if (!monitoring) return@Printer
+    private val looperPrinter: Printer = object : Printer {
+        /**
+         * Forwards the log to the previous printer before collecting timing.
+         */
+        override fun println(log: String) {
+            originPrinter?.takeUnless { it === this }?.println(log)
+            if (!monitoring) return
 
-        if (log.startsWith(DISPATCH_PREFIX)) {
-            // 消息开始分发，记录开始时间
-            dispatchStartTime = SystemClock.uptimeMillis()
-        } else if (log.startsWith(FINISH_PREFIX)) {
-            // 消息分发完成，计算耗时
-            if (dispatchStartTime <= 0L) return@Printer
-            val duration = SystemClock.uptimeMillis() - dispatchStartTime
-            dispatchStartTime = 0L
+            if (log.startsWith(DISPATCH_PREFIX)) {
+                // 消息开始分发，记录开始时间
+                dispatchStartTime = SystemClock.uptimeMillis()
+            } else if (log.startsWith(FINISH_PREFIX)) {
+                // 消息分发完成，计算耗时
+                if (dispatchStartTime <= 0L) return
+                val duration = SystemClock.uptimeMillis() - dispatchStartTime
+                dispatchStartTime = 0L
 
-            // 超过阈值则上报
-            if (duration >= config.thresholdMs) {
-                reportSlowMethod(duration, log)
-                // 触发式启动栈采样，捕获后续热点方法
-                if (config.enableStackSampling) {
-                    samplingProfiler.startSampling()
+                // 超过阈值则上报
+                if (duration >= config.thresholdMs) {
+                    reportSlowMethod(duration, log)
+                    // 触发式启动栈采样，捕获后续热点方法
+                    if (config.enableStackSampling) {
+                        samplingProfiler?.startSampling()
+                    }
                 }
             }
         }

@@ -2,6 +2,11 @@
 
 > 崩溃监控：Java 崩溃 + Native 崩溃 + Tombstone 解析
 
+## 2026-06-15 实现状态
+
+- Java 崩溃事件通过 `Apm.emitCriticalSync()` 在调用原始异常处理器前同步写入本地持久化 outbox。
+- 同步路径不执行阻塞网络请求；上传由持久化 worker 在当前或下次进程启动时完成。
+
 ---
 
 ## 类图

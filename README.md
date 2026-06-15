@@ -9,8 +9,8 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Android-green.svg" alt="Platform"/>
   <img src="https://img.shields.io/badge/API-24%2B-brightgreen.svg" alt="API"/>
-  <img src="https://img.shields.io/badge/Kotlin-1.8.10-blue.svg" alt="Kotlin"/>
-  <img src="https://img.shields.io/badge/AGP-7.4.2-orange.svg" alt="AGP"/>
+  <img src="https://img.shields.io/badge/Kotlin-2.2.21-blue.svg" alt="Kotlin"/>
+  <img src="https://img.shields.io/badge/AGP-8.13.2-orange.svg" alt="AGP"/>
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/>
 </p>
 
@@ -35,15 +35,15 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 |---|------|------|---------|
 | 1 | [内存](docs/architecture/03_apm-memory.md) | apm-memory | Heap/PSS 采样、Activity/Fragment/ViewModel 泄漏检测、OOM 预警、Hprof Dump & Strip、NativeHeap 监控 |
 | 2 | [崩溃](docs/architecture/04_apm-crash.md) | apm-crash | Java UncaughtExceptionHandler、Native 信号解析(SIGSEGV/SIGABRT)、Tombstone 扫描 |
-| 3 | [ANR](docs/architecture/05_apm-anr.md) | apm-anr | SIGQUIT 信号 + Watchdog 双重检测、traces.txt 解析、5 类原因分类、堆栈去重 |
+| 3 | [ANR](docs/architecture/05_apm-anr.md) | apm-anr | Watchdog 默认检测、可选 SIGQUIT 回调接入、traces.txt 解析、5 类原因分类、堆栈去重 |
 | 4 | [启动](docs/architecture/06_apm-launch.md) | apm-launch | 6 阶段冷启动追踪、热启动/温启动、Choreographer 首帧检测、瓶颈分析 |
 | 5 | [网络](docs/architecture/07_apm-network.md) | apm-network | OkHttp Interceptor + EventListener、DNS→TCP→TLS→Headers→Body 全链路耗时、聚合统计 |
 | 6 | [FPS](docs/architecture/08_apm-fps.md) | apm-fps | Choreographer VSync + FrameMetrics 双引擎、掉帧/卡顿/冻结三级分级 |
 | 7 | [慢方法](docs/architecture/09_apm-slow-method.md) | apm-slow-method | 反射 Hook Looper.mLogging + ASM 字节码插桩双引擎、栈采样、热点方法统计 |
 | 8 | [IO](docs/architecture/10_apm-io.md) | apm-io | Native PLT Hook 双层架构、FD 泄漏(/proc/self/fd)、吞吐量统计、Closeable 泄漏(PhantomReference) |
-| 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | WakeLock 追踪、电量下降速率、CPU Jiffies 采样(/proc/self/stat)；Alarm 泛洪列入 Roadmap |
+| 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | 电量下降、CPU Jiffies，以及宿主回调接入的 WakeLock/GPS/Alarm 泛洪监控 |
 | 10 | [SQLite](docs/architecture/12_apm-sqlite.md) | apm-sqlite | 慢查询检测、主线程 DB 操作、大数据量操作、QueryPlan 分析(全表扫描/临时BTree) |
-| 11 | [WebView](docs/architecture/13_apm-webview.md) | apm-webview | 页面加载耗时、JS 执行耗时、白屏检测 |
+| 11 | [WebView](docs/architecture/13_apm-webview.md) | apm-webview | 页面加载、JS/白屏、并发安全的资源瀑布与显式页面隔离 |
 | 12 | [IPC](docs/architecture/14_apm-ipc.md) | apm-ipc | Binder 调用耗时监控、主线程阈值分级、聚合统计 |
 | 13 | [线程](docs/architecture/15_apm-thread-monitor.md) | apm-thread-monitor | 线程数膨胀、同名泄漏、BLOCKED 死锁检测 |
 | 14 | [GC](docs/architecture/16_apm-gc-monitor.md) | apm-gc-monitor | GC 频次飙升、GC 耗时占比、Heap 增长、分配频率、GC 回收率 |
@@ -54,8 +54,10 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 - **令牌桶限流** — RateLimiter 支持 ERROR/FATAL 级别跳过限流，保护上报通道
 - **灰度发布** — GrayReleaseController 支持按比例开启新模块
 - **动态配置** — DynamicConfigProvider 运行时调整阈值，无需发版
-- **本地存储** — FileEventStore + RingBuffer，防数据丢失
-- **重试上传** — RetryingApmUploader 批量 + 指数退避，网络异常自动重试
+- **可靠出箱** — 默认 SQLite 持久化，上传成功后确认删除，进程重启自动回放
+- **批量上传** — 单请求批量 + Gzip + 有界优先级队列 + 指数退避
+- **关键事件落盘** — Crash 等关键事件支持同步持久化，不等待网络请求
+- **SDK 自监控** — 上报 emit/drop/queue/latency 健康指标，并支持自动降级
 - **ASM 插桩** — AGP instrumentation API + ASM 字节码级方法耗时采集
 - **Native Hook** — CMake 构建 libapm-io.so，运行时动态解析 xhook 实现 IO 拦截，缺失时自动降级
 - **Hprof 裁剪** — 二进制解析 + 原始数组剥离，大幅缩小 dump 文件
@@ -105,10 +107,10 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 
 ### 环境要求
 
-- Android Studio Flamingo+
-- JDK 11
-- Kotlin 1.8.10
-- AGP 7.4.2
+- Android Studio（包含 JDK 21 的当前稳定版本）
+- JDK 21
+- Kotlin 2.2.21
+- AGP 8.13.2 / Gradle 8.13
 - compileSdk 34 / minSdk 24
 
 ### 构建
@@ -122,6 +124,10 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 
 # 构建 + 测试
 ./gradlew assembleDebug testDebugUnitTest
+
+# Lint、Release 和发布消费验证
+./gradlew lintDebug assembleRelease publishToMavenLocal
+./gradlew -p smoke-tests/maven-consumer clean assembleDebug
 ```
 
 当前仓库通过 `pluginManagement { includeBuild("apm-plugin") }` 解析本地 slow-method 插件。
@@ -130,6 +136,17 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 ### 集成
 
 #### 1. 添加模块依赖
+
+发布到 Maven 仓库后，功能模块会传递暴露 `apm-core`：
+
+```kotlin
+dependencies {
+    implementation("com.apm:apm-memory:0.1.0")
+    implementation("com.apm:apm-network:0.1.0")
+}
+```
+
+仓库内开发也可以继续使用 project 依赖：
 
 ```kotlin
 // settings.gradle.kts
@@ -226,17 +243,17 @@ val okHttpClient = OkHttpClient.Builder()
 |------|------|------|
 | apm-model | 事件模型 | ApmEvent + Line Protocol 序列化 |
 | apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程/日志 |
-| apm-storage | 本地存储 | EventStore 接口 + FileEventStore (RingBuffer) |
-| apm-uploader | 上传通道 | HttpApmUploader + LogcatApmUploader + RetryingApmUploader |
+| apm-storage | 本地存储 | File RingBuffer + SQLite 持久化出箱与确认删除 |
+| apm-uploader | 上传通道 | HTTP 单请求批量/Gzip + Logcat + 有界重试队列 |
 | apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
 | apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone |
-| apm-anr | ANR 监控 | SIGQUIT + Watchdog + traces.txt 解析 |
+| apm-anr | ANR 监控 | Watchdog + 可选 SIGQUIT 回调 + traces.txt 解析 |
 | apm-launch | 启动监控 | 冷/热/温启动 + 6 阶段追踪 |
 | apm-network | 网络监控 | OkHttp 全链路 (DNS→TCP→TLS→Body) |
 | apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
 | apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
 | apm-io | IO 监控 | Native PLT Hook + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
-| apm-battery | 电量监控 | WakeLock + CPU Jiffies；Alarm 泛洪列入 Roadmap |
+| apm-battery | 电量监控 | 电量/CPU + WakeLock/GPS/Alarm 宿主回调 API |
 | apm-sqlite | SQLite 监控 | 慢查询 + QueryPlan 分析 |
 | apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |
 | apm-ipc | IPC 监控 | Binder 调用耗时 |
@@ -258,7 +275,7 @@ val okHttpClient = OkHttpClient.Builder()
 | NativeHeap 监控 | ✅ | ❌ | ✅ |
 | Java 崩溃 | ✅ | ✅ | ❌ |
 | Native 崩溃信号处理器 + Tombstone | ✅ | ✅ | ❌ |
-| ANR 检测 (SIGQUIT + Watchdog) | ✅ | ✅ | ❌ |
+| ANR 检测 (Watchdog + 可选 SIGQUIT) | ✅ | ✅ | ❌ |
 | ANR 原因分类 | ✅ (5 类) | ❌ | ❌ |
 | 冷启动 6 阶段 | ✅ | ✅ | ❌ |
 | 热启动/温启动 | ✅ | ✅ | ❌ |
@@ -296,7 +313,7 @@ Android-APM/
 │   ├── oom/                   # OOM 预警 + Hprof Dump/Strip
 │   └── nativeheap/            # NativeHeap 监控
 ├── apm-crash/                 # 崩溃监控 (Java + Native)
-├── apm-anr/                   # ANR 监控 (SIGQUIT + Watchdog)
+├── apm-anr/                   # ANR 监控 (Watchdog + 可选 SIGQUIT)
 ├── apm-launch/                # 启动监控 (冷/热/温)
 ├── apm-network/               # 网络监控 (OkHttp)
 ├── apm-fps/                   # FPS 监控 (VSync + FrameMetrics)

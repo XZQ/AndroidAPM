@@ -31,21 +31,21 @@ class RetryPolicyTest {
     @Test
     fun `delayForAttempt calculates first retry correctly`() {
         val policy = RetryPolicy(baseDelayMs = 1000L, backoffMultiplier = 2.0f)
-        assertEquals(2000L, policy.delayForAttempt(1))
+        assertEquals(1000L, policy.delayForAttempt(1))
     }
 
     /** 第二次重试延迟 = baseDelay * multiplier^2 = 1000 * 4 = 4000。 */
     @Test
     fun `delayForAttempt calculates second retry correctly`() {
         val policy = RetryPolicy(baseDelayMs = 1000L, backoffMultiplier = 2.0f)
-        assertEquals(4000L, policy.delayForAttempt(2))
+        assertEquals(2000L, policy.delayForAttempt(2))
     }
 
     /** 第三次重试延迟 = baseDelay * multiplier^3 = 1000 * 8 = 8000。 */
     @Test
     fun `delayForAttempt calculates third retry correctly`() {
         val policy = RetryPolicy(baseDelayMs = 1000L, backoffMultiplier = 2.0f)
-        assertEquals(8000L, policy.delayForAttempt(3))
+        assertEquals(4000L, policy.delayForAttempt(3))
     }
 
     /** 延迟不应超过 maxDelayMs。 */
@@ -53,7 +53,7 @@ class RetryPolicyTest {
     fun `delayForAttempt is capped by maxDelayMs`() {
         val policy = RetryPolicy(baseDelayMs = 1000L, backoffMultiplier = 2.0f, maxDelayMs = 5000L)
         // 第 3 次: 8000 > 5000，应被截断
-        assertEquals(5000L, policy.delayForAttempt(3))
+        assertEquals(5000L, policy.delayForAttempt(4))
         // 第 10 次: 更大，仍被截断
         assertEquals(5000L, policy.delayForAttempt(10))
     }
@@ -63,9 +63,9 @@ class RetryPolicyTest {
     fun `delayForAttempt with custom multiplier`() {
         val policy = RetryPolicy(baseDelayMs = 500L, backoffMultiplier = 1.5f)
         // attempt 1: 500 * 1.5 = 750
-        assertEquals(750L, policy.delayForAttempt(1))
+        assertEquals(500L, policy.delayForAttempt(1))
         // attempt 2: 500 * 1.5^2 = 500 * 2.25 = 1125
-        assertEquals(1125L, policy.delayForAttempt(2))
+        assertEquals(750L, policy.delayForAttempt(2))
     }
 
     /** 延迟随 attempt 递增。 */

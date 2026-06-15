@@ -1,6 +1,13 @@
 # apm-anr 模块架构
 
-> ANR 监控：SIGQUIT 信号 + Watchdog 双重检测 + traces.txt + 原因分类 + 去重
+> ANR 监控：Watchdog 默认检测 + 可选 SIGQUIT 回调 + traces.txt + 原因分类 + 去重
+
+## 2026-06-15 实现状态
+
+- Watchdog 始终作为默认检测通道启动，并按 `anrTimeoutMs` 计算真实阻塞时长。
+- 仓库当前没有可用的 ANR SIGQUIT JNI 库，因此 `enableSigquitDetection` 默认 `false`；只有宿主提供 native 回调后才应开启。
+- SIGQUIT 不可用不会禁用 Watchdog，也不会导致模块启动失败。
+- 严重级别按 `anrSevereThresholdMs` 与检测持续时间判断。
 
 ---
 
@@ -46,7 +53,7 @@
 │ anrTimeoutMs: 5000               │
 │ enableAnrMonitor: true           │
 │ maxStackTraceLength: 4000        │
-│ enableSigquitDetection: true     │
+│ enableSigquitDetection: false    │
 │ enableTracesFileReading: true    │
 │ enableAnrClassification: true    │
 │ anrDeduplicationWindowMs: 30000  │

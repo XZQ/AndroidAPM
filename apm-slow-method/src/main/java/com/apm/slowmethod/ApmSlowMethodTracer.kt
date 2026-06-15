@@ -105,10 +105,23 @@ object ApmSlowMethodTracer {
         if (!enabled) return
         val stack = getOrCreateStack()
 
-        // 栈为空或栈顶不匹配，忽略（防止异常情况）
+        // Unwind stale frames until the matching method is found.
         if (stack.isEmpty()) return
-        val top = stack.pop()
-        if (top.first != methodSignature) return
+        var top: Pair<String, Long>? = null
+        while (stack.isNotEmpty()) {
+            val candidate = stack.pop()
+            if (candidate.first == methodSignature) {
+                top = candidate
+                break
+            }
+        }
+        if (top == null) {
+            enterTimes.remove()
+            return
+        }
+        if (stack.isEmpty()) {
+            enterTimes.remove()
+        }
 
         // 计算方法耗时
         val durationNs = SystemClock.elapsedRealtimeNanos() - top.second

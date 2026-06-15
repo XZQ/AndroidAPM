@@ -16,6 +16,9 @@ class StackFingerprinter(
     private val fingerprintLines: Int = DEFAULT_FINGERPRINT_LINES,
     /** 去重时间窗口（毫秒）。 */
     private val dedupWindowMs: Long = DEFAULT_DEDUP_WINDOW_MS
+    ,
+    /** Maximum number of retained fingerprints. */
+    private val maxEntries: Int = DEFAULT_MAX_ENTRIES
 ) {
     /**
      * 已见过的栈指纹 → (最后出现时间戳, 出现次数)。
@@ -53,6 +56,7 @@ class StackFingerprinter(
 
         // 新指纹或窗口外重复，记录
         seenFingerprints[fingerprint] = FingerprintEntry(now)
+        trimToCapacity()
         return DedupResult.New
     }
 
@@ -77,10 +81,15 @@ class StackFingerprinter(
             val entry = iterator.next()
             if (now - entry.value.lastSeenMs > dedupWindowMs) {
                 iterator.remove()
-            } else {
-                // LinkedHashMap 按插入序，后面的更新，所以遇到未过期的可以停止
-                break
             }
+        }
+    }
+
+    /** Removes oldest entries until the hard capacity is respected. */
+    private fun trimToCapacity() {
+        while (seenFingerprints.size > maxEntries.coerceAtLeast(1)) {
+            val eldestKey = seenFingerprints.keys.firstOrNull() ?: return
+            seenFingerprints.remove(eldestKey)
         }
     }
 
@@ -113,5 +122,8 @@ class StackFingerprinter(
 
         /** 默认去重窗口：5 分钟。 */
         private const val DEFAULT_DEDUP_WINDOW_MS = 300_000L
+
+        /** Default fingerprint cache capacity. */
+        private const val DEFAULT_MAX_ENTRIES = 1024
     }
 }

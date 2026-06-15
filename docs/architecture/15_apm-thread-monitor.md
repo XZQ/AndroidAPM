@@ -2,6 +2,11 @@
 
 > 线程监控：线程数膨胀 + 同名泄漏 + BLOCKED 死锁检测
 
+## 2026-06-15 实现状态
+
+- 周期检查运行在独立 `ScheduledExecutorService`，不再占用主线程 Handler。
+- 线程快照来自 `Thread.getAllStackTraces().keys`，避免按 activeCount 分配数组造成截断或空槽。
+
 ---
 
 ## 类图

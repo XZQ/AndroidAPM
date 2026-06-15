@@ -67,6 +67,31 @@ data class NumericStats(
             )
         }
 
+        /**
+         * Builds statistics from streaming totals and a bounded percentile sample.
+         */
+        fun fromSummary(
+            samples: List<Double>,
+            min: Double,
+            max: Double,
+            sum: Double,
+            sampleCount: Int
+        ): NumericStats {
+            if (sampleCount <= 0 || samples.isEmpty()) {
+                return fromSortedSamples(emptyList())
+            }
+            val sorted = samples.sorted()
+            return NumericStats(
+                p50 = percentile(sorted, 0.50),
+                p90 = percentile(sorted, 0.90),
+                p99 = percentile(sorted, 0.99),
+                min = min,
+                max = max,
+                sum = sum,
+                sampleCount = sampleCount
+            )
+        }
+
         /** 计算百分位数（线性插值）。 */
         private fun percentile(sorted: List<Double>, p: Double): Double {
             if (sorted.size == 1) return sorted[0]

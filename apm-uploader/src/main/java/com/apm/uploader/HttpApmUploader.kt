@@ -45,7 +45,7 @@ class HttpApmUploader(
     private val enableGzip: Boolean = false,
     /** 事件序列化格式。 */
     private val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL
-) : ApmUploader {
+) : BatchApmUploader {
 
     /**
      * 上传单条事件到远端服务器。
@@ -53,31 +53,23 @@ class HttpApmUploader(
      *
      * @param event 要上传的 APM 事件
      */
-    override fun upload(event: ApmEvent): Boolean {
-        val payload = when (serializationFormat) {
-            SerializationFormat.PROTOBUF -> ProtobufSerializer.serialize(event)
-            SerializationFormat.LINE_PROTOCOL -> event.toLineProtocol().toByteArray(Charsets.UTF_8)
-        }
-        return sendHttpPost(payload)
-    }
-
     /**
      * 批量上传多条事件。
      * 根据 [serializationFormat] 选择编码方式，一次性发送减少 HTTP 请求数。
      *
      * @param events 要上传的事件列表
-     * @return 上传成功的事件数量
+     * @return true 表示完整批次上传成功
      */
-    fun batchUpload(events: List<ApmEvent>): Int {
-        if (events.isEmpty()) return 0
+    override fun uploadBatch(events: List<ApmEvent>): Boolean {
+        if (events.isEmpty()) return true
         val payload = when (serializationFormat) {
             SerializationFormat.PROTOBUF -> ProtobufSerializer.serializeBatch(events)
             SerializationFormat.LINE_PROTOCOL -> {
                 events.joinToString(separator = LINE_SEPARATOR) { it.toLineProtocol() }
                     .toByteArray(Charsets.UTF_8)
-            }
+                }
         }
-        return if (sendHttpPost(payload)) events.size else 0
+        return sendHttpPost(payload)
     }
 
     /**
@@ -111,12 +103,15 @@ class HttpApmUploader(
             for ((key, value) in headers) {
                 connection.setRequestProperty(key, value)
             }
+            // All headers must be set before outputStream establishes the connection.
+            if (enableGzip) {
+                connection.setRequestProperty(HEADER_CONTENT_ENCODING, ENCODING_GZIP)
+            }
 
             // 写入请求体（可选 Gzip 压缩）
             val outputStream: OutputStream = connection.outputStream
             if (enableGzip) {
                 // Gzip 压缩模式
-                connection.setRequestProperty(HEADER_CONTENT_ENCODING, ENCODING_GZIP)
                 val gzipStream = GZIPOutputStream(outputStream)
                 gzipStream.use { gos ->
                     gos.write(payload)

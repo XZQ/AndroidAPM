@@ -23,7 +23,11 @@ class EventAggregator(
     /** 是否启用聚合。 */
     private val enabled: Boolean = true,
     /** 日志接口。 */
-    private val logger: ApmLogger? = null
+    private val logger: ApmLogger? = null,
+    /** Maximum simultaneously active module/name buckets. */
+    private val maxBuckets: Int = DEFAULT_MAX_BUCKETS,
+    /** Maximum percentile samples retained per numeric field. */
+    private val maxSamplesPerField: Int = DEFAULT_MAX_SAMPLES_PER_FIELD
 ) {
     /** 栈指纹去重器，用于 ALERT 类事件去重。 */
     private val stackFingerprinter = StackFingerprinter()
@@ -33,6 +37,10 @@ class EventAggregator(
      * key = "${module}/${name}"，value = 该桶的采样数据。
      */
     private val buckets = LinkedHashMap<String, AggregationBucket>()
+
+    /** Aggregation window exposed to the dispatch scheduler. */
+    val windowDurationMs: Long
+        get() = windowMs
 
     /**
      * 处理一个事件，返回应该上报的事件列表。
@@ -70,14 +78,35 @@ class EventAggregator(
         val now = System.currentTimeMillis()
 
         for ((key, bucket) in buckets) {
-            if (bucket.samples.isNotEmpty()) {
-                val aggregated = bucket.toAggregatedEvent(key, now)
+            if (bucket.eventCount > 0) {
+                val aggregated = bucket.toAggregatedEvent(now)
                 results.add(aggregated.toApmEvent())
-                logger?.d("Flushed aggregation bucket $key: ${bucket.samples.size} events")
+                logger?.d("Flushed aggregation bucket $key: ${bucket.eventCount} events")
             }
         }
 
         buckets.clear()
+        return results
+    }
+
+    /**
+     * Flushes only buckets whose aggregation window has expired.
+     *
+     * @param now current wall-clock time
+     * @return expired aggregate events
+     */
+    @Synchronized
+    fun flushExpired(now: Long = System.currentTimeMillis()): List<ApmEvent> {
+        val results = mutableListOf<ApmEvent>()
+        val iterator = buckets.entries.iterator()
+        while (iterator.hasNext()) {
+            val (key, bucket) = iterator.next()
+            if (now - bucket.windowStartMs < windowMs) continue
+            iterator.remove()
+            if (bucket.eventCount > 0) {
+                results += bucket.toAggregatedEvent(now).toApmEvent()
+            }
+        }
         return results
     }
 
@@ -88,32 +117,45 @@ class EventAggregator(
     private fun aggregateMetric(event: ApmEvent): List<ApmEvent> {
         val bucketKey = "${event.module}/${event.name}"
         val now = System.currentTimeMillis()
+        val output = mutableListOf<ApmEvent>()
 
         // 获取或创建聚合桶
-        val bucket = buckets.getOrPut(bucketKey) {
-            AggregationBucket(
+        var bucket = buckets[bucketKey]
+        if (bucket == null) {
+            if (buckets.size >= maxBuckets.coerceAtLeast(1)) {
+                val eldest = buckets.entries.firstOrNull()
+                if (eldest != null) {
+                    buckets.remove(eldest.key)
+                    if (eldest.value.eventCount > 0) {
+                        output += eldest.value.toAggregatedEvent(now).toApmEvent()
+                    }
+                }
+            }
+            bucket = AggregationBucket(
                 module = event.module,
                 name = event.name,
-                windowStartMs = now
+                windowStartMs = now,
+                maxSamplesPerField = maxSamplesPerField
             )
+            buckets[bucketKey] = bucket
         }
 
         // 将事件的数值字段加入桶
-        bucket.addSample(event.fields, now)
+        bucket.addSample(event.fields)
 
         // 检查窗口是否到期
         if (now - bucket.windowStartMs >= windowMs) {
             // 窗口到期，输出聚合结果
             buckets.remove(bucketKey)
-            if (bucket.samples.isNotEmpty()) {
-                val aggregated = bucket.toAggregatedEvent(bucketKey, now)
-                logger?.d("Aggregation window expired for $bucketKey: ${bucket.samples.size} events")
-                return listOf(aggregated.toApmEvent())
+            if (bucket.eventCount > 0) {
+                val aggregated = bucket.toAggregatedEvent(now)
+                logger?.d("Aggregation window expired for $bucketKey: ${bucket.eventCount} events")
+                output += aggregated.toApmEvent()
             }
         }
 
-        // 窗口未满，事件被聚合吞掉，不上报
-        return emptyList()
+        // The current event is swallowed, but an evicted or expired bucket may be emitted.
+        return output
     }
 
     /**
@@ -137,6 +179,12 @@ class EventAggregator(
     companion object {
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_WINDOW_MS = 300_000L
+
+        /** Default maximum active bucket count. */
+        private const val DEFAULT_MAX_BUCKETS = 128
+
+        /** Default percentile reservoir size per numeric field. */
+        private const val DEFAULT_MAX_SAMPLES_PER_FIELD = 256
     }
 }
 
@@ -149,51 +197,47 @@ private class AggregationBucket(
     /** 事件名。 */
     val name: String,
     /** 窗口起始时间。 */
-    var windowStartMs: Long
+    var windowStartMs: Long,
+    /** Maximum samples retained per numeric field. */
+    private val maxSamplesPerField: Int
 ) {
-    /**
-     * 采样数据列表。
-     * 每个采样是一个 Map<字段名, 字段值>。
-     */
-    val samples = mutableListOf<Map<String, Double>>()
+    /** Number of metric events containing at least one numeric field. */
+    var eventCount: Int = 0
+        private set
+
+    /** Streaming numeric accumulators keyed by field name. */
+    private val fields = LinkedHashMap<String, NumericAccumulator>()
 
     /**
      * 添加一个事件的数值字段作为采样。
      * 只提取可转为 Double 的字段值。
      */
-    fun addSample(fields: Map<String, Any?>, timestamp: Long) {
-        val numericFields = mutableMapOf<String, Double>()
+    fun addSample(fields: Map<String, Any?>) {
+        var added = false
         for ((key, value) in fields) {
-            when (value) {
-                is Number -> numericFields[key] = value.toDouble()
-                is String -> {
-                    // 尝试将字符串解析为数字
-                    value.toDoubleOrNull()?.let { numericFields[key] = it }
-                }
-            }
+            val numericValue = when (value) {
+                is Number -> value.toDouble()
+                is String -> value.toDoubleOrNull()
+                else -> null
+            } ?: continue
+            if (this.fields.size >= MAX_FIELDS_PER_BUCKET && key !in this.fields) continue
+            this.fields.getOrPut(key) {
+                NumericAccumulator(maxSamplesPerField.coerceAtLeast(1))
+            }.add(numericValue)
+            added = true
         }
-        if (numericFields.isNotEmpty()) {
-            samples.add(numericFields)
+        if (added) {
+            eventCount++
         }
     }
 
     /**
      * 将桶内采样数据转换为聚合结果。
      */
-    fun toAggregatedEvent(bucketKey: String, now: Long): AggregatedEvent {
-        // 收集所有出现过的字段名
-        val allFieldNames = mutableSetOf<String>()
-        for (sample in samples) {
-            allFieldNames.addAll(sample.keys)
-        }
-
-        // 对每个字段计算统计摘要
+    fun toAggregatedEvent(now: Long): AggregatedEvent {
         val fieldStats = mutableMapOf<String, NumericStats>()
-        for (fieldName in allFieldNames) {
-            val values = samples.mapNotNull { it[fieldName] }
-            if (values.isNotEmpty()) {
-                fieldStats[fieldName] = NumericStats.fromSortedSamples(values)
-            }
+        for ((fieldName, accumulator) in fields) {
+            fieldStats[fieldName] = accumulator.snapshot()
         }
 
         return AggregatedEvent(
@@ -201,8 +245,81 @@ private class AggregationBucket(
             name = name,
             windowStartMs = windowStartMs,
             windowEndMs = now,
-            count = samples.size,
+            count = eventCount,
             fieldStats = fieldStats
         )
+    }
+
+    companion object {
+        /** Hard bound for distinct numeric field names in one bucket. */
+        private const val MAX_FIELDS_PER_BUCKET = 64
+    }
+}
+
+/**
+ * Streaming numeric summary with a bounded percentile reservoir.
+ */
+private class NumericAccumulator(
+    /** Maximum retained percentile samples. */
+    private val reservoirSize: Int
+) {
+    /** Bounded percentile sample reservoir. */
+    private val reservoir = ArrayList<Double>(reservoirSize)
+
+    /** Number of values observed. */
+    private var count = 0
+
+    /** Sum of all observed values. */
+    private var sum = 0.0
+
+    /** Minimum observed value. */
+    private var min = Double.POSITIVE_INFINITY
+
+    /** Maximum observed value. */
+    private var max = Double.NEGATIVE_INFINITY
+
+    /**
+     * Adds one value to the streaming summary.
+     *
+     * @param value numeric value
+     */
+    fun add(value: Double) {
+        count++
+        sum += value
+        min = kotlin.math.min(min, value)
+        max = kotlin.math.max(max, value)
+        if (reservoir.size < reservoirSize) {
+            reservoir += value
+            return
+        }
+        // Deterministic reservoir replacement keeps memory fixed and tests stable.
+        val mixed = (count.toLong() * RESERVOIR_MULTIPLIER) xor (count.toLong() ushr RESERVOIR_SHIFT)
+        val candidateIndex = ((mixed and Long.MAX_VALUE) % count).toInt()
+        if (candidateIndex < reservoirSize) {
+            reservoir[candidateIndex] = value
+        }
+    }
+
+    /**
+     * Creates an immutable statistics snapshot.
+     *
+     * @return current numeric summary
+     */
+    fun snapshot(): NumericStats {
+        return NumericStats.fromSummary(
+            samples = reservoir,
+            min = min,
+            max = max,
+            sum = sum,
+            sampleCount = count
+        )
+    }
+
+    companion object {
+        /** Deterministic mixing constant used by reservoir replacement. */
+        private const val RESERVOIR_MULTIPLIER = 1_103_515_245L
+
+        /** Bit shift used to mix sequential sample counts. */
+        private const val RESERVOIR_SHIFT = 16
     }
 }

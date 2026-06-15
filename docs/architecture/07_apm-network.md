@@ -2,6 +2,12 @@
 
 > 网络监控：OkHttp Interceptor + EventListener + 全链路耗时 + 聚合统计
 
+## 2026-06-15 实现状态
+
+- Interceptor 默认负责请求汇总，EventListener 默认只负责阶段耗时，避免同一请求被统计两次。
+- EventListener 会保留 HTTP 状态码和连接失败信息，并只为慢请求或错误请求输出阶段事件。
+- 需要仅使用 EventListener 时，可通过 `reportSummary=true` 显式启用汇总事件。
+
 ---
 
 ## 类图

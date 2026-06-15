@@ -4,9 +4,11 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 
 /**
- * APM 事件 → OpenTelemetry 桥接器。
+ * APM event to OpenTelemetry-compatible mapping adapter.
  *
- * 将 APM 事件按类型路由到对应的 OTel Exporter：
+ * This module does not depend on the OpenTelemetry SDK and does not perform
+ * network export. It maps events into structured data that a host-owned OTel
+ * adapter can convert to SDK signal objects:
  * - ALERT → [OtelSpanExporter]（Span）
  * - METRIC → [OtelMetricExporter]（Metric）
  * - FILE → LogRecord（日志）
@@ -25,32 +27,32 @@ class OtelEventBridge(
 ) {
 
     /**
-     * 导出单条 APM 事件到 OTel 管线。
+     * Maps one APM event into OTel-compatible structured data.
      *
      * 根据事件类型和配置，路由到对应的转换器。
      *
      * @param event APM 事件
-     * @return 导出结果，包含生成的 Span/Metric/Log 数据
+     * @return mapping result containing Span/Metric/Log-compatible data
      */
     fun export(event: ApmEvent): ExportResult {
-        if (!config.enabled) return ExportResult(emptyList(), emptyList(), null)
+        if (!config.enabled) return ExportResult(emptyList(), emptyList(), emptyList())
 
         val spans = mutableListOf<Map<String, Any?>>()
         val metrics = mutableListOf<Map<String, Any?>>()
-        var log: Map<String, Any?>? = null
+        val logs = mutableListOf<Map<String, Any?>>()
 
         // 按类型路由
         when (event.kind) {
             ApmEventKind.ALERT -> {
                 // ALERT 事件 → Span
                 if (config.exportSpans) {
-                    OtelSpanExporter.toSpanData(event)?.let { spans.add(it) }
+                    OtelSpanExporter.toSpanData(event)?.let { spans.add(withResource(it)) }
                 }
             }
             ApmEventKind.METRIC -> {
                 // METRIC 事件 → Metric 数据点
                 if (config.exportMetrics) {
-                    metrics.addAll(OtelMetricExporter.toMetricData(event))
+                    metrics.addAll(OtelMetricExporter.toMetricData(event).map(::withResource))
                 }
             }
             ApmEventKind.FILE -> {
@@ -60,14 +62,14 @@ class OtelEventBridge(
 
         // 所有事件可选导出为 Log
         if (config.exportLogs) {
-            log = toLogData(event)
+            logs += toLogData(event)
         }
 
-        return ExportResult(spans, metrics, log)
+        return ExportResult(spans, metrics, logs)
     }
 
     /**
-     * 批量导出多条事件。
+     * Maps multiple events without dropping intermediate log records.
      *
      * @param events APM 事件列表
      * @return 合并的导出结果
@@ -75,17 +77,16 @@ class OtelEventBridge(
     fun exportBatch(events: List<ApmEvent>): ExportResult {
         val allSpans = mutableListOf<Map<String, Any?>>()
         val allMetrics = mutableListOf<Map<String, Any?>>()
-        // 日志取最后一条
-        var lastLog: Map<String, Any?>? = null
+        val allLogs = mutableListOf<Map<String, Any?>>()
 
         for (event in events) {
             val result = export(event)
             allSpans.addAll(result.spans)
             allMetrics.addAll(result.metrics)
-            lastLog = result.log
+            allLogs.addAll(result.logs)
         }
 
-        return ExportResult(allSpans, allMetrics, lastLog)
+        return ExportResult(allSpans, allMetrics, allLogs)
     }
 
     /**
@@ -115,8 +116,31 @@ class OtelEventBridge(
             "body" to event.toLogBody(),
             "severityText" to event.severity.name,
             "epochMs" to event.timestamp,
-            "attributes" to attributes
+            "attributes" to attributes,
+            "resource" to resourceData()
         )
+    }
+
+    /**
+     * Adds resource metadata to a mapped signal.
+     *
+     * @param signal mapped signal data
+     * @return decorated signal data
+     */
+    private fun withResource(signal: Map<String, Any?>): Map<String, Any?> {
+        return signal + mapOf(
+            "resource" to resourceData(),
+            "collectorEndpoint" to config.endpoint
+        )
+    }
+
+    /**
+     * Builds common OpenTelemetry Resource-compatible attributes.
+     *
+     * @return resource attribute map
+     */
+    private fun resourceData(): Map<String, String> {
+        return mapOf("service.name" to config.serviceName) + config.resourceAttributes
     }
 
     /**
@@ -127,9 +151,13 @@ class OtelEventBridge(
         val spans: List<Map<String, Any?>>,
         /** 导出的 Metric 数据点列表。 */
         val metrics: List<Map<String, Any?>>,
-        /** 导出的 LogRecord 数据（最后一条）。 */
+        /** All exported LogRecord-compatible maps. */
+        val logs: List<Map<String, Any?>>
+    ) {
+        /** Last log retained for source compatibility with the original API. */
         val log: Map<String, Any?>?
-    )
+            get() = logs.lastOrNull()
+    }
 }
 
 /**

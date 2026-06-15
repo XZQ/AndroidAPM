@@ -2,6 +2,13 @@
 
 > 慢方法检测：反射 Hook Looper + ASM 字节码插桩 + 栈采样 + 热点方法
 
+## 2026-06-15 实现状态
+
+- Looper 监控改用公开的 `Looper.setMessageLogging()`，并转发给宿主原有 Printer。
+- ASM 方法标识包含 descriptor，重载方法不会再合并。
+- 插桩为正常返回和传播异常都生成平衡的 `methodExit`，防止 ThreadLocal 调用栈泄漏。
+- 栈采样 profiler 可停止后重新启动，构建插件使用 `COMPUTE_FRAMES` 验证异常处理器字节码。
+
 ---
 
 ## 双引擎架构

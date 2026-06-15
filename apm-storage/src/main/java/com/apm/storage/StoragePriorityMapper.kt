@@ -1,7 +1,6 @@
 package com.apm.storage
 
 import com.apm.model.ApmEvent
-import com.apm.model.ApmSeverity
 
 /**
  * SQLite 存储优先级映射器。
@@ -12,30 +11,12 @@ import com.apm.model.ApmSeverity
 internal object StoragePriorityMapper {
 
     /**
-     * 将事件严重级别映射为存储优先级。
+     * Maps the explicit event priority used by upload ordering.
      *
      * @param event 待存储事件。
      * @return 存储排序使用的优先级数值，数值越大越重要。
      */
     fun priorityOf(event: ApmEvent): Int {
-        return when (event.severity) {
-            ApmSeverity.FATAL -> PRIORITY_CRITICAL
-            ApmSeverity.ERROR -> PRIORITY_CRITICAL
-            ApmSeverity.WARN -> PRIORITY_WARN
-            ApmSeverity.INFO -> PRIORITY_INFO
-            ApmSeverity.DEBUG -> PRIORITY_DEBUG
-        }
+        return event.priority.value
     }
-
-    /** DEBUG 存储优先级。 */
-    private const val PRIORITY_DEBUG = 0
-
-    /** INFO 存储优先级。 */
-    private const val PRIORITY_INFO = 1
-
-    /** WARN 存储优先级。 */
-    private const val PRIORITY_WARN = 2
-
-    /** ERROR/FATAL 存储优先级。 */
-    private const val PRIORITY_CRITICAL = 3
 }

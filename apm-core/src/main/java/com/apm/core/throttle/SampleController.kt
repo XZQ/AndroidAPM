@@ -47,9 +47,21 @@ class GrayReleaseController(
      * @return true 表示功能已开启
      */
     fun isEnabled(feature: String, userId: String? = null): Boolean {
+        return isEnabled(feature, userId, false)
+    }
+
+    /**
+     * Checks a feature flag with an explicit default for absent remote config.
+     *
+     * @param feature feature identifier
+     * @param userId optional stable user identifier
+     * @param defaultValue default when no override exists
+     * @return resolved feature state
+     */
+    fun isEnabled(feature: String, userId: String? = null, defaultValue: Boolean): Boolean {
         // 本地覆盖优先
         featureFlags[feature]?.let { return it }
-        return configProvider.getBoolean("apm.feature.$feature.enabled", false)
+        return configProvider.getBoolean("apm.feature.$feature.enabled", defaultValue)
     }
 
     /**

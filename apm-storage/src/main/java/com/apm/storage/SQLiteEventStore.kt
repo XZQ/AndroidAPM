@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import com.apm.model.ApmEvent
+import com.apm.model.ApmEventCodec
 import com.apm.model.toLineProtocol
 
 /**
@@ -24,7 +25,7 @@ class SQLiteEventStore(
     private val dbHelper: EventDbHelper,
     /** 最大存储事件数。超出后按优先级 ASC + timestamp ASC 淘汰。 */
     private val maxEvents: Int = DEFAULT_MAX_EVENTS
-) : EventStore {
+) : PendingEventStore {
 
     /**
      * 追加一条事件到 SQLite。
@@ -42,6 +43,7 @@ class SQLiteEventStore(
             put(COLUMN_NAME, event.name)
             put(COLUMN_SEVERITY, event.severity.name)
             put(COLUMN_DATA, event.toLineProtocol())
+            put(COLUMN_PAYLOAD, ApmEventCodec.encode(event))
             put(COLUMN_TIMESTAMP, event.timestamp)
             put(COLUMN_RETRY_COUNT, 0)
         }
@@ -96,16 +98,17 @@ class SQLiteEventStore(
      * @return (data, id) 列表，优先级高的在前
      */
     @Synchronized
-    fun readByPriority(limit: Int): List<Pair<Long, String>> {
+    override fun readPending(limit: Int): List<PendingEvent> {
         if (limit <= 0) return emptyList()
 
         val db = dbHelper.readableDatabase
-        val results = mutableListOf<Pair<Long, String>>()
+        val results = mutableListOf<PendingEvent>()
+        val corruptedIds = mutableListOf<Long>()
 
         // 优先级降序（CRITICAL=3 先出），同优先级按时间升序（旧的先出）
         db.query(
             TABLE_NAME,
-            arrayOf(COLUMN_ID, COLUMN_DATA),
+            arrayOf(COLUMN_ID, COLUMN_PAYLOAD, COLUMN_RETRY_COUNT),
             null, null,
             null, null,
             "$COLUMN_PRIORITY DESC, $COLUMN_TIMESTAMP ASC",
@@ -113,9 +116,16 @@ class SQLiteEventStore(
         ).use { cursor ->
             while (cursor.moveToNext()) {
                 val id = cursor.getLong(0)
-                val data = cursor.getString(1)
-                results.add(id to data)
+                val payload = cursor.getBlob(1)
+                val retryCount = cursor.getInt(2)
+                runCatching {
+                    PendingEvent(id, ApmEventCodec.decode(payload), retryCount)
+                }.onSuccess(results::add)
+                    .onFailure { corruptedIds += id }
             }
+        }
+        if (corruptedIds.isNotEmpty()) {
+            deletePending(corruptedIds)
         }
 
         return results
@@ -128,7 +138,7 @@ class SQLiteEventStore(
      * @return 删除的行数
      */
     @Synchronized
-    fun deleteByIds(ids: List<Long>): Int {
+    override fun deletePending(ids: List<Long>): Int {
         if (ids.isEmpty()) return 0
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
@@ -140,10 +150,27 @@ class SQLiteEventStore(
     }
 
     /**
+     * Increments retry counters for rows retained after a failed upload.
+     *
+     * @param ids row identifiers
+     */
+    @Synchronized
+    override fun markRetry(ids: List<Long>) {
+        if (ids.isEmpty()) return
+        val db = dbHelper.writableDatabase
+        val placeholders = ids.joinToString(",") { "?" }
+        db.execSQL(
+            "UPDATE $TABLE_NAME SET $COLUMN_RETRY_COUNT = $COLUMN_RETRY_COUNT + 1 " +
+                "WHERE $COLUMN_ID IN ($placeholders)",
+            ids.map { it.toString() }.toTypedArray()
+        )
+    }
+
+    /**
      * 获取当前存储的事件总数。
      */
     @Synchronized
-    fun count(): Int {
+    override fun pendingCount(): Int {
         val db = dbHelper.readableDatabase
         db.query(
             TABLE_NAME,
@@ -153,6 +180,11 @@ class SQLiteEventStore(
             if (cursor.moveToFirst()) return cursor.getInt(0)
         }
         return 0
+    }
+
+    /** Closes the underlying database helper. */
+    override fun close() {
+        dbHelper.close()
     }
 
     /**
@@ -223,6 +255,8 @@ class SQLiteEventStore(
         private const val COLUMN_SEVERITY = "severity"
         /** 列：序列化数据。 */
         private const val COLUMN_DATA = "data"
+        /** 列：可逆二进制事件负载。 */
+        private const val COLUMN_PAYLOAD = "payload"
         /** 列：时间戳。 */
         private const val COLUMN_TIMESTAMP = "timestamp"
         /** 列：重试次数。 */

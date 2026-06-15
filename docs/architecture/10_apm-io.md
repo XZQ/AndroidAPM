@@ -2,6 +2,12 @@
 
 > IO 监控：Native PLT Hook + Java 代理 + FD 泄漏 + 吞吐量 + Closeable 泄漏
 
+## 2026-06-15 实现状态
+
+- Java fallback 返回真实的 `InputStream`/`OutputStream` 包装器，自动统计 read/write/close。
+- 显式 close 会注销 PhantomReference，只有未关闭对象才进入泄漏告警。
+- 代理会话使用唯一 id 和弱引用映射，避免伪 fd 冲突及包装对象被强引用保活。
+
 ---
 
 ## 双层架构

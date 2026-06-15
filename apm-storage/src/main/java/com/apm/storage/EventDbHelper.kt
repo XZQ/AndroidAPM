@@ -34,8 +34,12 @@ class EventDbHelper(
      * 目前只有一个版本，无需升级逻辑。
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // 未来版本升级时在此添加迁移逻辑
-        // 当前只有版本 1，无需处理
+        if (oldVersion < DATABASE_VERSION_OUTBOX) {
+            // Version 1 did not retain a reversible event payload, so its rows
+            // cannot participate in acknowledged replay safely.
+            db.execSQL(SQL_DROP_TABLE)
+            onCreate(db)
+        }
     }
 
     /**
@@ -54,20 +58,21 @@ class EventDbHelper(
         private const val DATABASE_NAME = "apm_events.db"
 
         /** 数据库版本。 */
-        private const val DATABASE_VERSION = 1
+        private const val DATABASE_VERSION = 2
 
-        /** 默认优先级（NORMAL = 2）。 */
-        private const val DEFAULT_PRIORITY = 2
+        /** First schema version that contains the durable payload column. */
+        private const val DATABASE_VERSION_OUTBOX = 2
 
         /** 创建 events 表。 */
         private const val SQL_CREATE_TABLE = """
             CREATE TABLE IF NOT EXISTS events (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                priority INTEGER NOT NULL DEFAULT 2,
+                priority INTEGER NOT NULL DEFAULT 1,
                 module TEXT NOT NULL,
                 name TEXT NOT NULL,
                 severity TEXT NOT NULL,
                 data TEXT NOT NULL,
+                payload BLOB NOT NULL,
                 timestamp INTEGER NOT NULL,
                 retry_count INTEGER NOT NULL DEFAULT 0
             )
@@ -78,5 +83,8 @@ class EventDbHelper(
             CREATE INDEX IF NOT EXISTS idx_priority_ts
             ON events(priority ASC, timestamp ASC)
         """
+
+        /** Drops the legacy events table during the version 1 migration. */
+        private const val SQL_DROP_TABLE = "DROP TABLE IF EXISTS events"
     }
 }

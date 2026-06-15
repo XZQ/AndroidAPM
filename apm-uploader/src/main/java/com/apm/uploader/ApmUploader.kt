@@ -20,3 +20,24 @@ interface ApmUploader {
      */
     fun shutdown() = Unit
 }
+
+/**
+ * Upload contract for transports that can send multiple events in one request.
+ */
+interface BatchApmUploader : ApmUploader {
+    /**
+     * Uploads one batch atomically from the caller's perspective.
+     *
+     * @param events events to upload
+     * @return true when the complete batch was accepted
+     */
+    fun uploadBatch(events: List<ApmEvent>): Boolean
+
+    /**
+     * Uploads a single event through the batch implementation.
+     *
+     * @param event event to upload
+     * @return true when accepted
+     */
+    override fun upload(event: ApmEvent): Boolean = uploadBatch(listOf(event))
+}

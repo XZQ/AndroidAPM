@@ -145,6 +145,7 @@ class MemoryModule(
         if (config.enableOomMonitor) {
             if (config.enableHprofDump) {
                 hprofDumper = HprofDumper(apmContext.application, config, apmContext.logger)
+                hprofDumper?.init()
                 hprofDumper?.cleanupOldFiles()
             }
             oomMonitor = OomMonitor(config, hprofDumper)
@@ -255,27 +256,23 @@ class MemoryModule(
 
     /** Activity 销毁时检查 ViewModel 泄漏，并清理 Fragment 检测器。 */
     override fun onActivityDestroyed(activity: Activity) {
-        // Phase 2: ViewModel 泄漏检查
-        if (config.enableViewModelLeak && activity is FragmentActivity) {
-            try {
-                val store = activity.viewModelStore
-                for (key in store.keys()) {
-                    val viewModel = store[key] ?: continue
-                    viewModelLeakDetector?.checkViewModel(viewModel)?.let { result ->
-                        reporter.onLeakFound(result)
-                    }
-                }
-            } catch (_: Exception) {
-                // ViewModelStore 访问可能失败，非关键路径
-            }
-        }
-
         // 清理该 Activity 的 Fragment 泄漏检测器
         fragmentLeakDetectors.remove(activity)?.let { detector ->
             if (activity is FragmentActivity) {
                 runCatching { detector.unregister(activity.supportFragmentManager) }
             }
         }
+    }
+
+    /**
+     * Checks a ViewModel supplied by the host without relying on restricted
+     * ViewModelStore enumeration APIs.
+     *
+     * @param viewModel ViewModel instance to inspect
+     */
+    fun checkViewModel(viewModel: androidx.lifecycle.ViewModel) {
+        if (!started || !config.enableViewModelLeak) return
+        viewModelLeakDetector?.checkViewModel(viewModel)?.let(reporter::onLeakFound)
     }
 
     companion object {
