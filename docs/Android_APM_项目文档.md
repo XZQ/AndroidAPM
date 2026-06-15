@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-06-15 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
+> 最后校验：2026-06-16 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -98,13 +98,13 @@
 
 ### 1.2 Git 提交历史
 
-> 当前全量优化实现提交：`7a98468 Refactor: Harden APM reliability and delivery`。
+> 当前全量优化实现提交：`6670f7a Refactor: Harden APM reliability and delivery`。
 
 ```
-7a98468 Refactor: Harden APM reliability and delivery
-99e8f06 Docs: Add generated architecture diagrams
-3122384 Docs: Sync verification history
-f253605 Build: Harden project verification baseline
+6670f7a Refactor: Harden APM reliability and delivery
+c26e873 Docs: Add generated architecture diagrams
+3855d76 Docs: Sync verification history
+2502bfb Build: Harden project verification baseline
 e75e109 Docs: Add recording archive
 0516382 Docs: Correct source file count from 163 to 113
 d01dc98 Docs: Update architecture docs for Phase 10-11
