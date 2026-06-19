@@ -20,7 +20,7 @@ Read this file first, then follow the read order below.
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
 - Main source files: `121`
 - Test files: `57`
-- Recent implementation commit: `6670f7a Refactor: Harden APM reliability and delivery`
+- Recent implementation commit: `7f165ea Build: Sync verification and memory API deps`
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`

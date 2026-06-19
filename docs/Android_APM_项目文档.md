@@ -98,9 +98,12 @@
 
 ### 1.2 Git 提交历史
 
-> 当前全量优化实现提交：`6670f7a Refactor: Harden APM reliability and delivery`。
+> 当前已验证仓库提交：`7f165ea Build: Sync verification and memory API deps`。
 
 ```
+7f165ea Build: Sync verification and memory API deps
+0946074 Docs: Sync linear history baseline
+97c0dc4 Docs: Sync optimized verification baseline
 6670f7a Refactor: Harden APM reliability and delivery
 c26e873 Docs: Add generated architecture diagrams
 3855d76 Docs: Sync verification history
