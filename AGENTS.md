@@ -15,12 +15,12 @@ Read this file first, then follow the read order below.
 
 ## Current Verified Baseline
 
-- Verification date: `2026-06-15`
+- Verification date: `2026-06-19`
 - Build units: `23`
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
 - Main source files: `121`
 - Test files: `57`
-- Recent implementation commit: `7a98468 Refactor: Harden APM reliability and delivery`
+- Recent implementation commit: `6670f7a Refactor: Harden APM reliability and delivery`
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`
@@ -29,7 +29,7 @@ Read this file first, then follow the read order below.
   - `./gradlew assembleRelease`
   - `./gradlew publishToMavenLocal`
   - `./gradlew -p smoke-tests/maven-consumer clean assembleDebug`
-- Result: all commands passed on `2026-06-15`
+- Result: all commands passed on `2026-06-19`
 
 ## Important Reality Check
 

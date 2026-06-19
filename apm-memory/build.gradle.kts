@@ -31,7 +31,7 @@ android {
 dependencies {
     api(project(":apm-core"))
     implementation(project(":apm-model"))
-    implementation(libs.lifecycle.process)
-    implementation(libs.fragment.ktx)
+    api(libs.lifecycle.process)
+    api(libs.fragment.ktx)
     testImplementation(libs.junit)
 }

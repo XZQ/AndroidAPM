@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-06-16 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
+> 最后校验：2026-06-19 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -141,6 +141,7 @@ de499c6 Refactor: Align slow method plugin extension
 23. 动态模块开关、灰度控制、多进程协调、SDK 自监控和自动降级均接入运行时初始化/生命周期。
 24. 全部 Android/JVM 模块统一 Kotlin 2.2.21、AGP 8.13.2、Gradle 8.13 与 JDK 21 构建，字节码目标保持 Java 11。
 25. 所有发布模块生成 sources JAR/AAR Maven 元数据；独立 smoke consumer 已验证传递依赖与公开 API。
+26. `apm-memory` 已将 Lifecycle 与 Fragment 依赖作为 Maven API 依赖发布，保证 `MemoryModule` 暴露的 `DefaultLifecycleObserver` 父类型和 `checkViewModel(ViewModel)` 签名可被下游直接解析。
 
 ### 1.4 2026-06-15 全量优化摘要
 
@@ -458,8 +459,8 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 | 指标 | 数值 |
 |------|------|
 | 构建单元数 | 23（22 个 root Gradle subproject + 1 个 included build: apm-plugin） |
-| 主源码文件 | 119（115 Kotlin + 3 C + 1 proto） |
-| 测试文件 | 54 |
+| 主源码文件 | 121（117 Kotlin + 3 C + 1 proto） |
+| 测试文件 | 57 |
 | 总代码行数 | ~12000+ |
-| 编译结果 | `assembleDebug` 通过 |
-| 测试结果 | `testDebugUnitTest` + `./gradlew -p apm-plugin test` 通过 |
+| 编译结果 | `assembleDebug` / `assembleRelease` 通过 |
+| 测试结果 | `testDebugUnitTest` + `./gradlew -p apm-plugin test` + `lintDebug` + Maven 发布与独立消费验证通过（2026-06-19） |

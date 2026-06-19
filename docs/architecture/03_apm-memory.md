@@ -2,11 +2,12 @@
 
 > 内存监控：采样、泄漏检测、OOM 预警、Hprof、Native Heap
 
-## 2026-06-15 实现状态
+## 2026-06-19 实现状态
 
 - `MemoryModule.onStart()` 会初始化 `HprofDumper`，避免配置开启但 dump 后端未准备。
 - ViewModel 泄漏检测不再反射受限的 `ViewModelStore` 内部字段，改为宿主在清理时调用 `checkViewModel(viewModel)`。
 - Activity/Fragment/Hprof/Native 能力保持原生命周期，模块停止时统一释放调度器与回调。
+- `apm-memory` 将 Lifecycle 与 Fragment 依赖作为发布 API 暴露，保证 `MemoryModule` 的 `DefaultLifecycleObserver` 父类型和 `checkViewModel(ViewModel)` 公共签名能被 Maven 下游直接解析。
 
 ---
 
