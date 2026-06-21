@@ -99,9 +99,11 @@
 
 ### 1.2 Git 提交历史
 
-> 当前已验证仓库提交：`7f165ea Build: Sync verification and memory API deps`。
+> 当前已验证实现提交：`20c1fbf Refactor: Harden build and durable delivery`。
 
 ```
+20c1fbf Refactor: Harden build and durable delivery
+06eaab8 Docs: Sync verified publish commit
 7f165ea Build: Sync verification and memory API deps
 0946074 Docs: Sync linear history baseline
 97c0dc4 Docs: Sync optimized verification baseline
