@@ -1,4 +1,5 @@
 import com.android.build.gradle.LibraryExtension
+import org.gradle.api.component.SoftwareComponent
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
@@ -41,16 +42,22 @@ subprojects {
 
         pluginManager.apply("maven-publish")
 
-        afterEvaluate {
-            extensions.configure<PublishingExtension>("publishing") {
-                publications {
-                    if (findByName("release") == null) {
-                        create<MavenPublication>("release") {
-                            from(components["release"])
-                            groupId = project.group.toString()
-                            artifactId = project.name
-                            version = project.version.toString()
-                        }
+        extensions.configure<PublishingExtension>("publishing") {
+            publications {
+                register<MavenPublication>("release") {
+                    groupId = project.group.toString()
+                    artifactId = project.name
+                    version = project.version.toString()
+                }
+            }
+        }
+
+        components.configureEach {
+            if (name == "release") {
+                val releaseComponent: SoftwareComponent = this
+                extensions.configure<PublishingExtension>("publishing") {
+                    publications.named<MavenPublication>("release") {
+                        from(releaseComponent)
                     }
                 }
             }
@@ -62,16 +69,21 @@ subprojects {
             withSourcesJar()
         }
         pluginManager.apply("maven-publish")
-        afterEvaluate {
-            extensions.configure<PublishingExtension>("publishing") {
-                publications {
-                    if (findByName("release") == null) {
-                        create<MavenPublication>("release") {
-                            from(components["java"])
-                            groupId = project.group.toString()
-                            artifactId = project.name
-                            version = project.version.toString()
-                        }
+        extensions.configure<PublishingExtension>("publishing") {
+            publications {
+                register<MavenPublication>("release") {
+                    groupId = project.group.toString()
+                    artifactId = project.name
+                    version = project.version.toString()
+                }
+            }
+        }
+        components.configureEach {
+            if (name == "java") {
+                val javaComponent: SoftwareComponent = this
+                extensions.configure<PublishingExtension>("publishing") {
+                    publications.named<MavenPublication>("release") {
+                        from(javaComponent)
                     }
                 }
             }

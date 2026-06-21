@@ -248,7 +248,7 @@ arch_rows = [
     ['模块化', '18 独立 Gradle 模块，按需集成', '插件化，按需加载', '单模块'],
     ['限流策略', '令牌桶 + 灰度发布 + 动态配置', '采样率控制', '采样控制'],
     ['线程安全', 'Atomic/ConcurrentHashMap/@Volatile 全覆盖', '部分覆盖', '部分覆盖'],
-    ['本地存储', 'FileEventStore ring buffer + lazy init', '文件存储', '文件存储'],
+    ['本地存储', 'SQLite durable outbox + FileEventStore fallback', '文件存储', '文件存储'],
     ['上传通道', '指数退避重试 + 批量 + 可插拔 Uploader', '自有上传通道', '自有通道'],
     ['代码侵入', '大部分模块零侵入（无字节码修改）', '需 ASM 插桩', '需 Native Hook'],
     ['事件模型', '统一 ApmEvent + line protocol 序列化', '自有格式', '自有格式'],

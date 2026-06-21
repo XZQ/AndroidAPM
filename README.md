@@ -88,7 +88,7 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 │   ┌─────────────┐  ┌──────────────┐  ┌──────────────┐       │  Core 层
 │   │  apm-core   │  │  apm-model   │  │  apm-storage │       │  (4 基础模块)
 │   │  分发/限流   │  │  事件模型     │  │  本地存储     │       │
-│   │  灰度/日志   │  │  LineProtocol│  │  RingBuffer  │       │
+│   │  灰度/日志   │  │  LineProtocol│  │ SQLite Outbox│       │
 │   └─────────────┘  └──────────────┘  └──────────────┘       │
 │   ┌──────────────┐                                           │
 │   │  apm-uploader│  重试/批量/退避                            │
@@ -243,7 +243,7 @@ val okHttpClient = OkHttpClient.Builder()
 |------|------|------|
 | apm-model | 事件模型 | ApmEvent + Line Protocol 序列化 |
 | apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程/日志 |
-| apm-storage | 本地存储 | File RingBuffer + SQLite 持久化出箱与确认删除 |
+| apm-storage | 本地存储 | SQLite 持久化出箱与确认删除 + File RingBuffer 兼容路径 |
 | apm-uploader | 上传通道 | HTTP 单请求批量/Gzip + Logcat + 有界重试队列 |
 | apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
 | apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone |
@@ -306,7 +306,7 @@ Android-APM/
 ├── apm-core/                  # 核心框架 (分发/限流/灰度)
 │   └── throttle/              # 令牌桶限流 + 动态配置 + 灰度发布
 ├── apm-model/                 # 统一事件模型 + Line Protocol
-├── apm-storage/               # 本地存储 (FileEventStore)
+├── apm-storage/               # 本地存储 (SQLite 出箱 + File 兼容路径)
 ├── apm-uploader/              # 上传通道 (重试/批量/退避)
 ├── apm-memory/                # 内存监控
 │   ├── leak/                  # Activity/Fragment/ViewModel 泄漏
@@ -332,8 +332,8 @@ Android-APM/
 │   ├── Android_APM_项目文档.md # 完整项目文档
 │   └── architecture/          # 架构图 (18 个模块详细文档)
 ├── CLAUDE.md                  # 编码规范
-├── build.gradle               # 根构建文件
-└── settings.gradle            # 模块配置
+├── build.gradle.kts           # 根构建文件
+└── settings.gradle.kts        # 模块配置
 ```
 
 ## 文档

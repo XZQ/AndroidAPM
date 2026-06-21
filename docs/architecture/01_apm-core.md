@@ -2,7 +2,7 @@
 
 > 核心框架层：初始化、模块注册、事件分发、限流、灰度
 
-## 2026-06-15 实现状态
+## 2026-06-21 实现状态
 
 - `ApmConfig.storageType` 默认 `SQLITE`，持久化存储使用独立 `PersistentUploadWorker` 回放和确认。
 - `Apm.emitCriticalSync()` 用于崩溃等进程终止前事件，只同步落盘，不阻塞等待网络。
@@ -99,10 +99,10 @@ Apm.init(app, config)
        │
        ├── 创建组件
        │   ├── logger = AndroidApmLogger()
-       │   ├── store = FileEventStore(app)
+       │   ├── store = SQLiteEventStore(...)（默认）或 FileEventStore(...)
        │   ├── uploader = UploaderFactory.create(config)
        │   ├── rateLimiter = RateLimiter(events, window)
-       │   ├── dispatcher = ApmDispatcher(store, uploader, rateLimiter, logger)
+       │   ├── dispatcher = ApmDispatcher(store, uploader, logger, rateLimiter, ...)
        │   └── context = ApmContext(app, config, processName, logger, dispatcher)
        │
        ├── state = State(context, store, dispatcher, uploader)
@@ -139,17 +139,16 @@ ApmDispatcher.dispatch(event)
        │       │   ├── ERROR/FATAL 跳过限流
        │       │   └── 超限则跳过本事件
        │       │
-       │       ├── 本地存储
-       │       │   └── store.append(event)
-       │       │       → event.toLineProtocol()
-       │       │       → FileEventStore.append() (ring buffer + 文件)
+       │       ├── PII 脱敏
+       │       │   └── piiSanitizer.sanitize(event)
        │       │
-       │       └── 上传
-       │           └── uploader.upload(event)
-       │               → RetryingApmUploader.upload()
-       │               → queue.offer(event) (非阻塞)
-       │               → 上传线程批量取出并上传
-       │               → 返回 false 时按失败处理并记录日志
+       │       ├── 本地持久化
+       │       │   └── store.append(event)
+       │       │       → SQLiteEventStore 写入 payload / priority / retry_count
+       │       │
+       │       └── 上传调度
+       │           ├── PersistentUploadWorker.signal()（SQLite 默认路径）
+       │           └── uploader.upload(event)（FileEventStore 兼容路径）
        │   }
        │
        └── 返回（非阻塞）

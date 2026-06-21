@@ -2,7 +2,7 @@
 
 > 数据模型、本地存储、上传通道
 
-## 2026-06-15 实现状态
+## 2026-06-21 实现状态
 
 - `ApmEventCodec` 提供有版本、限长、可逆的二进制持久化格式。
 - `PendingEventStore` 提供读取待上传行、成功确认删除、失败计数和队列长度接口。
@@ -60,6 +60,24 @@
 └──────────────┬───────────────┘
                │ 实现
 ┌──────────────▼───────────────┐
+│     SQLiteEventStore         │
+├──────────────────────────────┤
+│ - dbHelper: EventDbHelper    │
+│ - maxEvents: Int = 50_000    │
+│ - payload: ApmEventCodec     │
+│ - retry_count: Int           │
+├──────────────────────────────┤
+│ + append(event) @Synchronized│
+│   ├── 写入 priority / payload │
+│   └── 超过 maxEvents 时淘汰低优先级旧事件 │
+│ + readPending(limit)         │
+│   └── priority DESC, timestamp ASC │
+│ + deletePending(ids)         │
+│ + markRetry(ids)             │
+│ + pendingCount()             │
+└──────────────┬───────────────┘
+               │ 兼容实现
+┌──────────────▼───────────────┐
 │     FileEventStore           │
 ├──────────────────────────────┤
 │ - eventFile: File            │
@@ -76,6 +94,26 @@
 │ + readRecent(limit)          │
 │ + clear()  @Synchronized     │
 └──────────────────────────────┘
+```
+
+## SQLite 持久化出箱流程
+
+```
+append(event)
+    │
+    ├── priority = StoragePriorityMapper.priorityOf(event)
+    ├── payload = ApmEventCodec.encode(event)
+    ├── INSERT INTO events(...)
+    └── trimIfNeeded()
+        └── 超过 maxEvents 时按 priority ASC, timestamp ASC 淘汰
+
+PersistentUploadWorker
+    │
+    ├── readPending(batchSize)
+    │   └── priority DESC, timestamp ASC
+    ├── BatchApmUploader.uploadBatch(events)
+    ├── 成功：deletePending(ids)
+    └── 失败：markRetry(ids) + 指数退避后重试
 ```
 
 ## FileEventStore 流程

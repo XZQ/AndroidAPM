@@ -139,9 +139,14 @@ class ProcessEventCoordinator(
             val now = System.currentTimeMillis()
             for (file in files) {
                 try {
+                    val fileAgeMs = now - file.lastModified()
                     // 清理过期文件
-                    if (now - file.lastModified() > maxFileAgeMs) {
+                    if (fileAgeMs > maxFileAgeMs) {
                         file.delete()
+                        continue
+                    }
+                    // 跳过刚写入的文件，降低扫描线程读到半写入内容并删除文件的风险。
+                    if (fileAgeMs < MIN_CONSUMABLE_FILE_AGE_MS) {
                         continue
                     }
                     // 读取并消费每行事件
@@ -221,6 +226,8 @@ class ProcessEventCoordinator(
         private const val DEFAULT_MAX_LINES_PER_FILE = 100
         /** 文件最大保留时间：5 分钟。 */
         private const val DEFAULT_MAX_FILE_AGE_MS = 300_000L
+        /** Minimum age before a discovered IPC file is considered stable enough to consume. */
+        private const val MIN_CONSUMABLE_FILE_AGE_MS = 1_000L
         /** 写线程名。 */
         private const val THREAD_NAME_WRITE = "apm-ipc-write"
         /** 扫描线程名。 */

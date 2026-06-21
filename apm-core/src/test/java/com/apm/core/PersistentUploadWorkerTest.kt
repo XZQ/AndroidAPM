@@ -40,6 +40,59 @@ class PersistentUploadWorkerTest {
         assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
     }
 
+    /** Failed uploads keep rows durable and increment retry counters. */
+    @Test
+    fun `failed batch remains pending and is marked for retry`() {
+        val store = FakePendingStore(mutableListOf(PendingEvent(11L, event("kept"), 0)))
+        val attempted = CountDownLatch(1)
+        val uploader = FailingBatchUploader(attempted)
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = uploader,
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 10,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        worker.signal()
+        assertTrue(attempted.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.markedRetry.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        worker.shutdown()
+
+        assertEquals(listOf(11L), store.rows.map(PendingEvent::id))
+        assertEquals(listOf(1), store.rows.map(PendingEvent::retryCount))
+    }
+
+    /** Non-batch uploaders are invoked once per event and acknowledged as one durable batch. */
+    @Test
+    fun `single event uploader fallback deletes batch after all events succeed`() {
+        val store = FakePendingStore(
+            mutableListOf(
+                PendingEvent(21L, event("first"), 0),
+                PendingEvent(22L, event("second"), 0)
+            )
+        )
+        val uploaded = CountDownLatch(2)
+        val uploader = RecordingSingleUploader(uploaded)
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = uploader,
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 10,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        worker.signal()
+        assertTrue(uploaded.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.deleted.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        worker.shutdown()
+
+        assertEquals(listOf("first", "second"), uploader.names)
+        assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
+    }
+
     /**
      * Creates a test event.
      *
@@ -55,6 +108,9 @@ class PersistentUploadWorkerTest {
     ) : PendingEventStore {
         /** Acknowledgement signal. */
         val deleted = CountDownLatch(1)
+
+        /** Retry update signal. */
+        val markedRetry = CountDownLatch(1)
 
         /** Adds an event using a generated row id. */
         @Synchronized
@@ -91,6 +147,7 @@ class PersistentUploadWorkerTest {
             rows.replaceAll { row ->
                 if (row.id in ids) row.copy(retryCount = row.retryCount + 1) else row
             }
+            markedRetry.countDown()
         }
 
         /** Returns the current pending count. */
@@ -109,6 +166,34 @@ class PersistentUploadWorkerTest {
         /** Records and accepts a complete batch. */
         override fun uploadBatch(events: List<ApmEvent>): Boolean {
             names += events.map(ApmEvent::name)
+            uploaded.countDown()
+            return true
+        }
+    }
+
+    /** Batch uploader that rejects all work while recording the attempt. */
+    private class FailingBatchUploader(
+        /** Upload attempt signal. */
+        private val attempted: CountDownLatch
+    ) : BatchApmUploader {
+        /** Rejects the batch to exercise durable retry retention. */
+        override fun uploadBatch(events: List<ApmEvent>): Boolean {
+            attempted.countDown()
+            return false
+        }
+    }
+
+    /** Single-event uploader used to verify non-batch fallback behavior. */
+    private class RecordingSingleUploader(
+        /** Upload completion signal. */
+        private val uploaded: CountDownLatch
+    ) : com.apm.uploader.ApmUploader {
+        /** Names accepted by the uploader. */
+        val names = mutableListOf<String>()
+
+        /** Records and accepts one event. */
+        override fun upload(event: ApmEvent): Boolean {
+            names += event.name
             uploaded.countDown()
             return true
         }
