@@ -20,8 +20,8 @@ Read this file first, then follow the read order below.
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
 - Main source files: `121`
 - Test files: `57`
-- Recent verified HEAD: `9a41093 Docs: Sync hardened verification baseline`
-- Current workspace hardening: atomic IPC publish, critical-event IPC handoff, configurable HTTP Gzip, lazy FPS monitor creation, and 16KB native page alignment.
+- Recent implementation commit: `cd2a409 Refactor: Harden runtime delivery and native alignment`
+- Current hardening: atomic IPC publish, critical-event IPC handoff, configurable HTTP Gzip, lazy FPS monitor creation, and 16KB native page alignment.
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`

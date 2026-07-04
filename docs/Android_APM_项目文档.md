@@ -99,9 +99,10 @@
 
 ### 1.2 Git 提交历史
 
-> 当前已验证 HEAD：`9a41093 Docs: Sync hardened verification baseline`；当前工作区硬化改动已完成并通过 2026-07-04 全量验证，待提交后再同步新提交号。
+> 当前已验证实现提交：`cd2a409 Refactor: Harden runtime delivery and native alignment`。
 
 ```
+cd2a409 Refactor: Harden runtime delivery and native alignment
 20c1fbf Refactor: Harden build and durable delivery
 06eaab8 Docs: Sync verified publish commit
 7f165ea Build: Sync verification and memory API deps
