@@ -6,6 +6,7 @@ import com.apm.model.ApmSeverity
 import com.apm.uploader.HttpApmUploader
 import com.apm.uploader.LogcatApmUploader
 import com.apm.uploader.RetryingApmUploader
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -42,6 +43,35 @@ class UploaderFactoryTest {
         val uploader = UploaderFactory.create(config)
 
         assertTrue(uploader is HttpApmUploader)
+    }
+
+    /** 默认 HTTP uploader 应跟随 ApmConfig 开启 Gzip。 */
+    @Test
+    fun `http endpoint enables gzip by default`() {
+        val config = ApmConfig(
+            endpoint = "https://apm.example.com",
+            enableRetry = false
+        )
+
+        val uploader = UploaderFactory.create(config)
+
+        assertTrue(uploader is HttpApmUploader)
+        assertTrue(readGzipFlag(uploader as HttpApmUploader))
+    }
+
+    /** 默认 HTTP uploader 应允许显式关闭 Gzip。 */
+    @Test
+    fun `http endpoint can disable gzip`() {
+        val config = ApmConfig(
+            endpoint = "https://apm.example.com",
+            enableRetry = false,
+            enableHttpGzip = false
+        )
+
+        val uploader = UploaderFactory.create(config)
+
+        assertTrue(uploader is HttpApmUploader)
+        assertFalse(readGzipFlag(uploader as HttpApmUploader))
     }
 
     /** 空 endpoint 应回落到 Logcat uploader。 */
@@ -90,5 +120,17 @@ class UploaderFactoryTest {
             events += event
             return true
         }
+    }
+
+    /**
+     * Reads the private gzip flag for factory wiring verification.
+     *
+     * @param uploader HTTP uploader created by the factory
+     * @return configured gzip flag
+     */
+    private fun readGzipFlag(uploader: HttpApmUploader): Boolean {
+        val field = HttpApmUploader::class.java.getDeclaredField("enableGzip")
+        field.isAccessible = true
+        return field.getBoolean(uploader)
     }
 }

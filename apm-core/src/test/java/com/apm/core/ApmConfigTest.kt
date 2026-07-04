@@ -65,6 +65,13 @@ class ApmConfigTest {
         assertTrue(config.enableRetry)
     }
 
+    /** 默认 HTTP 上传开启 Gzip。 */
+    @Test
+    fun `default enableHttpGzip is true`() {
+        val config = ApmConfig()
+        assertTrue(config.enableHttpGzip)
+    }
+
     /** 自定义参数应正确覆盖。 */
     @Test
     fun `custom values override defaults`() {

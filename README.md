@@ -55,11 +55,11 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 - **灰度发布** — GrayReleaseController 支持按比例开启新模块
 - **动态配置** — DynamicConfigProvider 运行时调整阈值，无需发版
 - **可靠出箱** — 默认 SQLite 持久化，上传成功后确认删除，进程重启自动回放
-- **批量上传** — 单请求批量 + Gzip + 有界优先级队列 + 指数退避
+- **批量上传** — 单请求批量 + 默认开启且可配置的 Gzip + 有界优先级队列 + 指数退避
 - **关键事件落盘** — Crash 等关键事件支持同步持久化，不等待网络请求
 - **SDK 自监控** — 上报 emit/drop/queue/latency 健康指标，并支持自动降级
 - **ASM 插桩** — AGP instrumentation API + ASM 字节码级方法耗时采集
-- **Native Hook** — CMake 构建 libapm-io.so，运行时动态解析 xhook 实现 IO 拦截，缺失时自动降级
+- **Native Hook** — CMake 构建 libapm-io.so，运行时动态解析 xhook 实现 IO 拦截，JNI 目标按 16KB 页面链接对齐，缺失时自动降级
 - **Hprof 裁剪** — 二进制解析 + 原始数组剥离，大幅缩小 dump 文件
 
 ## 架构
@@ -198,6 +198,7 @@ Apm.register(MemoryModule(memoryConfig))
 // 全局限流配置
 val apmConfig = ApmConfig(
     endpoint = "https://apm.example.com/v1/events",
+    enableHttpGzip = true,
     rateLimitEventsPerWindow = 10,
     rateLimitWindowMs = 60_000L,
     enableRetry = true,
@@ -242,9 +243,9 @@ val okHttpClient = OkHttpClient.Builder()
 | 模块 | 包名 | 说明 |
 |------|------|------|
 | apm-model | 事件模型 | ApmEvent + Line Protocol 序列化 |
-| apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程/日志 |
+| apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程原子 IPC/日志 |
 | apm-storage | 本地存储 | SQLite 持久化出箱与确认删除 + File RingBuffer 兼容路径 |
-| apm-uploader | 上传通道 | HTTP 单请求批量/Gzip + Logcat + 有界重试队列 |
+| apm-uploader | 上传通道 | HTTP 单请求批量/可配置 Gzip + Logcat + 有界重试队列 |
 | apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
 | apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone |
 | apm-anr | ANR 监控 | Watchdog + 可选 SIGQUIT 回调 + traces.txt 解析 |
@@ -252,7 +253,7 @@ val okHttpClient = OkHttpClient.Builder()
 | apm-network | 网络监控 | OkHttp 全链路 (DNS→TCP→TLS→Body) |
 | apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
 | apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
-| apm-io | IO 监控 | Native PLT Hook + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
+| apm-io | IO 监控 | Native PLT Hook(16KB 页面链接对齐) + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
 | apm-battery | 电量监控 | 电量/CPU + WakeLock/GPS/Alarm 宿主回调 API |
 | apm-sqlite | SQLite 监控 | 慢查询 + QueryPlan 分析 |
 | apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |

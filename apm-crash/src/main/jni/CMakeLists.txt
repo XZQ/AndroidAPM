@@ -12,6 +12,9 @@ add_library(
     apm_crash_jni.c
 )
 
+# Android 15+ devices may use 16 KB pages; align load segments for compatibility.
+target_link_options(apm_crash PRIVATE "-Wl,-z,max-page-size=16384")
+
 # 链接 Android 日志库和动态链接库（用于 dladdr）
 find_library(log-lib log)
 target_link_libraries(

@@ -29,15 +29,14 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
     /** APM 上下文引用。 */
     private var apmContext: ApmContext? = null
 
-    /** FPS 监控器，核心帧率采集引擎。 */
-    private val fpsMonitor = FpsMonitor(config)
+    /** FPS 监控器，延迟到 Activity 主线程回调中创建，避免后台线程构造 Choreographer。 */
+    private var fpsMonitor: FpsMonitor? = null
 
     /** 当前前台 Activity 类名，用于场景标注。 */
     private var currentScene: String = ""
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
-        fpsMonitor.onFrameStats = { stats -> onFrameStats(stats) }
     }
 
     /** 注册 Activity 生命周期回调，用于场景感知。 */
@@ -49,7 +48,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
 
     /** 注销回调并停止监控。 */
     override fun onStop() {
-        fpsMonitor.stop()
+        fpsMonitor?.stop()
         apmContext?.application?.unregisterActivityLifecycleCallbacks(this)
     }
 
@@ -59,11 +58,12 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
      */
     override fun onActivityResumed(activity: Activity) {
         currentScene = activity.javaClass.simpleName
+        val monitor = getOrCreateMonitor()
         // 获取设备刷新率并设置到 FpsMonitor
-        updateRefreshRate(activity)
+        updateRefreshRate(activity, monitor)
         // 绑定 Window 用于 FrameMetrics（API 24+）
-        fpsMonitor.bindWindow(activity.window)
-        fpsMonitor.start()
+        monitor.bindWindow(activity.window)
+        monitor.start()
     }
 
     /**
@@ -71,7 +71,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
      * 避免后台采集浪费资源。
      */
     override fun onActivityPaused(activity: Activity) {
-        fpsMonitor.stop()
+        fpsMonitor?.stop()
     }
 
     // 空实现的回调
@@ -85,7 +85,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
      * 获取设备刷新率并设置到 FpsMonitor。
      * 支持 60Hz/90Hz/120Hz/144Hz 等不同刷新率设备。
      */
-    private fun updateRefreshRate(activity: Activity) {
+    private fun updateRefreshRate(activity: Activity, monitor: FpsMonitor) {
         try {
             val display = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
                 activity.display
@@ -93,7 +93,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
                 @Suppress("DEPRECATION")
                 activity.windowManager.defaultDisplay
             }
-            display?.let { refreshRateFromDisplay(it) }
+            display?.let { refreshRateFromDisplay(it, monitor) }
         } catch (_: Exception) {
             // 获取刷新率失败，使用默认 60Hz
         }
@@ -101,11 +101,29 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
 
     /**
      * 从 Display 对象提取刷新率。
+     *
+     * @param display 当前 Activity 绑定的 Display
+     * @param monitor 当前 FPS 监控器
      */
-    private fun refreshRateFromDisplay(display: Display) {
+    private fun refreshRateFromDisplay(display: Display, monitor: FpsMonitor) {
         val rate = display.refreshRate
-        fpsMonitor.setRefreshRate(rate)
+        monitor.setRefreshRate(rate)
         apmContext?.logger?.d("Display refresh rate: ${rate}Hz")
+    }
+
+    /**
+     * 获取或创建 FPS 监控器。
+     *
+     * @return 绑定帧统计回调后的监控器
+     */
+    private fun getOrCreateMonitor(): FpsMonitor {
+        fpsMonitor?.let { return it }
+        // Activity lifecycle callback is delivered on the main thread, where Choreographer is available.
+        val created = FpsMonitor(config).apply {
+            onFrameStats = { stats -> onFrameStats(stats) }
+        }
+        fpsMonitor = created
+        return created
     }
 
     /**

@@ -41,4 +41,18 @@ class ApmContext internal constructor(
             dispatcher.dispatch(event)
         }
     }
+
+    /**
+     * Synchronously persists or publishes a critical event.
+     *
+     * @param event 已构造完成的 critical 事件
+     * @return true when the event reached the durable local hand-off point
+     */
+    fun emitCriticalSync(event: ApmEvent): Boolean {
+        return if (processCoordinator != null && !isUploaderProcess) {
+            processCoordinator.writeEventSync(event)
+        } else {
+            dispatcher.dispatchCriticalSync(event)
+        }
+    }
 }

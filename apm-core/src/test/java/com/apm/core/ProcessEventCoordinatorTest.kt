@@ -1,7 +1,10 @@
 package com.apm.core
 
+import com.apm.model.ApmEvent
 import org.junit.Assert.*
 import org.junit.Test
+import java.io.File
+import kotlin.io.path.createTempDirectory
 
 /**
  * ProcessEventCoordinator 和 ProcessSessionId 单元测试。
@@ -33,5 +36,76 @@ class ProcessEventCoordinatorTest {
         assertTrue("Should contain underscore separator", underscoreIdx > 0)
         val prefix = sessionId.substring(0, underscoreIdx)
         assertTrue("Prefix should be numeric", prefix.toLongOrNull() != null)
+    }
+
+    /** 同步 IPC 写入应只发布完整的 .ipc 文件，不暴露临时文件给扫描端。 */
+    @Test
+    fun `sync write atomically publishes ready ipc file`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-test").toFile()
+        try {
+            val coordinator = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            coordinator.start()
+
+            assertTrue(coordinator.writeEventSync(ApmEvent(module = "ipc", name = "critical")))
+
+            val readyFiles = dir.listFilesByExtension(READY_EXTENSION)
+            val tempFiles = dir.listFilesByExtension(TEMP_EXTENSION)
+            assertEquals(1, readyFiles.size)
+            assertEquals(0, tempFiles.size)
+            coordinator.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** 上传进程扫描应消费已发布事件并删除 ready 文件。 */
+    @Test
+    fun `scanner consumes published ipc file and deletes it`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-consume-test").toFile()
+        try {
+            val writer = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            writer.start()
+            assertTrue(writer.writeEventSync(ApmEvent(module = "ipc", name = "remote_metric")))
+            writer.stop()
+
+            val received = mutableListOf<ApmEvent>()
+            val scanner = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = true,
+                scanIntervalMs = LONG_SCAN_INTERVAL_MS
+            )
+            scanner.onRemoteEvent = { event -> received += event }
+            scanner.start()
+            scanner.scanAndConsumeNow()
+
+            assertEquals(1, received.size)
+            assertEquals("remote_metric", received.single().name)
+            assertEquals("remote_process", received.single().extras["ipc_source"])
+            assertEquals(0, dir.listFilesByExtension(READY_EXTENSION).size)
+            scanner.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * Lists files by extension.
+     *
+     * @param extension expected file extension
+     * @return matching files or an empty array
+     */
+    private fun File.listFilesByExtension(extension: String): Array<File> {
+        return listFiles { file -> file.name.endsWith(extension) } ?: emptyArray()
+    }
+
+    companion object {
+        /** Ready IPC file extension. */
+        private const val READY_EXTENSION = ".ipc"
+
+        /** Temporary IPC file extension. */
+        private const val TEMP_EXTENSION = ".tmp"
+
+        /** Long scan interval so tests can trigger scanning explicitly. */
+        private const val LONG_SCAN_INTERVAL_MS = 60_000L
     }
 }

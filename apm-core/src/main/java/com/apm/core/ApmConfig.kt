@@ -103,7 +103,9 @@ data class ApmConfig(
     /** Enables automatic module throttling when SDK health degrades. */
     val enableAutoThrottle: Boolean = true,
     /** Enables file-based cross-process event forwarding. */
-    val enableMultiProcessCoordination: Boolean = false
+    val enableMultiProcessCoordination: Boolean = false,
+    /** 默认 HTTP uploader 是否启用 Gzip 压缩。 */
+    val enableHttpGzip: Boolean = true
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */

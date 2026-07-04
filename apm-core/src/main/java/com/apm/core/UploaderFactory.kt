@@ -64,6 +64,7 @@ internal object UploaderFactory {
         return if (endpoint.startsWith(HTTP_PREFIX) || endpoint.startsWith(HTTPS_PREFIX)) {
             HttpApmUploader(
                 endpoint = endpoint,
+                enableGzip = config.enableHttpGzip,
                 serializationFormat = config.serializationFormat
             )
         } else {

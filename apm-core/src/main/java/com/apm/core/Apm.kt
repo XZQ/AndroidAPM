@@ -265,7 +265,7 @@ object Apm {
         val event = buildEvent(
             currentState, module, name, kind, severity, priority, scene, foreground, fields, extras
         )
-        return currentState.dispatcher.dispatchCriticalSync(event)
+        return currentState.context.emitCriticalSync(event)
     }
 
     /**

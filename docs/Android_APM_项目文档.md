@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-06-21 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
+> 最后校验：2026-07-04 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -95,11 +95,11 @@
 | Phase 9: 生产级存储 | 已完成 | SQLite 50K 存储 + 优先级队列 + 多进程协调 + SDK 自监控 |
 | Phase 10: Trace API | 已完成 | apm-trace 手动埋点 Span/Trace API |
 | Phase 11: OTel 对接 | 已完成 | apm-otel-exporter 提供无 SDK 依赖的 Span/Metric/Log 映射结果；网络发送由宿主适配层负责 |
-| Phase 12: 工程硬化 | 已完成 | 架构文档同步 SQLite 出箱路径、发布配置去除 afterEvaluate、持久化 worker 失败/回退测试、IPC 文件消费稳定窗口 |
+| Phase 12: 工程硬化 | 已完成 | SQLite 出箱路径、发布配置去除 afterEvaluate、持久化 worker 失败/回退测试、IPC 原子发布与 critical 跨进程交接、HTTP Gzip 配置、FPS 懒初始化、Native 16KB 页面对齐 |
 
 ### 1.2 Git 提交历史
 
-> 当前已验证实现提交：`20c1fbf Refactor: Harden build and durable delivery`。
+> 当前已验证 HEAD：`9a41093 Docs: Sync hardened verification baseline`；当前工作区硬化改动已完成并通过 2026-07-04 全量验证，待提交后再同步新提交号。
 
 ```
 20c1fbf Refactor: Harden build and durable delivery
@@ -150,7 +150,12 @@ de499c6 Refactor: Align slow method plugin extension
 26. `apm-memory` 已将 Lifecycle 与 Fragment 依赖作为 Maven API 依赖发布，保证 `MemoryModule` 暴露的 `DefaultLifecycleObserver` 父类型和 `checkViewModel(ViewModel)` 签名可被下游直接解析。
 27. 根 Gradle 发布配置已改为跟随 `components` 注册 release/java publication，不再依赖 `afterEvaluate`。
 28. `PersistentUploadWorkerTest` 已覆盖成功确认删除、失败保留并递增 `retry_count`、非批量 uploader 逐条 fallback 后统一确认删除。
-29. `ProcessEventCoordinator` 扫描 IPC 文件时会跳过刚写入的文件，降低上传进程读到半写入内容后删除文件的风险。
+29. `ProcessEventCoordinator` 已从“稳定窗口跳过新文件”升级为 `.tmp` 写入、`.ipc` 发布的原子交接模型。
+30. IPC 每个发布文件保存一条可逆事件 payload，扫描端只消费 ready 文件，避免删除仍在写入的活跃 IPC 文件。
+31. `Apm.emitCriticalSync()` 在非上传进程会同步交给 IPC 文件通道，Crash 等关键事件不再绕过多进程协调。
+32. `ApmConfig.enableHttpGzip` 控制默认 HTTP endpoint uploader 的 Gzip 行为，默认开启且可显式关闭。
+33. `FpsModule` 延迟到 Activity 生命周期主线程创建 `FpsMonitor`，避免后台或非主线程提前触发 `Choreographer.getInstance()`。
+34. `apm-io`、`apm-crash`、`apm-memory` JNI CMake 目标已添加 16KB page-size linker alignment，避免发布物触发 Android 16KB 页面兼容 lint 告警。
 
 ### 1.4 2026-06-15 全量优化摘要
 
@@ -398,7 +403,7 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 |------|---------|---------|
 | apm-model | ApmEventTest | Line Protocol 序列化 |
 | apm-core | RateLimiterTest, GrayReleaseControllerTest | 令牌桶限流、灰度与动态配置 |
-| apm-core | ApmConfigTest, ApmDispatcherTest, PersistentUploadWorkerTest | 配置默认值、分发/脱敏/丢弃、持久化出箱确认与失败重试 |
+| apm-core | ApmConfigTest, ApmDispatcherTest, PersistentUploadWorkerTest, ProcessEventCoordinatorTest, UploaderFactoryTest | 配置默认值、分发/脱敏/丢弃、持久化出箱确认与失败重试、IPC 原子发布、HTTP Gzip 默认与关闭路径 |
 | apm-uploader | RetryPolicyTest | 重试策略 |
 | apm-memory | MemoryConfigTest | 配置验证 |
 | apm-crash | CrashConfigTest | 配置验证 |
@@ -472,4 +477,4 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 | 测试文件 | 57 |
 | 总代码行数 | ~12000+ |
 | 编译结果 | `assembleDebug` / `assembleRelease` 通过 |
-| 测试结果 | `testDebugUnitTest` + `./gradlew -p apm-plugin test` + `lintDebug` + Maven 发布与独立消费验证通过（2026-06-21） |
+| 测试结果 | `testDebugUnitTest` + `./gradlew -p apm-plugin test` + `lintDebug` + Maven 发布与独立消费验证通过（2026-07-04） |

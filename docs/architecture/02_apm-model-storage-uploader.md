@@ -2,12 +2,13 @@
 
 > 数据模型、本地存储、上传通道
 
-## 2026-06-21 实现状态
+## 2026-07-04 实现状态
 
 - `ApmEventCodec` 提供有版本、限长、可逆的二进制持久化格式。
 - `PendingEventStore` 提供读取待上传行、成功确认删除、失败计数和队列长度接口。
 - `SQLiteEventStore` 使用 schema v2 保存 payload，并按事件优先级与时间读取；损坏行会被隔离删除。
 - `BatchApmUploader` 明确批量传输契约；`HttpApmUploader` 一批只发一个请求并支持正确的 Gzip header/body。
+- 默认 endpoint HTTP uploader 通过 `ApmConfig.enableHttpGzip` 控制压缩，默认开启，可在集成侧显式关闭。
 - `RetryingApmUploader` 使用硬容量和优先级淘汰，关闭时有界排空。
 - 默认 SQLite 路径不会再套一层内存重试队列，避免重复缓冲和“已入队即当作上传成功”。
 
@@ -175,6 +176,8 @@ append(event)
                  │  base × backoff^n│
                  └──────────────────┘
 ```
+
+`HttpApmUploader` 是默认 HTTP endpoint 路径的批量实现：一批事件写入一次请求，`enableHttpGzip=true` 时在输出 body 前设置 `Content-Encoding: gzip` 并压缩 payload。
 
 ## 上传重试流程
 

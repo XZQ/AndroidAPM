@@ -2,10 +2,11 @@
 
 > FPS 监控：Choreographer VSync + FrameMetrics + 掉帧/卡顿/冻结分级
 
-## 2026-06-15 实现状态
+## 2026-07-04 实现状态
 
 - FPS 使用窗口内实际累计帧间隔计算，不再用理论窗口时长估算。
 - 刷新率输入会校验，布局/测量耗时统一限制为非负值。
+- `FpsMonitor` 延迟到 Activity resumed 生命周期主线程创建，避免模块构造阶段提前访问 `Choreographer`。
 
 ---
 
@@ -18,13 +19,13 @@
 ├──────────────────────────────────────────────┤
 │ - apmContext: ApmContext?                     │
 │ - config: FpsConfig                          │
-│ - fpsMonitor: FpsMonitor                     │
+│ - fpsMonitor: FpsMonitor?                    │
 │ - currentScene: String                       │
 ├──────────────────────────────────────────────┤
 │ + onInitialize(context)                      │
 │ + onStart() / onStop()                       │
 │ + onActivityResumed(activity)                │
-│   └── updateRefreshRate + bindWindow         │
+│   └── getOrCreateMonitor + updateRefreshRate + bindWindow │
 │ + onActivityPaused(activity)                 │
 │   └── unbindWindow + reportAndReset          │
 │ + onFrameStats(stats: FrameStats)            │
