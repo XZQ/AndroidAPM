@@ -1,7 +1,7 @@
 # CLAUDE.md — Android APM Project
 
 ## 接手与读取
-接手时按序读取：`AGENTS.md` → `docs/Android_APM_项目文档.md` → `README.md` → `docs/architecture/00_整体架构.md` → 目标模块文档。
+接手时按序读取：`AGENTS.md` → `docs/Android_APM_项目文档.md` → `docs/PROJECT_HANDOFF.md` → `README.md` → `docs/architecture/00_整体架构.md` → 目标模块文档。
 状态以仓库内文档为准，不以模型记忆为准。修改前先读对应 `docs/architecture/` 文档。
 
 ## 编码规范（强制，所有文件）

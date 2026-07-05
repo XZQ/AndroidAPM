@@ -8,19 +8,22 @@ Read this file first, then follow the read order below.
 ## Read Order
 
 1. `docs/Android_APM_项目文档.md`
-2. `README.md`
-3. `CLAUDE.md`
-4. `docs/architecture/00_整体架构.md`
-5. The specific module doc under `docs/architecture/` you are about to change
+2. `docs/PROJECT_HANDOFF.md`
+3. `README.md`
+4. `CLAUDE.md`
+5. `docs/architecture/00_整体架构.md`
+6. The specific module doc under `docs/architecture/` you are about to change
 
 ## Current Verified Baseline
 
 - Verification date: `2026-07-04`
+- Documentation handoff snapshot: `2026-07-06`
 - Build units: `23`
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
 - Main source files: `121`
 - Test files: `57`
 - Recent implementation commit: `cd2a409 Refactor: Harden runtime delivery and native alignment`
+- Previous documentation baseline commit: `a7b2a0a Docs: Sync runtime hardening commit`
 - Current hardening: atomic IPC publish, critical-event IPC handoff, configurable HTTP Gzip, lazy FPS monitor creation, and 16KB native page alignment.
 - Verified commands:
   - `./gradlew assembleDebug`
@@ -35,6 +38,7 @@ Read this file first, then follow the read order below.
 ## Important Reality Check
 
 - `README.md` is the product intro, but volatile project status belongs in `docs/Android_APM_项目文档.md`.
+- `docs/PROJECT_HANDOFF.md` is the portable handoff snapshot for changing computers or agents.
 - `CLAUDE.md` contains coding and commit constraints that should be treated as project rules, not Claude-only suggestions.
 - The old Claude workflow referenced an external private memory file outside the repository. That is not a reliable cross-model source of truth.
 - The repository-local source of truth for current status is `docs/Android_APM_项目文档.md`.
@@ -71,6 +75,7 @@ Read this file first, then follow the read order below.
 ## First Actions For A New Agent
 
 1. Read `docs/Android_APM_项目文档.md` for the latest verified state.
-2. Check `git status --short --branch` and `git log --oneline -n 10`.
-3. If task-specific, open the matching module and architecture doc before editing.
-4. Before finishing, sync the repository-local status docs.
+2. Read `docs/PROJECT_HANDOFF.md` for the current handoff summary and future work list.
+3. Check `git status --short --branch` and `git log --oneline -n 10`.
+4. If task-specific, open the matching module and architecture doc before editing.
+5. Before finishing, sync the repository-local status docs.

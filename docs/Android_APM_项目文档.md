@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 最后校验：2026-07-04 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
+> 最后校验：2026-07-04 | 交接快照：2026-07-06 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
 > 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
 
@@ -11,6 +11,15 @@
 ### 项目是什么
 
 一个 Android 应用性能监控（APM）框架，对标微信 Matrix + 快手 KOOM + Google 最佳实践，当前代码覆盖内存、崩溃、ANR、启动、网络、FPS、慢方法、IO、电量、SQLite、WebView、IPC、线程、GC、渲染共 **15 个监控模块**。
+
+### 换电脑接手入口
+
+- 当前便携交接快照：`docs/PROJECT_HANDOFF.md`
+- 仓库事实源：`AGENTS.md` + 本文档
+- 当前 GitHub 分支：`develop`
+- 交接整理前已推送 HEAD：`a7b2a0a Docs: Sync runtime hardening commit`
+- 最近已验证实现提交：`cd2a409 Refactor: Harden runtime delivery and native alignment`
+- 当前本地允许存在未跟踪 `.claude/` 目录；它是本机私有状态，不属于项目交付范围。
 
 ### 环境要求
 
@@ -100,8 +109,10 @@
 ### 1.2 Git 提交历史
 
 > 当前已验证实现提交：`cd2a409 Refactor: Harden runtime delivery and native alignment`。
+> 交接整理前文档记录提交：`a7b2a0a Docs: Sync runtime hardening commit`。
 
 ```
+a7b2a0a Docs: Sync runtime hardening commit
 cd2a409 Refactor: Harden runtime delivery and native alignment
 20c1fbf Refactor: Harden build and durable delivery
 06eaab8 Docs: Sync verified publish commit
@@ -435,9 +446,9 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 
 ---
 
-## 八、待完善项
+## 八、完成项与后续路线
 
-### 8.1 全部已完成
+### 8.1 已完成能力
 
 | 功能 | 状态 | 说明 |
 |------|------|------|
@@ -453,6 +464,19 @@ apm-plugin（独立 Gradle included build，编译期使用，不参与运行时
 | 零拷贝检测 | 已完成 | NativeIoHook CopyChain 追踪 + 平均 buffer 数阈值检测 + 零拷贝优化建议上报（FileChannel.transferTo/sendfile） |
 | Native Crash JNI 库 | 已完成 | apm_crash_jni.c 完整实现：sigaction 注册 + 安全重抛默认路径 + 可选 unsafe 回调 + JNI_OnLoad 缓存 + CMakeLists.txt |
 | Fork dump JNI 库 | 已完成 | apm_dumper_jni.c 完整实现：fork 子进程 + Debug.dumpHprofData JNI 调用 + 子进程失败状态回传 + CMakeLists.txt |
+
+### 8.2 后续增强项（非当前交付阻塞）
+
+| 优先级 | 事项 | 当前状态 | 下一步 |
+|--------|------|----------|--------|
+| P1 | 生产端接收与后台 | SDK 已提供 HTTP uploader、自定义 uploader、OTel 语义映射；仓库内没有生产 APM 后台服务 | 接入真实 collector、鉴权、租户、指标查询和告警后台 |
+| P1 | 并发 durable upload lease | 当前 durable worker 是单 worker 模型，测试覆盖成功/失败/fallback；未设计多 worker 抢占锁 | 引入多 worker 或跨进程上传前，先增加 batch claim/lease/expire 机制 |
+| P2 | 真机长稳与性能压测 | 已通过本地 Gradle/JVM/lint/release/publish/smoke；未记录长时间真机 soak 测试 | 在样机上跑前后台、崩溃、ANR、网络、IO、FPS 长稳脚本并沉淀报告 |
+| P2 | 渲染过度绘制检测 | `apm-render` 已做 View 数量/层级检测，过度绘制仍列入 Roadmap | 设计 GPU overdraw 或 FrameMetrics 相关采样方案 |
+| P2 | Native 符号化与 tombstone 管线 | Native crash 安全重抛和 tombstone 扫描已完成；线上符号化服务不在仓库内 | 建立符号表上传、tombstone 解析、后台聚合链路 |
+| P2 | 外部 Maven 发布 | `publishToMavenLocal` 和 smoke consumer 已验证；未发布到 Maven Central/私有制品库 | 补签名、坐标、仓库凭据和发布流水线 |
+| P3 | 文档二进制产物刷新 | Markdown 是事实源；`docs/*.docx`、`docs/记录.zip`、`docs/绘制.jpeg` 是历史/展示产物 | 需要对外交付时再从 Markdown 生成或人工刷新二进制文档 |
+| P3 | CI 云端验证 | 本地完整验证已通过；是否有云端 CI 不是当前基线的一部分 | 若启用 GitHub Actions，复用本地验证链并缓存 Gradle/Android SDK |
 
 ---
 

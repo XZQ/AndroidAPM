@@ -8,6 +8,7 @@
 
 | 文件 | 内容 |
 |------|------|
+| [../PROJECT_HANDOFF.md](../PROJECT_HANDOFF.md) | 当前项目交接快照、验证基线、真实未完成项、新电脑接手步骤 |
 | [00_整体架构.md](00_整体架构.md) | 系统全景架构、模块依赖图、事件流程、线程模型、数据模型、限流灰度架构 |
 | [01_apm-core.md](01_apm-core.md) | 核心框架层：Apm入口、ApmModule接口、ApmDispatcher分发器、RateLimiter限流、灰度控制 |
 | [02_apm-model-storage-uploader.md](02_apm-model-storage-uploader.md) | 数据模型、SQLite 持久化 outbox、FileStore、批量/Gzip/重试上传 |
@@ -50,6 +51,7 @@
 
 ## 如何阅读
 
-1. 先读 `00_整体架构.md` 了解全局
-2. 按 `01→17` 顺序阅读各模块
-3. 每个模块文档独立完整，可单独阅读
+1. 先读 `../PROJECT_HANDOFF.md` 确认当前进度、未完成项和验证基线
+2. 再读 `00_整体架构.md` 了解全局
+3. 按 `01→19` 顺序阅读各模块
+4. 每个模块文档独立完整，可单独阅读
