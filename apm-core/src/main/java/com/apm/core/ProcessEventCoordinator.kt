@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Base64
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventCodec
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileWriter
 import java.util.concurrent.Executors
@@ -20,7 +19,9 @@ import java.util.concurrent.atomic.AtomicLong
  * - 上传进程定期扫描并消费已发布的 IPC 文件
  *
  * 文件命名：apm-ipc-{sessionId}-{sequence}.ipc
- * 每个发布文件保存一条 Base64 包裹的可逆事件 payload。
+ * 每个发布文件保存至多 [maxLinesPerFile] 行 Base64 包裹的可逆事件 payload：
+ * 普通事件先进入短暂缓冲，按行数或 [WRITE_FLUSH_DELAY_MS] 定时合批发布，
+ * 大幅减少高频子进程事件的文件数与扫描开销；critical 事件立即单文件发布。
  *
  * 线程安全：普通写操作使用单线程执行器串行化，critical 写操作可同步发布。
  */
@@ -31,7 +32,7 @@ class ProcessEventCoordinator internal constructor(
     private val isUploaderProcess: Boolean,
     /** IPC 文件扫描间隔（毫秒）。 */
     private val scanIntervalMs: Long = DEFAULT_SCAN_INTERVAL_MS,
-    /** 单个 IPC 文件最大行数，保留为二进制兼容参数；当前实现每个发布文件一条事件。 */
+    /** 单个 IPC 文件最大行数：缓冲达到该行数立即合批发布。 */
     private val maxLinesPerFile: Int = DEFAULT_MAX_LINES_PER_FILE,
     /** IPC 文件最大保留时间（毫秒），过期清理。 */
     private val maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS
@@ -42,7 +43,7 @@ class ProcessEventCoordinator internal constructor(
      * @param context 应用上下文，用于获取共享文件目录
      * @param isUploaderProcess 当前进程是否为上传进程
      * @param scanIntervalMs IPC 文件扫描间隔（毫秒）
-     * @param maxLinesPerFile 保留兼容参数；当前每个发布文件一条事件
+     * @param maxLinesPerFile 单个 IPC 文件最大行数（合批阈值）
      * @param maxFileAgeMs IPC 文件最大保留时间（毫秒）
      */
     constructor(
@@ -73,6 +74,15 @@ class ProcessEventCoordinator internal constructor(
     /** 是否已启动。 */
     @Volatile
     private var started = false
+
+    /** 待发布事件缓冲（合批用），由 [pendingLock] 保护。 */
+    private val pendingEvents = ArrayList<ApmEvent>()
+
+    /** 缓冲访问锁。 */
+    private val pendingLock = Any()
+
+    /** 是否已调度延迟 flush（由 [pendingLock] 保护）。 */
+    private var flushScheduled = false
 
     init {
         // 确保显式目录构造器和 Context 构造器都拥有可写目录。
@@ -113,14 +123,76 @@ class ProcessEventCoordinator internal constructor(
 
         writeExecutor.execute {
             try {
-                // 先写临时文件再发布，避免上传进程读到半写入内容。
-                publishEventFile(event)
+                // 进入合批缓冲：按行数阈值或定时器触发批量发布
+                bufferEvent(event)
             } catch (e: Exception) {
                 // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
                 Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
             }
         }
     }
+
+    /**
+     * 把事件放入合批缓冲。
+     * 达到 [maxLinesPerFile] 行立即发布；否则调度一次延迟 flush 兜底。
+     *
+     * @param event 待发布事件
+     */
+    private fun bufferEvent(event: ApmEvent) {
+        val shouldFlushNow: Boolean
+        synchronized(pendingLock) {
+            pendingEvents.add(event)
+            shouldFlushNow = pendingEvents.size >= maxLinesPerFile
+            // 未达到行数阈值时安排定时 flush，保证低频事件的发布延迟有上界
+            if (!shouldFlushNow && !flushScheduled) {
+                flushScheduled = true
+                writeExecutor.schedule(
+                    { flushPendingEvents() },
+                    WRITE_FLUSH_DELAY_MS,
+                    TimeUnit.MILLISECONDS
+                )
+            }
+        }
+        if (shouldFlushNow) {
+            flushPendingEvents()
+        }
+    }
+
+    /**
+     * 把缓冲中的事件合批发布为一个 IPC 文件。
+     * 缓冲为空时为 no-op；发布失败记入自监控。
+     */
+    private fun flushPendingEvents() {
+        val batch: List<ApmEvent>
+        synchronized(pendingLock) {
+            flushScheduled = false
+            if (pendingEvents.isEmpty()) return
+            batch = ArrayList(pendingEvents)
+            pendingEvents.clear()
+        }
+        try {
+            publishBatchFile(batch)
+        } catch (e: Exception) {
+            // 发布失败丢弃该批（IPC 尽力而为），记入自监控
+            Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
+        }
+    }
+
+    /**
+     * 立即执行一次合批发布。
+     * 供测试和受控调用方使用，不等待定时器。
+     */
+    internal fun flushPendingNow() {
+        flushPendingEvents()
+    }
+
+    /**
+     * 当前缓冲中待发布的事件数。
+     * 供测试观测写线程的消化进度。
+     *
+     * @return 缓冲事件数
+     */
+    internal fun pendingBufferSize(): Int = synchronized(pendingLock) { pendingEvents.size }
 
     /**
      * 同步发布 critical 事件到 IPC 文件。
@@ -131,24 +203,27 @@ class ProcessEventCoordinator internal constructor(
     fun writeEventSync(event: ApmEvent): Boolean {
         if (isUploaderProcess) return false
         if (!started) return false
-        return runCatching { publishEventFile(event) }.getOrDefault(false)
+        // critical 事件不进缓冲，立即单文件发布保证可见性
+        return runCatching { publishBatchFile(listOf(event)) }.getOrDefault(false)
     }
 
     /**
-     * 将事件写入临时文件并原子发布为可消费文件。
+     * 将一批事件写入临时文件并原子发布为可消费文件（每事件一行）。
      *
-     * @param event 待发布事件
+     * @param events 待发布事件批次
      * @return true 表示发布成功
      */
-    private fun publishEventFile(event: ApmEvent): Boolean {
-        val line = encodePayload(ApmEventCodec.encode(event))
+    private fun publishBatchFile(events: List<ApmEvent>): Boolean {
+        if (events.isEmpty()) return true
         val fileStem = nextFileStem()
         val tempFile = File(ipcDir, "$fileStem$IPC_TEMP_EXTENSION")
         val readyFile = File(ipcDir, "$fileStem$IPC_FILE_EXTENSION")
         // 临时文件使用独占名称；写完后才让扫描端看到 .ipc。
         FileWriter(tempFile, false).use { writer ->
-            writer.append(line)
-            writer.append('\n')
+            for (event in events) {
+                writer.append(encodePayload(ApmEventCodec.encode(event)))
+                writer.append('\n')
+            }
         }
         return if (tempFile.renameTo(readyFile)) {
             true
@@ -298,64 +373,25 @@ class ProcessEventCoordinator internal constructor(
 
     /**
      * Encodes bytes with standard Base64 without line wrapping.
+     * 仅 JVM 单元测试路径可达（设备上 android.util.Base64 恒可用），
+     * 直接复用 java.util.Base64 替代此前手写的编码实现。
      *
      * @param payload binary event payload
      * @return Base64 text
      */
     private fun encodePayloadFallback(payload: ByteArray): String {
-        val encoded = StringBuilder((payload.size + BASE64_GROUP_PADDING) / BASE64_GROUP_SIZE * BASE64_BLOCK_SIZE)
-        var index = 0
-        while (index < payload.size) {
-            val first = payload[index++].toInt() and BYTE_MASK
-            val hasSecond = index < payload.size
-            val second = if (hasSecond) payload[index++].toInt() and BYTE_MASK else 0
-            val hasThird = index < payload.size
-            val third = if (hasThird) payload[index++].toInt() and BYTE_MASK else 0
-            encoded.append(BASE64_ALPHABET[first ushr FIRST_SHIFT])
-            encoded.append(BASE64_ALPHABET[((first and FIRST_REMAINDER_MASK) shl SECOND_SHIFT) or (second ushr SECOND_RIGHT_SHIFT)])
-            encoded.append(if (hasSecond) BASE64_ALPHABET[((second and SECOND_REMAINDER_MASK) shl THIRD_SHIFT) or (third ushr THIRD_RIGHT_SHIFT)] else BASE64_PADDING)
-            encoded.append(if (hasThird) BASE64_ALPHABET[third and THIRD_REMAINDER_MASK] else BASE64_PADDING)
-        }
-        return encoded.toString()
+        return java.util.Base64.getEncoder().encodeToString(payload)
     }
 
     /**
      * Decodes standard Base64 text without line wrapping.
+     * 仅 JVM 单元测试路径可达，复用 java.util.Base64。
      *
      * @param line Base64 text
      * @return decoded bytes
      */
     private fun decodePayloadFallback(line: String): ByteArray {
-        val output = ByteArrayOutputStream(line.length / BASE64_BLOCK_SIZE * BASE64_GROUP_SIZE)
-        var index = 0
-        while (index < line.length) {
-            val first = decodeBase64Char(line[index++])
-            val second = decodeBase64Char(line[index++])
-            val thirdChar = line[index++]
-            val fourthChar = line[index++]
-            val third = if (thirdChar == BASE64_PADDING) 0 else decodeBase64Char(thirdChar)
-            val fourth = if (fourthChar == BASE64_PADDING) 0 else decodeBase64Char(fourthChar)
-            output.write((first shl FIRST_SHIFT) or (second ushr SECOND_SHIFT))
-            if (thirdChar != BASE64_PADDING) {
-                output.write(((second and SECOND_REMAINDER_MASK) shl SECOND_RIGHT_SHIFT) or (third ushr THIRD_SHIFT))
-            }
-            if (fourthChar != BASE64_PADDING) {
-                output.write(((third and FIRST_REMAINDER_MASK) shl THIRD_RIGHT_SHIFT) or fourth)
-            }
-        }
-        return output.toByteArray()
-    }
-
-    /**
-     * Converts one Base64 character to its numeric value.
-     *
-     * @param char encoded character
-     * @return numeric value from 0 to 63
-     */
-    private fun decodeBase64Char(char: Char): Int {
-        val index = BASE64_ALPHABET.indexOf(char)
-        require(index >= 0) { "Invalid Base64 character: $char" }
-        return index
+        return java.util.Base64.getDecoder().decode(line)
     }
 
     /**
@@ -363,6 +399,8 @@ class ProcessEventCoordinator internal constructor(
      */
     fun stop() {
         started = false
+        // 关闭前提交最终 flush，避免缓冲中的事件丢失
+        runCatching { writeExecutor.execute { flushPendingEvents() } }
         writeExecutor.shutdown()
         scanExecutor?.shutdown()
         try {
@@ -398,36 +436,10 @@ class ProcessEventCoordinator internal constructor(
         private const val IPC_FILE_EXTENSION = ".ipc"
         /** 临时文件扩展名。 */
         private const val IPC_TEMP_EXTENSION = ".tmp"
-        /** Standard Base64 alphabet. */
-        private const val BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-        /** Standard Base64 padding character. */
-        private const val BASE64_PADDING = '='
-        /** Bit mask for one byte. */
-        private const val BYTE_MASK = 0xFF
-        /** Number of source bytes in one Base64 group. */
-        private const val BASE64_GROUP_SIZE = 3
-        /** Padding used to pre-size the encoded string. */
-        private const val BASE64_GROUP_PADDING = 2
-        /** Number of output characters in one Base64 block. */
-        private const val BASE64_BLOCK_SIZE = 4
-        /** First Base64 shift. */
-        private const val FIRST_SHIFT = 2
-        /** Second Base64 left shift. */
-        private const val SECOND_SHIFT = 4
-        /** Second Base64 right shift. */
-        private const val SECOND_RIGHT_SHIFT = 4
-        /** Third Base64 left shift. */
-        private const val THIRD_SHIFT = 2
-        /** Third Base64 right shift. */
-        private const val THIRD_RIGHT_SHIFT = 6
-        /** Remainder mask for the first source byte. */
-        private const val FIRST_REMAINDER_MASK = 0x03
-        /** Remainder mask for the second source byte. */
-        private const val SECOND_REMAINDER_MASK = 0x0F
-        /** Remainder mask for the third source byte. */
-        private const val THIRD_REMAINDER_MASK = 0x3F
         /** 默认扫描间隔：5 秒。 */
         private const val DEFAULT_SCAN_INTERVAL_MS = 5000L
+        /** 合批缓冲的定时 flush 延迟（毫秒）。 */
+        private const val WRITE_FLUSH_DELAY_MS = 500L
         /** 单文件最大行数：100 条。 */
         private const val DEFAULT_MAX_LINES_PER_FILE = 100
         /** 文件最大保留时间：5 分钟。 */
