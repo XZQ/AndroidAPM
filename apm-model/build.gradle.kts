@@ -1,5 +1,6 @@
 plugins {
-    kotlin("jvm")
+    // 纯 JVM 模块（无 Android 依赖），走 catalog 别名
+    alias(libs.plugins.kotlin.jvm)
 }
 
 kotlin {

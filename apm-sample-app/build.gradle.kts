@@ -1,6 +1,7 @@
 plugins {
-    id("com.android.application")
-    kotlin("android")
+    // application 模块不套用 library 约定插件，直接走 catalog 别名
+    alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
     id("com.apm.slow-method")
 }
 

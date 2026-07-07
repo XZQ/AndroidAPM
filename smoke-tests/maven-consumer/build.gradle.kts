@@ -1,6 +1,7 @@
 plugins {
-    id("com.android.library") version "8.13.2"
-    id("org.jetbrains.kotlin.android") version "2.2.21"
+    // 插件版本统一取自主仓库的 version catalog，避免与主构建漂移
+    alias(libs.plugins.android.library)
+    alias(libs.plugins.kotlin.android)
 }
 
 android {

@@ -1,4 +1,6 @@
 pluginManagement {
+    // 共享构建约定（convention plugin）所在的 included build
+    includeBuild("build-logic")
     includeBuild("apm-plugin")
     repositories {
         google()

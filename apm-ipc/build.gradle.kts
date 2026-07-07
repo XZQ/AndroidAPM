@@ -1,16 +1,11 @@
 plugins {
-    id("com.android.library")
-    kotlin("android")
+    // 仓库统一 Android library 约定：compileSdk/minSdk/Java 版本收敛在 build-logic
+    id("com.apm.android-library")
 }
 
 android {
+    // 模块自身的命名空间
     namespace = "com.apm.ipc"
-    compileSdk = 34
-    defaultConfig { minSdk = 24 }
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
-    }
 }
 
 dependencies {

@@ -1,22 +1,17 @@
 plugins {
-    id("com.android.library")
-    kotlin("android")
+    // 仓库统一 Android library 约定：compileSdk/minSdk/Java 版本收敛在 build-logic
+    id("com.apm.android-library")
 }
 
 android {
+    // 模块自身的命名空间
     namespace = "com.apm.memory"
-    compileSdk = 34
 
     defaultConfig {
-        minSdk = 24
+        // 携带 JNI 的模块需要显式声明支持的 ABI
         ndk {
             abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
         }
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
     }
 
     // JNI/CMake 构建配置：编译 libapm_dumper.so（fork 子进程 hprof dump）
