@@ -45,7 +45,11 @@ class LaunchModule(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     // --- 冷启动时间戳 ---
-    /** 模块初始化时间（近似 processStart / attachBaseContext）。 */
+    /**
+     * 进程启动基线时间（elapsedRealtime 时基）。
+     * 优先使用 [android.os.Process.getStartElapsedRealtime]（API 24+，
+     * 内核记录的真实进程创建时刻），异常时回退为模块初始化时间近似值。
+     */
     private var processStartMs: Long = 0L
     /** Application.onCreate 开始时间。 */
     private var appOnCreateStartMs: Long = 0L
@@ -85,12 +89,20 @@ class LaunchModule(
     private var contentProviderCount: Int = 0
 
     /**
-     * 记录模块初始化时间作为冷启动基准。
-     * 在 Apm.register() 时调用，近似等于 attachBaseContext 时间。
+     * 记录冷启动基准时间。
+     * 优先取内核记录的真实进程启动时刻（Process.getStartElapsedRealtime，
+     * API 24 = minSdk，涵盖 fork 到模块初始化之间的全部耗时）；
+     * 个别 ROM 异常时回退为模块初始化时间近似值。
      */
     override fun onInitialize(context: ApmContext) {
         apmContext = context
-        processStartMs = SystemClock.elapsedRealtime()
+        processStartMs = try {
+            // 真实进程启动时刻：比模块初始化近似值更早、更准确
+            android.os.Process.getStartElapsedRealtime()
+        } catch (e: Exception) {
+            // 防御性回退：以模块初始化时间近似 attachBaseContext
+            SystemClock.elapsedRealtime()
+        }
     }
 
     /**

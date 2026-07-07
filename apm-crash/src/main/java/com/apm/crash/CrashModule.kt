@@ -1,5 +1,6 @@
 package com.apm.crash
 
+import android.os.Build
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
@@ -48,9 +49,55 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
             NativeCrashMonitor.init(config.enableUnsafeNativeSignalCallback)
         }
 
+        // 启动退出原因采集：读取系统记录的上一进程退出原因（API 30+）
+        startExitReasonCollection()
+
         apmContext?.logger?.d(
             "Crash module started, java=${config.enableJavaCrash}, native=${config.enableNativeCrash}"
         )
+    }
+
+    /**
+     * 启动 ApplicationExitInfo 退出原因采集。
+     * API 30+ 时在后台线程执行一次采集，逐条上报去重后的退出记录；
+     * 低版本或关闭开关时为 no-op。
+     */
+    private fun startExitReasonCollection() {
+        // 版本与开关守卫：ApplicationExitInfo 自 API 30 起可用
+        if (!config.collectExitInfo || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        val application = apmContext?.application ?: return
+
+        val collector = ExitReasonCollector(
+            source = AndroidExitInfoSource(application),
+            timestampStore = PrefsExitTimestampStore(application),
+            maxTraceBytes = config.maxExitTraceBytes,
+            emit = { eventName, severity, fields ->
+                // 退出原因是历史事实，HIGH 优先级保证及时送达但不与现场崩溃抢占 CRITICAL
+                Apm.emit(
+                    module = MODULE_NAME,
+                    name = eventName,
+                    kind = ApmEventKind.ALERT,
+                    severity = severity,
+                    priority = ApmPriority.HIGH,
+                    fields = fields
+                )
+            }
+        )
+        // 后台线程执行，避免阻塞模块启动
+        Thread(
+            {
+                try {
+                    collector.collectOnce()
+                } catch (e: Exception) {
+                    // 采集失败不影响其他崩溃能力，记入自监控
+                    Apm.recordInternalError(ERROR_TAG_EXIT_INFO, e)
+                }
+            },
+            EXIT_COLLECTOR_THREAD_NAME
+        ).apply {
+            isDaemon = true
+            start()
+        }
     }
 
     /** 恢复原始 handler。 */
@@ -104,6 +151,12 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
     companion object {
         /** 自监控 tag：崩溃处理器内部上报失败。 */
         private const val ERROR_TAG_CRASH_HANDLER_EMIT = "crash_handler_emit"
+
+        /** 自监控 tag：退出原因采集失败。 */
+        private const val ERROR_TAG_EXIT_INFO = "crash_exit_info"
+
+        /** 退出原因采集线程名。 */
+        private const val EXIT_COLLECTOR_THREAD_NAME = "apm-crash-exit-info"
 
         /** 模块名。 */
         private const val MODULE_NAME = "crash"

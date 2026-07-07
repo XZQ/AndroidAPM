@@ -7,14 +7,24 @@ import java.io.FileReader
 
 /**
  * CPU Jiffies 采样器。
- * 通过读取 /proc 文件系统获取进程和线程的 CPU 使用信息。
- * 计算 CPU 使用率 = jiffies delta / (采样间隔 * 时钟频率 * CPU 核数)。
+ * 通过读取 /proc 文件系统获取进程的 CPU 使用信息。
+ *
+ * 使用率语义：单核占用分数 —— jiffies 增量换算的 CPU 时间 / 墙钟间隔，
+ * 1.0 表示持续占满一个核，多线程负载可超过 1.0（上限为核数）。
+ * 时钟频率通过 Os.sysconf(_SC_CLK_TCK) 读取（此前硬编码 100 Hz，
+ * 在非 100 Hz 内核上会产生系统性偏差）。
  *
  * 对标 Matrix BatteryCanary 的线程 CPU 监控方案。
  */
 class CpuJiffiesSampler(
     /** 模块配置。 */
-    private val config: BatteryConfig
+    private val config: BatteryConfig,
+    /** 内核时钟频率（jiffies/秒）；默认从系统读取，测试可注入。 */
+    private val clockTickHz: Long = resolveClockTickHz(),
+    /** 进程 jiffies 读取器；默认读 /proc/self/stat，测试可注入。 */
+    private val jiffiesReader: (() -> Long)? = null,
+    /** 墙钟时间源（毫秒）；默认 System.currentTimeMillis，测试可注入。 */
+    private val clock: () -> Long = System::currentTimeMillis
 ) {
 
     /** 上次采样的进程 jiffies。 */
@@ -35,7 +45,7 @@ class CpuJiffiesSampler(
     fun start() {
         sampling = true
         lastProcessJiffies = readProcessJiffies()
-        lastSampleTime = System.currentTimeMillis()
+        lastSampleTime = clock()
         highCpuSince = 0L
     }
 
@@ -54,7 +64,7 @@ class CpuJiffiesSampler(
         if (!sampling) return
 
         val currentJiffies = readProcessJiffies()
-        val currentTime = System.currentTimeMillis()
+        val currentTime = clock()
         // 计算间隔
         val intervalMs = currentTime - lastSampleTime
         if (intervalMs <= 0L) {
@@ -64,8 +74,11 @@ class CpuJiffiesSampler(
         }
         // 计算 jiffies 增量
         val jiffiesDelta = currentJiffies - lastProcessJiffies
-        // 估算 CPU 使用率（简化计算，假设 100 Hz 时钟频率）
-        val cpuPercent = jiffiesDelta.toFloat() / (intervalMs / JIFFIES_TO_MS_FACTOR)
+        // jiffies → CPU 毫秒：jiffies * (1000 / clockTickHz)
+        val cpuTimeMs = jiffiesDelta.toFloat() * MILLIS_PER_SECOND / clockTickHz
+        // 单核占用分数（1.0 = 占满一个核），按核数截断防御异常读数
+        val maxFraction = Runtime.getRuntime().availableProcessors().toFloat()
+        val cpuPercent = (cpuTimeMs / intervalMs).coerceIn(0f, maxFraction)
         // 更新采样基准
         lastProcessJiffies = currentJiffies
         lastSampleTime = currentTime
@@ -92,6 +105,8 @@ class CpuJiffiesSampler(
      * 从 /proc/self/stat 第 14-15 列获取 utime + stime。
      */
     private fun readProcessJiffies(): Long {
+        // 测试注入的读取器优先
+        jiffiesReader?.let { return it() }
         try {
             val file = File(PROC_SELF_STAT)
             if (!file.exists()) return 0L
@@ -122,9 +137,29 @@ class CpuJiffiesSampler(
         private const val FIELD_UTIME_INDEX = 13
         /** stime 在 stat 中的索引（0-based）。 */
         private const val FIELD_STIME_INDEX = 14
-        /** jiffies 转毫秒因子（100 Hz → 10ms per jiffie）。 */
-        private const val JIFFIES_TO_MS_FACTOR = 10.0f
         /** 读取 buffer 大小。 */
         private const val BUFFER_SIZE = 1024
+        /** 每秒毫秒数。 */
+        private const val MILLIS_PER_SECOND = 1000f
+        /** 时钟频率读取失败时的回退值（Linux 常见默认 100 Hz）。 */
+        private const val DEFAULT_CLOCK_TICK_HZ = 100L
+
+        /**
+         * 读取内核时钟频率（jiffies/秒）。
+         * 优先 Os.sysconf(_SC_CLK_TCK)（API 21+ 官方接口），
+         * JVM 测试环境或异常时回退 100 Hz。
+         *
+         * @return 时钟频率
+         */
+        private fun resolveClockTickHz(): Long {
+            return try {
+                val ticks = android.system.Os.sysconf(android.system.OsConstants._SC_CLK_TCK)
+                // 读到非正值同样回退默认
+                if (ticks > 0L) ticks else DEFAULT_CLOCK_TICK_HZ
+            } catch (_: Throwable) {
+                // JVM 单测（android.system 不可用）或个别 ROM 异常时回退
+                DEFAULT_CLOCK_TICK_HZ
+            }
+        }
     }
 }

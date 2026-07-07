@@ -62,8 +62,11 @@ class FpsMonitor(
     /** 当前绑定的 Window，用于 FrameMetrics 注册。 */
     @Volatile
     private var trackedWindow: Window? = null
-    /** FrameMetrics 帧耗时采集队列。 */
+    /** FrameMetrics 帧耗时采集队列（容量由 [MAX_PENDING_FRAMES] 约束）。 */
     private val frameMetricsQueue = ConcurrentLinkedQueue<FrameMetricsBreakdown>()
+
+    /** FrameMetrics 队列当前大小（ConcurrentLinkedQueue.size 为 O(n)，用计数器替代）。 */
+    private val frameMetricsQueueSize = java.util.concurrent.atomic.AtomicInteger(0)
     /** 窗口内 FrameMetrics 延迟帧计数。 */
     private var metricsDelayedFrames = 0
     /** FrameMetrics listener 引用，用于移除注册。 */
@@ -127,6 +130,7 @@ class FpsMonitor(
         measuredFrameIntervals = 0
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
         frameMetricsQueue.clear()
+        frameMetricsQueueSize.set(0)
         metricsDelayedFrames = 0
         // 注册帧回调
         choreographer.postFrameCallback(frameCallback)
@@ -239,6 +243,7 @@ class FpsMonitor(
         frozenCount = 0
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
         frameMetricsQueue.clear()
+        frameMetricsQueueSize.set(0)
         metricsDelayedFrames = 0
         totalFrameIntervalNanos = 0L
         measuredFrameIntervals = 0
@@ -294,6 +299,11 @@ class FpsMonitor(
                     if (!monitoring) return@OnFrameMetricsAvailableListener
                     // 提取各阶段耗时
                     val breakdown = extractFrameMetrics(frameMetrics)
+                    // 有界保护：窗口上报停滞时丢弃最旧帧，防止队列无限增长
+                    if (frameMetricsQueueSize.incrementAndGet() > MAX_PENDING_FRAMES) {
+                        frameMetricsQueue.poll()
+                        frameMetricsQueueSize.decrementAndGet()
+                    }
                     frameMetricsQueue.offer(breakdown)
                 }
                 frameMetricsListener = listener
@@ -381,6 +391,9 @@ class FpsMonitor(
     }
 
     companion object {
+        /** FrameMetrics 队列最大挂起帧数，超出丢弃最旧帧。 */
+        private const val MAX_PENDING_FRAMES = 1_024
+
         /** 自监控 tag：FrameMetrics 监听注册失败。 */
         private const val ERROR_TAG_FRAME_METRICS_REGISTER = "fps_frame_metrics_register"
 
