@@ -94,8 +94,9 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
                 activity.windowManager.defaultDisplay
             }
             display?.let { refreshRateFromDisplay(it, monitor) }
-        } catch (_: Exception) {
-            // 获取刷新率失败，使用默认 60Hz
+        } catch (e: Exception) {
+            // 获取刷新率失败，使用默认 60Hz；记入自监控
+            Apm.recordInternalError(ERROR_TAG_REFRESH_RATE, e)
         }
     }
 
@@ -179,6 +180,9 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
     }
 
     companion object {
+        /** 自监控 tag：读取屏幕刷新率失败。 */
+        private const val ERROR_TAG_REFRESH_RATE = "fps_refresh_rate"
+
         /** 模块名。 */
         private const val MODULE_NAME = "fps"
 

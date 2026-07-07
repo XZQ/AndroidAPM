@@ -1,5 +1,6 @@
 package com.apm.sqlite
 
+import com.apm.core.Apm
 import android.database.sqlite.SQLiteDatabase
 import com.apm.model.ApmSeverity
 
@@ -97,13 +98,17 @@ class QueryPlanAnalyzer(
                     }
                 }
             }
-        } catch (_: Exception) {
-            // EXPLAIN QUERY PLAN 执行失败不影响正常流程
+        } catch (e: Exception) {
+            // EXPLAIN QUERY PLAN 执行失败不影响正常流程，但记入自监控
+            Apm.recordInternalError(ERROR_TAG_EXPLAIN_PLAN, e)
         }
         return issues
     }
 
     companion object {
+        /** 自监控 tag：EXPLAIN QUERY PLAN 执行失败。 */
+        private const val ERROR_TAG_EXPLAIN_PLAN = "sqlite_explain_plan"
+
         /** 全表扫描问题类型。 */
         private const val ISSUE_TYPE_FULL_SCAN = "SCAN_TABLE"
         /** 临时排序表问题类型。 */

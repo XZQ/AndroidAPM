@@ -26,6 +26,8 @@ data class SdkHealthReport(
     val avgUploadLatencyMs: Long,
     /** 采集周期内最大上传延迟（毫秒）。 */
     val maxUploadLatencyMs: Long,
+    /** 采集周期内 SDK 内部错误数（监控模块降级处理的异常）。 */
+    val internalErrorCount: Long = 0L,
     /** 报告生成时间戳（毫秒）。 */
     val reportTimestamp: Long = System.currentTimeMillis()
 ) {
@@ -56,7 +58,8 @@ data class SdkHealthReport(
                 FIELD_QUEUE_SIZE to queueSize,
                 FIELD_DROP_RATE to String.format(Locale.ROOT, "%.4f", dropRate),
                 FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
-                FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs
+                FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
+                FIELD_INTERNAL_ERROR_COUNT to internalErrorCount
             )
         )
     }
@@ -78,5 +81,7 @@ data class SdkHealthReport(
         private const val FIELD_AVG_UPLOAD_LATENCY_MS = "avgUploadLatencyMs"
         /** 字段：最大上传延迟。 */
         private const val FIELD_MAX_UPLOAD_LATENCY_MS = "maxUploadLatencyMs"
+        /** 字段：内部错误数。 */
+        private const val FIELD_INTERNAL_ERROR_COUNT = "internalErrorCount"
     }
 }

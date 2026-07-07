@@ -82,8 +82,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
                         FIELD_PROCESS_NAME to (apmContext?.processName.orEmpty())
                     )
                 )
-            } catch (_: Exception) {
-                // 崩溃处理器中绝不能抛异常
+            } catch (e: Exception) {
+                // 崩溃处理器中绝不能抛异常；记入自监控（进程即将退出，尽力而为）
+                Apm.recordInternalError(ERROR_TAG_CRASH_HANDLER_EMIT, e)
             }
 
             // 始终委托给原始 handler，不破坏现有崩溃处理链
@@ -101,6 +102,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
     }
 
     companion object {
+        /** 自监控 tag：崩溃处理器内部上报失败。 */
+        private const val ERROR_TAG_CRASH_HANDLER_EMIT = "crash_handler_emit"
+
         /** 模块名。 */
         private const val MODULE_NAME = "crash"
 

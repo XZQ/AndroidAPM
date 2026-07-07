@@ -35,6 +35,9 @@ class SdkSelfMonitor(
     /** 当前队列大小快照（由外部定期更新）。 */
     private val currentQueueSize = AtomicInteger(0)
 
+    /** SDK 内部错误计数（监控模块捕获并降级处理的异常）。 */
+    private val internalErrorCount = AtomicLong(0L)
+
     /**
      * 记录一次事件发射。
      * 每次 [com.apm.core.Apm.emit] 被调用时计数 +1。
@@ -71,6 +74,16 @@ class SdkSelfMonitor(
     }
 
     /**
+     * 记录一次 SDK 内部错误。
+     * 监控模块捕获异常并降级处理时调用，使"静默吞异常"变得可观测。
+     *
+     * @param tag 错误来源标签（如 "ipc_write"、"fps_frame_metrics_register"）
+     */
+    fun recordInternalError(tag: String) {
+        internalErrorCount.incrementAndGet()
+    }
+
+    /**
      * 更新队列大小快照。
      * 由分发器定期调用，反映当前积压程度。
      *
@@ -93,6 +106,7 @@ class SdkSelfMonitor(
         val totalLatency = totalUploadLatencyMs.getAndSet(0L)
         val uploads = uploadCount.getAndSet(0L)
         val maxLatency = maxUploadLatencyMs.getAndSet(0L)
+        val internalErrors = internalErrorCount.getAndSet(0L)
 
         // 计算平均延迟
         val avgLatency = if (uploads > 0L) totalLatency / uploads else 0L
@@ -102,7 +116,8 @@ class SdkSelfMonitor(
             dropCount = drop,
             queueSize = currentQueueSize.get(),
             avgUploadLatencyMs = avgLatency,
-            maxUploadLatencyMs = maxLatency
+            maxUploadLatencyMs = maxLatency,
+            internalErrorCount = internalErrors
         )
     }
 
@@ -117,6 +132,12 @@ class SdkSelfMonitor(
      * 用于外部查询当前总丢弃量。
      */
     fun getTotalDropCount(): Long = dropCount.get()
+
+    /**
+     * 获取累计内部错误数（非重置）。
+     * 用于外部查询监控模块降级处理的异常总量。
+     */
+    fun getTotalInternalErrorCount(): Long = internalErrorCount.get()
 
     companion object {
         /** 默认报告间隔：60 秒。 */

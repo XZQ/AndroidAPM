@@ -115,8 +115,9 @@ class ProcessEventCoordinator internal constructor(
             try {
                 // 先写临时文件再发布，避免上传进程读到半写入内容。
                 publishEventFile(event)
-            } catch (_: Exception) {
-                // IPC 写入失败不影响主流程
+            } catch (e: Exception) {
+                // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
+                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
             }
         }
     }
@@ -195,12 +196,14 @@ class ProcessEventCoordinator internal constructor(
                     consumeFile(file)
                     // 消费完成后删除文件
                     file.delete()
-                } catch (_: Exception) {
-                    // 单文件消费失败不影响后续文件
+                } catch (e: Exception) {
+                    // 单文件消费失败不影响后续文件，但记入自监控
+                    Apm.recordInternalError(ERROR_TAG_IPC_CONSUME_FILE, e)
                 }
             }
-        } catch (_: Exception) {
-            // 扫描失败静默处理
+        } catch (e: Exception) {
+            // 扫描失败不中断调度，但记入自监控
+            Apm.recordInternalError(ERROR_TAG_IPC_SCAN, e)
         }
     }
 
@@ -244,8 +247,9 @@ class ProcessEventCoordinator internal constructor(
                 // Decode the complete event so no fields are lost across processes.
                 val event = parseLineProtocol(line)
                 event?.let { onRemoteEvent?.invoke(it) }
-            } catch (_: Exception) {
-                // 单行解析失败跳过
+            } catch (e: Exception) {
+                // 单行解析失败跳过该行，但记入自监控（可能是编码不兼容）
+                Apm.recordInternalError(ERROR_TAG_IPC_PARSE_LINE, e)
             }
         }
     }
@@ -374,6 +378,18 @@ class ProcessEventCoordinator internal constructor(
     }
 
     companion object {
+        /** 自监控 tag：IPC 写入失败。 */
+        private const val ERROR_TAG_IPC_WRITE = "ipc_write"
+
+        /** 自监控 tag：单个 IPC 文件消费失败。 */
+        private const val ERROR_TAG_IPC_CONSUME_FILE = "ipc_consume_file"
+
+        /** 自监控 tag：IPC 目录扫描失败。 */
+        private const val ERROR_TAG_IPC_SCAN = "ipc_scan"
+
+        /** 自监控 tag：IPC 行解析失败。 */
+        private const val ERROR_TAG_IPC_PARSE_LINE = "ipc_parse_line"
+
         /** IPC 目录名。 */
         private const val IPC_DIR_NAME = "apm-ipc"
         /** IPC 文件前缀。 */

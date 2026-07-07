@@ -1,5 +1,6 @@
 package com.apm.battery
 
+import com.apm.core.Apm
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader
@@ -104,12 +105,17 @@ class CpuJiffiesSampler(
                 val stime = parts[FIELD_STIME_INDEX].toLongOrNull() ?: 0L
                 return utime + stime
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            // /proc/self/stat 读取失败降级为 0，记入自监控便于发现持续性失效
+            Apm.recordInternalError(ERROR_TAG_PROC_STAT_READ, e)
             return 0L
         }
     }
 
     companion object {
+        /** 自监控 tag：/proc/self/stat 读取失败。 */
+        private const val ERROR_TAG_PROC_STAT_READ = "battery_proc_stat_read"
+
         /** /proc/self/stat 路径。 */
         private const val PROC_SELF_STAT = "/proc/self/stat"
         /** utime 在 stat 中的索引（0-based）。 */

@@ -429,8 +429,9 @@ class AnrModule(
                         return content
                     }
                 }
-            } catch (_: Exception) {
-                // 读取失败，尝试下一个路径
+            } catch (e: Exception) {
+                // 读取失败，尝试下一个路径；记入自监控（现代系统通常不可读）
+                Apm.recordInternalError(ERROR_TAG_TRACE_READ, e)
             }
         }
         return ""
@@ -486,6 +487,9 @@ class AnrModule(
     private external fun nativeUnregisterSigquitHandler()
 
     companion object {
+        /** 自监控 tag：系统 trace 文件读取失败。 */
+        private const val ERROR_TAG_TRACE_READ = "anr_trace_read"
+
         /** 模块名。 */
         private const val MODULE_NAME = "anr"
         /** Watchdog 线程名。 */

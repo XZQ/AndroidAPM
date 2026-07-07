@@ -1,5 +1,7 @@
 package com.apm.io
 
+import com.apm.core.Apm
+
 /**
  * Native IO Hook 安装边界。
  *
@@ -33,8 +35,9 @@ internal class NativeIoHookInstaller(
             // JNI 库缺失是预期降级路径。
             installed = false
             false
-        } catch (_: Exception) {
-            // Native Hook 安装异常同样降级，避免影响宿主启动。
+        } catch (e: Exception) {
+            // Native Hook 安装异常同样降级，避免影响宿主启动；记入自监控
+            Apm.recordInternalError(ERROR_TAG_NATIVE_INSTALL, e)
             installed = false
             false
         }
@@ -51,10 +54,19 @@ internal class NativeIoHookInstaller(
             uninstallHooks()
             installed = false
             true
-        } catch (_: Exception) {
-            // 卸载失败后仍标记为未安装，避免 destroy 重复调用。
+        } catch (e: Exception) {
+            // 卸载失败后仍标记为未安装，避免 destroy 重复调用；记入自监控
+            Apm.recordInternalError(ERROR_TAG_NATIVE_UNINSTALL, e)
             installed = false
             false
         }
+    }
+
+    companion object {
+        /** 自监控 tag：Native Hook 安装失败。 */
+        private const val ERROR_TAG_NATIVE_INSTALL = "io_native_install"
+
+        /** 自监控 tag：Native Hook 卸载失败。 */
+        private const val ERROR_TAG_NATIVE_UNINSTALL = "io_native_uninstall"
     }
 }

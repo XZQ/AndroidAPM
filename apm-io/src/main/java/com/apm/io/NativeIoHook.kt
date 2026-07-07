@@ -459,8 +459,9 @@ class NativeIoHook(private val config: IoConfig) {
                 }
             } catch (_: InterruptedException) {
                 break
-            } catch (_: Exception) {
-                // 静默处理
+            } catch (e: Exception) {
+                // FD 泄漏检测单轮失败不中断轮询，但记入自监控
+                Apm.recordInternalError(ERROR_TAG_FD_LEAK_LOOP, e)
             }
         }
     }
@@ -610,8 +611,9 @@ class NativeIoHook(private val config: IoConfig) {
                 }
             } catch (_: InterruptedException) {
                 break
-            } catch (_: Exception) {
-                // 静默处理
+            } catch (e: Exception) {
+                // Closeable 泄漏检测单轮失败不中断轮询，但记入自监控
+                Apm.recordInternalError(ERROR_TAG_CLOSEABLE_LEAK_LOOP, e)
             }
         }
     }
@@ -767,6 +769,12 @@ class NativeIoHook(private val config: IoConfig) {
     private external fun nativeUninstallIoHooks()
 
     companion object {
+        /** 自监控 tag：FD 泄漏检测轮询失败。 */
+        private const val ERROR_TAG_FD_LEAK_LOOP = "io_fd_leak_loop"
+
+        /** 自监控 tag：Closeable 泄漏检测轮询失败。 */
+        private const val ERROR_TAG_CLOSEABLE_LEAK_LOOP = "io_closeable_leak_loop"
+
         /**
          * 当前接收 Native IO 事件的活跃实例。
          * JNI 层以静态方法查找回调（GetStaticMethodID），因此静态桥接方法

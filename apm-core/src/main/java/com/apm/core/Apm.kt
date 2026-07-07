@@ -270,6 +270,24 @@ object Apm {
     }
 
     /**
+     * 记录一次 SDK 内部错误。
+     *
+     * 供各监控模块在捕获并降级处理异常时调用，把原本"静默吞掉"的
+     * 失败变为自监控计数与调试日志，便于发现监控能力自身的退化。
+     * 未初始化时安静忽略；本方法自身绝不抛出异常。
+     *
+     * @param tag 错误来源标签（如 "ipc_write"、"fps_frame_metrics_register"）
+     * @param error 捕获到的异常，可为 null
+     */
+    fun recordInternalError(tag: String, error: Throwable? = null) {
+        // 未初始化（如纯 JVM 单测直接构造组件）时为无害 no-op
+        val currentState = state ?: return
+        currentState.context.selfMonitor?.recordInternalError(tag)
+        // 调试日志受 debugLogging 开关门控，线上默认静默
+        currentState.context.logger.d("Internal error [$tag]: $error")
+    }
+
+    /**
      * 读取最近的事件记录。用于 Debug 面板展示。
      *
      * @param limit 最大返回条数

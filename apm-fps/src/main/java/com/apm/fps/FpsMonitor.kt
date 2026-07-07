@@ -1,5 +1,6 @@
 package com.apm.fps
 
+import com.apm.core.Apm
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -297,8 +298,9 @@ class FpsMonitor(
                 }
                 frameMetricsListener = listener
                 window.addOnFrameMetricsAvailableListener(listener, mainHandler)
-            } catch (_: Exception) {
-                // FrameMetrics 可能不被所有设备支持，静默降级到 Choreographer 模式
+            } catch (e: Exception) {
+                // FrameMetrics 可能不被所有设备支持，降级到 Choreographer 模式并记入自监控
+                Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_REGISTER, e)
             }
         }
     }
@@ -311,8 +313,9 @@ class FpsMonitor(
             try {
                 frameMetricsListener?.let { window.removeOnFrameMetricsAvailableListener(it) }
                 frameMetricsListener = null
-            } catch (_: Exception) {
-                // 静默处理
+            } catch (e: Exception) {
+                // 注销失败不影响后续监控，但记入自监控
+                Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_UNREGISTER, e)
             }
         }
     }
@@ -378,6 +381,12 @@ class FpsMonitor(
     }
 
     companion object {
+        /** 自监控 tag：FrameMetrics 监听注册失败。 */
+        private const val ERROR_TAG_FRAME_METRICS_REGISTER = "fps_frame_metrics_register"
+
+        /** 自监控 tag：FrameMetrics 监听注销失败。 */
+        private const val ERROR_TAG_FRAME_METRICS_UNREGISTER = "fps_frame_metrics_unregister"
+
         /** 每毫秒的纳秒数。 */
         private const val NANOS_PER_MS = 1_000_000L
         /** 每秒的纳秒数。 */
