@@ -369,23 +369,26 @@ class ProcessEventCoordinator internal constructor(
 
     /**
      * Encodes bytes with standard Base64 without line wrapping.
-     * 仅 JVM 单元测试路径可达（设备上 android.util.Base64 恒可用），
-     * 直接复用 java.util.Base64 替代此前手写的编码实现。
+     * 仅 JVM 单元测试路径可达（设备上 android.util.Base64 恒可用且优先命中，
+     * 本方法只在其抛 RuntimeException 的 Android 桩环境执行），
+     * 因此 java.util.Base64 的 API 26 要求不影响 minSdk 24 设备。
      *
      * @param payload binary event payload
      * @return Base64 text
      */
+    @android.annotation.SuppressLint("NewApi")
     private fun encodePayloadFallback(payload: ByteArray): String {
         return java.util.Base64.getEncoder().encodeToString(payload)
     }
 
     /**
      * Decodes standard Base64 text without line wrapping.
-     * 仅 JVM 单元测试路径可达，复用 java.util.Base64。
+     * 仅 JVM 单元测试路径可达（同 [encodePayloadFallback] 的可达性说明）。
      *
      * @param line Base64 text
      * @return decoded bytes
      */
+    @android.annotation.SuppressLint("NewApi")
     private fun decodePayloadFallback(line: String): ByteArray {
         return java.util.Base64.getDecoder().decode(line)
     }
