@@ -135,11 +135,15 @@ object NativeCrashMonitor {
      * 记录一次 Native 崩溃信号。
      * 由 JNI 层的信号处理器调用。
      *
+     * 必须保持 @JvmStatic：JNI 层（apm_crash_jni.c）使用 GetStaticMethodID
+     * 查找该方法，非静态方法会导致 JNI_OnLoad 失败并使整个 Native 崩溃采集静默降级。
+     *
      * @param signal 信号编号（如 SIGSEGV=11）
      * @param threadName 崩溃线程名
      * @param backtrace 调用栈字符串
      * @param faultAddr 故障地址
      */
+    @JvmStatic
     fun logNativeCrashSignal(
         signal: Int,
         threadName: String = "",

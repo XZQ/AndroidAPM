@@ -113,6 +113,9 @@ class NativeIoHook(private val config: IoConfig) {
         if (initialized) return
         initialized = true
 
+        // 注册为 JNI 静态回调的活跃实例，Native 事件经伴生对象桥接到本实例
+        activeHook = this
+
         // 尝试安装 Native PLT Hook
         if (config.enableNativePltHook) {
             installNativePltHook()
@@ -529,7 +532,8 @@ class NativeIoHook(private val config: IoConfig) {
     }
 
     /**
-     * JNI 回调：Native 层检测到 IO 操作时调用。
+     * 处理 Native 层上报的 IO 事件。
+     * 由伴生对象的静态 JNI 桥接方法 [onNativeIoEvent] 转发到当前活跃实例。
      *
      * @param operation 操作类型（open/read/write/close）。
      * @param path 文件路径。
@@ -537,7 +541,7 @@ class NativeIoHook(private val config: IoConfig) {
      * @param durationMs 耗时（毫秒）。
      * @param isMainThread 是否主线程。
      */
-    private fun onNativeIoEvent(
+    internal fun handleNativeIoEvent(
         operation: String,
         path: String,
         bytes: Long,
@@ -686,6 +690,10 @@ class NativeIoHook(private val config: IoConfig) {
     /** 释放资源。 */
     fun destroy() {
         initialized = false
+        // 注销 JNI 静态回调的活跃实例，避免销毁后继续接收 Native 事件
+        if (activeHook === this) {
+            activeHook = null
+        }
         activeSessions.clear()
         readFileCounts.clear()
         closeableRefs.clear()
@@ -759,6 +767,37 @@ class NativeIoHook(private val config: IoConfig) {
     private external fun nativeUninstallIoHooks()
 
     companion object {
+        /**
+         * 当前接收 Native IO 事件的活跃实例。
+         * JNI 层以静态方法查找回调（GetStaticMethodID），因此静态桥接方法
+         * 需要通过该引用把事件转发给持有配置与统计状态的实例。
+         */
+        @Volatile
+        private var activeHook: NativeIoHook? = null
+
+        /**
+         * JNI 静态回调：Native 层检测到 IO 操作时调用。
+         * 必须保持 @JvmStatic 且签名为 (String, String, long, long, boolean)，
+         * 与 apm_io_jni.c 中 CALLBACK_METHOD_SIG 的静态方法查找一致。
+         *
+         * @param operation 操作类型（open/read/write/close）。
+         * @param path 文件路径。
+         * @param bytes 字节数。
+         * @param durationMs 耗时（毫秒）。
+         * @param isMainThread 是否主线程。
+         */
+        @JvmStatic
+        private fun onNativeIoEvent(
+            operation: String,
+            path: String,
+            bytes: Long,
+            durationMs: Long,
+            isMainThread: Boolean
+        ) {
+            // 无活跃实例（未初始化或已销毁）时直接丢弃事件
+            activeHook?.handleNativeIoEvent(operation, path, bytes, durationMs, isMainThread)
+        }
+
         /** IO 模块名。 */
         private const val MODULE_IO = "io"
 
