@@ -8,7 +8,6 @@ import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -35,9 +34,7 @@ internal class PersistentUploadWorker(
     private val selfMonitor: SdkSelfMonitor?
 ) {
     /** Single worker executor that preserves outbox ordering. */
-    private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, THREAD_NAME)
-    }
+    private val executor: ExecutorService = ApmExecutors.newSingleThreadExecutor(THREAD_NAME)
 
     /** Coalescing wake-up signal for newly appended events. */
     private val wakeSignal = ArrayBlockingQueue<Unit>(1)

@@ -18,7 +18,6 @@ import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
-import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
@@ -424,9 +423,7 @@ object Apm {
         monitor: SdkSelfMonitor?
     ): ScheduledExecutorService? {
         if (monitor == null || config.selfMonitorIntervalMs <= 0L) return null
-        return Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, SELF_MONITOR_THREAD_NAME)
-        }.apply {
+        return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
                     val report = monitor.generateReport()

@@ -11,7 +11,6 @@ import com.apm.core.throttle.RateLimiter
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
-import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
@@ -102,9 +101,7 @@ internal class ApmDispatcher(
 
     /** Periodic executor that flushes expired aggregation windows. */
     private val aggregationExecutor: ScheduledExecutorService? = aggregator?.let { eventAggregator ->
-        Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, AGGREGATION_THREAD_NAME)
-        }.apply {
+        ApmExecutors.newSingleThreadScheduledExecutor(AGGREGATION_THREAD_NAME).apply {
             val interval = eventAggregator.windowDurationMs
                 .coerceAtMost(MAX_AGGREGATION_POLL_MS)
                 .coerceAtLeast(MIN_AGGREGATION_POLL_MS)

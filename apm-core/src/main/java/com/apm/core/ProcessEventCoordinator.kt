@@ -6,7 +6,6 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmEventCodec
 import java.io.File
 import java.io.FileWriter
-import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
@@ -61,9 +60,8 @@ class ProcessEventCoordinator internal constructor(
     )
 
     /** 写操作执行器，保证串行写入。 */
-    private val writeExecutor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, THREAD_NAME_WRITE)
-    }
+    private val writeExecutor: ScheduledExecutorService =
+        ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME_WRITE)
 
     /** 扫描执行器，仅上传进程使用。 */
     private var scanExecutor: ScheduledExecutorService? = null
@@ -99,9 +97,7 @@ class ProcessEventCoordinator internal constructor(
 
         if (isUploaderProcess) {
             // 上传进程：定期扫描 IPC 目录消费其他进程的事件
-            scanExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
-                Thread(runnable, THREAD_NAME_SCAN)
-            }
+            scanExecutor = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME_SCAN)
             scanExecutor?.scheduleWithFixedDelay(
                 { scanAndConsume() },
                 scanIntervalMs,
