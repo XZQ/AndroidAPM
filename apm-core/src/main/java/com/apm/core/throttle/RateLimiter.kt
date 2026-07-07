@@ -1,22 +1,39 @@
 package com.apm.core.throttle
 
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 令牌桶限流器。按 key 分桶，每个桶独立计数。
  * 用于控制同一事件类型在时间窗口内的最大发射数。
  *
- * 线程安全：每个桶使用 AtomicLong + CAS 实现无锁并发。
+ * 桶集合使用 access-order LinkedHashMap + LRU 上限（[maxBuckets]），
+ * 防止高基数事件名导致桶无限增长泄漏内存；
+ * 被逐出的冷门 key 再次出现时会重新创建满额桶（对低频事件无实际影响）。
+ *
+ * 线程安全：桶集合通过 synchronized 保护（tryAcquire 已迁移到
+ * dispatcher worker 线程执行，锁竞争极低）；桶内计数使用 AtomicLong CAS。
  */
 class RateLimiter(
     /** 每个时间窗口内允许的最大事件数。 */
     private val maxEventsPerWindow: Int,
     /** 限流窗口时长（毫秒）。 */
-    private val windowMs: Long
+    private val windowMs: Long,
+    /** 桶数量上限，超出时按 LRU 逐出最久未使用的桶。 */
+    private val maxBuckets: Int = DEFAULT_MAX_BUCKETS
 ) {
-    /** key → 令牌桶映射。懒创建，用完不清除（避免并发删除问题）。 */
-    private val buckets = ConcurrentHashMap<String, TokenBucket>()
+    /**
+     * key → 令牌桶映射。
+     * access-order 模式：每次访问将条目移至末尾，头部即最久未使用；
+     * removeEldestEntry 在超出容量时自动逐出头部条目。
+     */
+    private val buckets = object : LinkedHashMap<String, TokenBucket>(
+        INITIAL_CAPACITY, LOAD_FACTOR, true
+    ) {
+        /** 超出桶数量上限时逐出最久未使用的桶。 */
+        override fun removeEldestEntry(eldest: Map.Entry<String, TokenBucket>): Boolean {
+            return size > maxBuckets
+        }
+    }
 
     /**
      * 尝试获取一个令牌。
@@ -24,15 +41,23 @@ class RateLimiter(
      * @return true 表示通过，false 表示被限流
      */
     fun tryAcquire(key: String): Boolean {
-        val bucket = buckets.computeIfAbsent(key) {
-            TokenBucket(maxEventsPerWindow, windowMs)
+        // 同步保护 LinkedHashMap 的访问顺序调整与 LRU 逐出
+        val bucket = synchronized(buckets) {
+            buckets.getOrPut(key) { TokenBucket(maxEventsPerWindow, windowMs) }
         }
         return bucket.tryAcquire()
     }
 
+    /**
+     * 当前桶数量（供测试与自监控观测）。
+     *
+     * @return 活跃桶数
+     */
+    fun bucketCount(): Int = synchronized(buckets) { buckets.size }
+
     /** 清除所有桶，重置限流状态。 */
     fun reset() {
-        buckets.clear()
+        synchronized(buckets) { buckets.clear() }
     }
 
     /**
@@ -76,5 +101,16 @@ class RateLimiter(
                 tokens.set(capacity.toLong())
             }
         }
+    }
+
+    companion object {
+        /** 默认桶数量上限。 */
+        private const val DEFAULT_MAX_BUCKETS = 256
+
+        /** LinkedHashMap 初始容量。 */
+        private const val INITIAL_CAPACITY = 16
+
+        /** LinkedHashMap 负载因子。 */
+        private const val LOAD_FACTOR = 0.75f
     }
 }

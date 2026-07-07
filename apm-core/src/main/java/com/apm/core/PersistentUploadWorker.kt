@@ -13,6 +13,12 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Replays a persistent outbox and acknowledges rows only after upload success.
+ *
+ * 重试语义（单一重试权威）：每个处理周期对一批行只做一次上传尝试；
+ * 失败时 markRetry 并按（该批最大 retry_count + 1）指数退避，
+ * 下个周期重新从 outbox 选取。不存在内层重试循环，
+ * 因此实际重试次数 = 行的 retry_count 上限（由 pruneExpired 控制），
+ * 而不是 maxRetries × 周期数的放大值。
  */
 internal class PersistentUploadWorker(
     /** Durable source of pending events. */
@@ -73,12 +79,14 @@ internal class PersistentUploadWorker(
             selfMonitor?.updateQueueSize(runCatching { store.pendingCount() }.getOrDefault(0))
 
             if (batch.isEmpty()) {
+                // 空闲周期顺带清理重试耗尽/超龄的行，防止 outbox 永久膨胀
+                pruneExpiredRows()
                 awaitWake(IDLE_POLL_MS)
                 continue
             }
 
             val startedAt = System.currentTimeMillis()
-            if (uploadWithRetry(batch)) {
+            if (uploadOnce(batch)) {
                 val ids = batch.map(PendingEvent::id)
                 runCatching { store.deletePending(ids) }
                     .onFailure { logger.e("Failed to acknowledge uploaded events", it) }
@@ -88,40 +96,52 @@ internal class PersistentUploadWorker(
                 runCatching { store.markRetry(ids) }
                     .onFailure { logger.e("Failed to update persistent retry counters", it) }
                 // Rows remain durable; wait before selecting them again.
+                // 服务端 Retry-After 建议优先于本地指数退避
                 val retryAttempt = (batch.maxOfOrNull(PendingEvent::retryCount)?.plus(1) ?: 1)
                     .coerceAtMost(MAX_BACKOFF_ATTEMPT)
-                awaitWake(retryPolicy.delayForAttempt(retryAttempt))
+                val backoffMs = maxOf(
+                    retryPolicy.delayForAttempt(retryAttempt),
+                    uploader.retryAfterHintMs() ?: 0L
+                )
+                awaitWake(backoffMs)
             }
         }
     }
 
     /**
-     * Uploads one batch with bounded immediate retries.
+     * Uploads one batch exactly once.
+     * processLoop 的重选 + markRetry 是唯一重试层，此处不做内层循环。
      *
      * @param batch durable rows
      * @return true when the complete batch was accepted
      */
-    private fun uploadWithRetry(batch: List<PendingEvent>): Boolean {
+    private fun uploadOnce(batch: List<PendingEvent>): Boolean {
         val events = batch.map(PendingEvent::event)
-        var attempt = 0
-        while (running && attempt <= retryPolicy.maxRetries) {
-            val accepted = runCatching {
-                if (uploader is BatchApmUploader) {
-                    uploader.uploadBatch(events)
-                } else {
-                    events.all(uploader::upload)
-                }
-            }.onFailure {
-                logger.e("Persistent upload attempt failed", it)
-            }.getOrDefault(false)
-            if (accepted) return true
-
-            attempt++
-            if (attempt <= retryPolicy.maxRetries) {
-                awaitWake(retryPolicy.delayForAttempt(attempt))
+        return runCatching {
+            if (uploader is BatchApmUploader) {
+                uploader.uploadBatch(events)
+            } else {
+                events.all(uploader::upload)
             }
+        }.onFailure {
+            logger.e("Persistent upload attempt failed", it)
+        }.getOrDefault(false)
+    }
+
+    /**
+     * 清理重试次数耗尽或超过保留时长的 outbox 行。
+     * 仅在空闲周期调用，避免与正常上传竞争数据库。
+     */
+    private fun pruneExpiredRows() {
+        val pruned = runCatching {
+            store.pruneExpired(MAX_OUTBOX_RETRIES, OUTBOX_TTL_MS)
+        }.onFailure {
+            logger.e("Failed to prune expired outbox rows", it)
+        }.getOrDefault(0)
+        // 有清理动作时输出警告，帮助发现持续性上传失败
+        if (pruned > 0) {
+            logger.w("Pruned $pruned expired outbox rows (retry>=$MAX_OUTBOX_RETRIES or age>${OUTBOX_TTL_MS}ms)")
         }
-        return false
     }
 
     /**
@@ -155,5 +175,11 @@ internal class PersistentUploadWorker(
 
         /** Caps exponent work for rows retained over long outages. */
         private const val MAX_BACKOFF_ATTEMPT = 16
+
+        /** 重试次数达到该值的行在空闲周期被清除。 */
+        private const val MAX_OUTBOX_RETRIES = 10
+
+        /** outbox 行最长保留时长：7 天。 */
+        private const val OUTBOX_TTL_MS = 7L * 24 * 60 * 60 * 1000
     }
 }

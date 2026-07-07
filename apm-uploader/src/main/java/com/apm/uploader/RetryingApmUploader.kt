@@ -4,6 +4,8 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
 import java.util.concurrent.Executors
 import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Semaphore
 import java.util.concurrent.TimeUnit
 
@@ -91,6 +93,15 @@ class RetryingApmUploader(
         Thread(runnable, THREAD_NAME)
     }
 
+    /**
+     * 重试调度器：失败批次延迟后重新尝试，
+     * 退避等待不再阻塞主 drain 线程（新批次可继续上传）。
+     */
+    private val retryScheduler: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, RETRY_SCHEDULER_THREAD_NAME).apply { isDaemon = true }
+        }
+
     /** 运行标志。volatile 保证工作线程可见性。 */
     @Volatile
     private var running = true
@@ -143,6 +154,8 @@ class RetryingApmUploader(
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
+        // 关闭重试调度器：未到期的重投任务被放弃（内存路径尽力而为）
+        retryScheduler.shutdownNow()
         delegate.shutdown()
     }
 
@@ -197,7 +210,7 @@ class RetryingApmUploader(
                     }
                 }
                 if (batch.isEmpty()) continue
-                uploadBatchWithRetry(batch.toList())
+                uploadBatchAttempt(batch.toList(), FIRST_ATTEMPT)
             } catch (_: InterruptedException) {
                 if (running) {
                     Thread.currentThread().interrupt()
@@ -209,56 +222,62 @@ class RetryingApmUploader(
     }
 
     /**
-     * 带重试的批量上传。
-     * 每次重试都会重新发送整批事件。
-     * 超过最大重试次数后丢弃。
+     * 执行一次批量上传尝试；失败时经调度器延迟重投。
+     *
+     * 退避等待在独立的重试调度线程上完成，主 drain 线程立即返回
+     * 继续处理新批次 —— 单个失败批次的退避不再让整个队列停摆。
+     * 超过最大重试次数后丢弃整批。
+     *
+     * @param events 本批事件
+     * @param attempt 当前尝试序号（0 = 首次）
      */
-    private fun uploadBatchWithRetry(events: List<ApmEvent>) {
-        var attempt = 0
-        while (attempt <= retryPolicy.maxRetries) {
-            try {
-                // 只有整批事件都被底层 uploader 成功接收时才算本轮成功。
-                val uploadSucceeded = if (delegate is BatchApmUploader) {
-                    delegate.uploadBatch(events)
-                } else {
-                    events.all { delegate.upload(it) }
-                }
-                if (uploadSucceeded) {
-                    return
-                }
-            } catch (e: Exception) {
-                if (attempt >= retryPolicy.maxRetries) {
-                    logger.e("Upload failed after ${retryPolicy.maxRetries} retries", e)
-                    return
-                }
+    private fun uploadBatchAttempt(events: List<ApmEvent>, attempt: Int) {
+        val uploadSucceeded = try {
+            // 只有整批事件都被底层 uploader 成功接收时才算本轮成功。
+            if (delegate is BatchApmUploader) {
+                delegate.uploadBatch(events)
+            } else {
+                events.all { delegate.upload(it) }
             }
+        } catch (e: Exception) {
+            // 传输异常按失败处理，走统一重投逻辑
+            logger.w("Upload attempt ${attempt + 1} threw: ${e.message}")
+            false
+        }
+        if (uploadSucceeded) return
 
-            attempt++
-            if (attempt > retryPolicy.maxRetries) {
-                logger.e("Upload failed after ${retryPolicy.maxRetries} retries")
-                return
-            }
+        val nextAttempt = attempt + 1
+        if (nextAttempt > retryPolicy.maxRetries) {
+            logger.e("Upload failed after ${retryPolicy.maxRetries} retries, dropping ${events.size} events")
+            return
+        }
 
-            try {
-                // 按指数退避等待后重试；服务端 Retry-After 建议优先于本地退避
-                val delay = maxOf(
-                    retryPolicy.delayForAttempt(attempt),
-                    delegate.retryAfterHintMs() ?: 0L
-                )
-                Thread.sleep(delay)
-            } catch (_: InterruptedException) {
-                if (running) {
-                    Thread.currentThread().interrupt()
-                    return
-                }
-                // During shutdown skip the delay and make the final retry immediately.
-            }
+        // 按指数退避延迟重投；服务端 Retry-After 建议优先于本地退避
+        val delay = maxOf(
+            retryPolicy.delayForAttempt(nextAttempt),
+            delegate.retryAfterHintMs() ?: 0L
+        )
+        try {
+            retryScheduler.schedule(
+                { uploadBatchAttempt(events, nextAttempt) },
+                delay,
+                TimeUnit.MILLISECONDS
+            )
+        } catch (_: RejectedExecutionException) {
+            // 调度器已关闭（shutdown 期间），内存路径尽力而为，放弃重试
+            logger.w("Retry scheduler closed, dropping ${events.size} events")
         }
     }
 
     companion object {
         /** 工作线程名。 */
         private const val THREAD_NAME = "apm-upload-retry"
+
+        /** 重试调度线程名。 */
+        private const val RETRY_SCHEDULER_THREAD_NAME = "apm-upload-retry-scheduler"
+
+        /** 首次尝试的序号。 */
+        private const val FIRST_ATTEMPT = 0
 
         /** 队列初始容量（PriorityBlockingQueue 会自动扩容）。 */
         private const val QUEUE_INITIAL_CAPACITY = 500

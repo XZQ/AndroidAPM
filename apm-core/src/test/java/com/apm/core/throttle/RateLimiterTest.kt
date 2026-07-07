@@ -61,4 +61,45 @@ class RateLimiterTest {
         val limiter = RateLimiter(maxEventsPerWindow = 0, windowMs = 60_000L)
         assertFalse(limiter.tryAcquire("test"))
     }
+
+    /** 超过桶数量上限时按 LRU 逐出，桶数不超过上限。 */
+    @Test
+    fun `bucket count is capped with lru eviction`() {
+        val maxBuckets = 8
+        val limiter = RateLimiter(
+            maxEventsPerWindow = 1,
+            windowMs = 60_000L,
+            maxBuckets = maxBuckets
+        )
+
+        // 插入 3 倍于上限的不同 key
+        for (i in 0 until maxBuckets * 3) {
+            limiter.tryAcquire("module/event_$i")
+        }
+
+        assertTrue("Bucket count should be capped", limiter.bucketCount() <= maxBuckets)
+    }
+
+    /** LRU 逐出后，存活的热 key 仍维持正确的限流状态。 */
+    @Test
+    fun `surviving hot key keeps limiting after eviction`() {
+        val maxBuckets = 4
+        val limiter = RateLimiter(
+            maxEventsPerWindow = 1,
+            windowMs = 60_000L,
+            maxBuckets = maxBuckets
+        )
+
+        // 热 key 消耗掉唯一令牌
+        assertTrue(limiter.tryAcquire("hot"))
+        assertFalse(limiter.tryAcquire("hot"))
+
+        // 插入少量冷 key（不足以逐出刚访问过的热 key）
+        for (i in 0 until maxBuckets - 1) {
+            limiter.tryAcquire("cold_$i")
+        }
+
+        // 热 key 的限流状态应保持
+        assertFalse("Hot key should stay limited", limiter.tryAcquire("hot"))
+    }
 }
