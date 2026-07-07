@@ -43,6 +43,22 @@ class ApmContext internal constructor(
     }
 
     /**
+     * 发送延迟构建的事件到 APM 分发通道。
+     * 主进程路径把事件构建推迟到 dispatcher worker 线程，降低发射线程开销；
+     * 子进程 IPC 路径需要完整事件内容，立即构建。
+     *
+     * @param eventFactory 事件构建工厂（纯函数，可在任意线程执行）
+     */
+    internal fun emitLazy(eventFactory: () -> ApmEvent) {
+        if (processCoordinator != null && !isUploaderProcess) {
+            // IPC 写文件需要完整事件，立即构建
+            processCoordinator.writeEvent(eventFactory())
+        } else {
+            dispatcher.dispatchLazy(eventFactory)
+        }
+    }
+
+    /**
      * Synchronously persists or publishes a critical event.
      *
      * @param event 已构造完成的 critical 事件

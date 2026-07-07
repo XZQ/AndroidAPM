@@ -1,11 +1,11 @@
 package com.apm.storage
 
 import android.content.ContentValues
-import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventCodec
 import com.apm.model.toLineProtocol
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 基于 SQLite 的事件存储实现。
@@ -15,6 +15,7 @@ import com.apm.model.toLineProtocol
  * - 按优先级存储和读取（优先上传严重事件）
  * - 水位线保护：超容量时按优先级和时间淘汰低优先级旧事件
  * - WAL 模式并发读写
+ * - 批量事务写入 + 缓存行数计数（避免每条 append 全表 COUNT(*)）
  *
  * 线程安全：通过 synchronized 保护数据库操作。
  *
@@ -28,26 +29,76 @@ class SQLiteEventStore(
 ) : PendingEventStore {
 
     /**
+     * 缓存的行数计数器。
+     * 初始化时执行一次 COUNT(*)，之后随增删维护，
+     * 每 [COUNT_RESYNC_INTERVAL] 次写入重同步一次以纠正漂移。
+     */
+    private val cachedRowCount = AtomicLong(UNINITIALIZED_COUNT)
+
+    /** 距上次 COUNT(*) 重同步以来的写入条数（synchronized 保护）。 */
+    private var appendsSinceResync = 0
+
+    /**
      * 追加一条事件到 SQLite。
-     *
-     * 1. 序列化事件为 Line Protocol 格式
-     * 2. 写入数据库
-     * 3. 检查水位线，超容量时淘汰低优先级旧事件
+     * 委托批量路径，共享事务与计数维护逻辑。
      */
     @Synchronized
     override fun append(event: ApmEvent) {
+        appendBatchLocked(listOf(event))
+    }
+
+    /**
+     * 批量追加事件。
+     * 所有插入在同一事务内提交，显著降低高频事件的每条写入开销。
+     *
+     * @param events 要存储的事件列表
+     */
+    @Synchronized
+    override fun appendBatch(events: List<ApmEvent>) {
+        if (events.isEmpty()) return
+        appendBatchLocked(events)
+    }
+
+    /**
+     * 批量写入实现（调用方已持有锁）。
+     * 事务插入 → 维护计数 → 周期性重同步 → 水位线淘汰。
+     *
+     * @param events 要存储的事件列表
+     */
+    private fun appendBatchLocked(events: List<ApmEvent>) {
         val db = dbHelper.writableDatabase
-        val values = ContentValues().apply {
-            put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
-            put(COLUMN_MODULE, event.module)
-            put(COLUMN_NAME, event.name)
-            put(COLUMN_SEVERITY, event.severity.name)
-            put(COLUMN_DATA, event.toLineProtocol())
-            put(COLUMN_PAYLOAD, ApmEventCodec.encode(event))
-            put(COLUMN_TIMESTAMP, event.timestamp)
-            put(COLUMN_RETRY_COUNT, 0)
+        ensureRowCountInitialized(db)
+
+        // 单事务批量插入：一次 fsync 落盘整批事件
+        db.beginTransaction()
+        try {
+            for (event in events) {
+                val values = ContentValues().apply {
+                    put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
+                    put(COLUMN_MODULE, event.module)
+                    put(COLUMN_NAME, event.name)
+                    put(COLUMN_SEVERITY, event.severity.name)
+                    // data 列不再冗余存储 line protocol（readRecent 从 payload 解码渲染），
+                    // 避免每条事件的双重序列化开销；保留列以免 schema 迁移
+                    put(COLUMN_DATA, EMPTY_DATA)
+                    put(COLUMN_PAYLOAD, ApmEventCodec.encode(event))
+                    put(COLUMN_TIMESTAMP, event.timestamp)
+                    put(COLUMN_RETRY_COUNT, 0)
+                }
+                db.insert(TABLE_NAME, null, values)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
-        db.insert(TABLE_NAME, null, values)
+
+        // 维护缓存计数并周期性重同步，纠正外部删除造成的漂移
+        cachedRowCount.addAndGet(events.size.toLong())
+        appendsSinceResync += events.size
+        if (appendsSinceResync >= COUNT_RESYNC_INTERVAL) {
+            cachedRowCount.set(countInternal(db))
+            appendsSinceResync = 0
+        }
 
         // 水位线保护：超容量时淘汰低优先级旧事件
         trimIfNeeded(db)
@@ -55,6 +106,7 @@ class SQLiteEventStore(
 
     /**
      * 读取最近的事件（按时间倒序）。
+     * 从 payload BLOB 解码后渲染 line protocol（data 列已不再冗余存储）。
      *
      * @param limit 最大条数
      * @return line protocol 格式的字符串列表，最新在前
@@ -68,14 +120,22 @@ class SQLiteEventStore(
 
         db.query(
             TABLE_NAME,
-            arrayOf(COLUMN_DATA),
+            arrayOf(COLUMN_DATA, COLUMN_PAYLOAD),
             null, null,
             null, null,
             "$COLUMN_TIMESTAMP DESC",
             limit.toString()
         ).use { cursor ->
             while (cursor.moveToNext()) {
-                results.add(cursor.getString(0))
+                val data = cursor.getString(0)
+                // 兼容旧行：data 列非空直接使用；新行从 payload 解码渲染
+                if (!data.isNullOrEmpty()) {
+                    results.add(data)
+                } else {
+                    val payload = cursor.getBlob(1)
+                    runCatching { ApmEventCodec.decode(payload).toLineProtocol() }
+                        .onSuccess(results::add)
+                }
             }
         }
 
@@ -89,6 +149,8 @@ class SQLiteEventStore(
     override fun clear() {
         val db = dbHelper.writableDatabase
         db.delete(TABLE_NAME, null, null)
+        // 计数器同步归零
+        cachedRowCount.set(0L)
     }
 
     /**
@@ -125,7 +187,7 @@ class SQLiteEventStore(
             }
         }
         if (corruptedIds.isNotEmpty()) {
-            deletePending(corruptedIds)
+            deletePendingLocked(corruptedIds)
         }
 
         return results
@@ -139,14 +201,29 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun deletePending(ids: List<Long>): Int {
+        return deletePendingLocked(ids)
+    }
+
+    /**
+     * 删除实现（调用方已持有锁），同步维护缓存计数。
+     *
+     * @param ids 要删除的事件 ID 列表
+     * @return 删除的行数
+     */
+    private fun deletePendingLocked(ids: List<Long>): Int {
         if (ids.isEmpty()) return 0
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
-        return db.delete(
+        val deleted = db.delete(
             TABLE_NAME,
             "$COLUMN_ID IN ($placeholders)",
             ids.map { it.toString() }.toTypedArray()
         )
+        // 删除后同步扣减缓存计数
+        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
+            cachedRowCount.addAndGet(-deleted.toLong())
+        }
+        return deleted
     }
 
     /**
@@ -168,18 +245,38 @@ class SQLiteEventStore(
 
     /**
      * 获取当前存储的事件总数。
+     * 低频调用，直接 COUNT(*) 并顺带校准缓存计数。
      */
     @Synchronized
     override fun pendingCount(): Int {
         val db = dbHelper.readableDatabase
-        db.query(
+        val count = countInternal(db)
+        // 顺带校准缓存计数
+        cachedRowCount.set(count)
+        return count.toInt()
+    }
+
+    /**
+     * 清除重试耗尽或超龄的 outbox 行。
+     *
+     * @param maxRetryCount 重试次数达到该值（含）的行被清除
+     * @param maxAgeMs 事件时间戳距今超过该毫秒数的行被清除
+     * @return 清除的行数
+     */
+    @Synchronized
+    override fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int {
+        val db = dbHelper.writableDatabase
+        val oldestAllowedTimestamp = System.currentTimeMillis() - maxAgeMs
+        val deleted = db.delete(
             TABLE_NAME,
-            arrayOf("COUNT(*)"),
-            null, null, null, null, null
-        ).use { cursor ->
-            if (cursor.moveToFirst()) return cursor.getInt(0)
+            "$COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?",
+            arrayOf(maxRetryCount.toString(), oldestAllowedTimestamp.toString())
+        )
+        // 清理后同步扣减缓存计数
+        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
+            cachedRowCount.addAndGet(-deleted.toLong())
         }
-        return 0
+        return deleted
     }
 
     /** Closes the underlying database helper. */
@@ -188,14 +285,27 @@ class SQLiteEventStore(
     }
 
     /**
+     * 首次写入前用一次 COUNT(*) 初始化缓存计数。
+     *
+     * @param db 可写数据库
+     */
+    private fun ensureRowCountInitialized(db: SQLiteDatabase) {
+        // 仅第一次写入触发全表计数
+        if (cachedRowCount.get() == UNINITIALIZED_COUNT) {
+            cachedRowCount.set(countInternal(db))
+        }
+    }
+
+    /**
      * 水位线保护：超容量时淘汰低优先级旧事件。
      * 淘汰顺序：priority ASC → timestamp ASC（低优先级、旧事件先淘汰）。
+     * 使用缓存计数判断水位，避免每次写入全表 COUNT(*)。
      */
     private fun trimIfNeeded(db: SQLiteDatabase) {
-        val currentCount = countInternal(db)
+        val currentCount = cachedRowCount.get()
         if (currentCount <= maxEvents) return
 
-        val toDelete = currentCount - maxEvents
+        val toDelete = (currentCount - maxEvents).toInt()
         // 查找要淘汰的事件 ID
         val idsToDelete = mutableListOf<Long>()
         db.query(
@@ -211,34 +321,44 @@ class SQLiteEventStore(
             }
         }
 
-        // 批量删除
+        // 批量删除并扣减缓存计数
         if (idsToDelete.isNotEmpty()) {
             val placeholders = idsToDelete.joinToString(",") { "?" }
-            db.delete(
+            val deleted = db.delete(
                 TABLE_NAME,
                 "$COLUMN_ID IN ($placeholders)",
                 idsToDelete.map { it.toString() }.toTypedArray()
             )
+            cachedRowCount.addAndGet(-deleted.toLong())
         }
     }
 
     /**
      * 内部计数方法，不额外 synchronized（调用方已持有锁）。
      */
-    private fun countInternal(db: SQLiteDatabase): Int {
+    private fun countInternal(db: SQLiteDatabase): Long {
         db.query(
             TABLE_NAME,
             arrayOf("COUNT(*)"),
             null, null, null, null, null
         ).use { cursor ->
-            if (cursor.moveToFirst()) return cursor.getInt(0)
+            if (cursor.moveToFirst()) return cursor.getLong(0)
         }
-        return 0
+        return 0L
     }
 
     companion object {
         /** 默认最大存储事件数：50,000 条。 */
         private const val DEFAULT_MAX_EVENTS = 50_000
+
+        /** 缓存计数未初始化标记。 */
+        private const val UNINITIALIZED_COUNT = -1L
+
+        /** 每写入多少条后用 COUNT(*) 重同步一次缓存计数。 */
+        private const val COUNT_RESYNC_INTERVAL = 512
+
+        /** data 列占位空串（line protocol 改为读取时从 payload 渲染）。 */
+        private const val EMPTY_DATA = ""
 
         /** 表名。 */
         private const val TABLE_NAME = "events"

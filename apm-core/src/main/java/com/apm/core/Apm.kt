@@ -250,9 +250,17 @@ object Apm {
         extras: Map<String, String> = emptyMap()
     ) {
         val currentState = state ?: return
-        currentState.context.emit(
-            buildEvent(currentState, module, name, kind, severity, priority, scene, foreground, fields, extras)
-        )
+        // 只在调用线程捕获必须反映发射现场的信息：时间戳、线程名、业务上下文快照；
+        // 上下文 map 合并等分配开销推迟到 dispatcher worker 线程执行
+        val timestamp = System.currentTimeMillis()
+        val threadName = Thread.currentThread().name
+        val bizContext = currentState.context.config.bizContextProvider.currentContext()
+        currentState.context.emitLazy {
+            buildEvent(
+                currentState, module, name, kind, severity, priority, scene, foreground,
+                fields, extras, timestamp, threadName, bizContext
+            )
+        }
     }
 
     /**
@@ -272,8 +280,13 @@ object Apm {
         extras: Map<String, String> = emptyMap()
     ): Boolean {
         val currentState = state ?: return false
+        // critical 路径保持全同步：立即构建并持久化
         val event = buildEvent(
-            currentState, module, name, kind, severity, priority, scene, foreground, fields, extras
+            currentState, module, name, kind, severity, priority, scene, foreground,
+            fields, extras,
+            timestamp = System.currentTimeMillis(),
+            threadName = Thread.currentThread().name,
+            bizContext = currentState.context.config.bizContextProvider.currentContext()
         )
         return currentState.context.emitCriticalSync(event)
     }
@@ -359,6 +372,14 @@ object Apm {
 
     /**
      * Builds an event with a consistent caller and business context snapshot.
+     *
+     * 时间戳、线程名与业务上下文由调用方在发射现场捕获后传入，
+     * 使本方法可以安全地在 dispatcher worker 线程延迟执行
+     * （map 合并的分配开销不再落在发射线程上）。
+     *
+     * @param timestamp 发射现场的时间戳（毫秒）
+     * @param threadName 发射线程名
+     * @param bizContext 发射现场的业务上下文快照
      */
     private fun buildEvent(
         currentState: State,
@@ -370,18 +391,23 @@ object Apm {
         scene: String?,
         foreground: Boolean?,
         fields: Map<String, Any?>,
-        extras: Map<String, String>
+        extras: Map<String, String>,
+        timestamp: Long,
+        threadName: String,
+        bizContext: Map<String, String>
     ): ApmEvent {
         val config = currentState.context.config
-        val mergedContext = config.defaultContext + config.bizContextProvider.currentContext()
+        // 默认上下文与业务上下文合并（在 worker 线程执行）
+        val mergedContext = config.defaultContext + bizContext
         return ApmEvent(
             module = module,
             name = name,
             kind = kind,
             severity = severity,
             priority = priority,
+            timestamp = timestamp,
             processName = currentState.context.processName,
-            threadName = Thread.currentThread().name,
+            threadName = threadName,
             scene = scene,
             foreground = foreground,
             fields = fields,

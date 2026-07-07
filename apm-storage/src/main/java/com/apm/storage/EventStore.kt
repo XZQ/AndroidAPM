@@ -15,6 +15,20 @@ interface EventStore {
     fun append(event: ApmEvent)
 
     /**
+     * 批量追加事件。
+     * 默认实现逐条调用 [append]；支持事务的实现应覆写为原子批量写入，
+     * 显著降低高频事件场景的每条写入开销。
+     *
+     * @param events 要存储的事件列表
+     */
+    fun appendBatch(events: List<ApmEvent>) {
+        // 默认逐条追加，保证语义等价
+        for (event in events) {
+            append(event)
+        }
+    }
+
+    /**
      * 读取最近的事件。
      * @param limit 最大条数
      * @return line protocol 格式的字符串列表，最新在前
@@ -77,4 +91,16 @@ interface PendingEventStore : EventStore {
      * @return pending row count
      */
     fun pendingCount(): Int
+
+    /**
+     * 清除重试次数耗尽或超过最大保留时长的行。
+     *
+     * 防止永久失败的事件无限期占据 outbox 并被反复重试。
+     * 默认实现为 no-op，供不支持过期清理的实现与测试替身复用。
+     *
+     * @param maxRetryCount 重试次数上限（含）之上的行被清除
+     * @param maxAgeMs 事件时间戳距今超过该毫秒数的行被清除
+     * @return 清除的行数
+     */
+    fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int = 0
 }
