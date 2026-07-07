@@ -10,6 +10,7 @@ coreKtx = "1.7.0"
 appcompat = "1.4.1"
 material = "1.5.0"
 mockito = "4.8.0"
+robolectric = "4.14.1"
 
 [libraries]
 lifecycle-process = { module = "androidx.lifecycle:lifecycle-process", version.ref = "lifecycle" }
@@ -21,6 +22,7 @@ android-core-ktx = { module = "androidx.core:core-ktx", version.ref = "coreKtx" 
 android-appcompat = { module = "androidx.appcompat:appcompat", version.ref = "appcompat" }
 material = { module = "com.google.android.material:material", version.ref = "material" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
+robolectric = { module = "org.robolectric:robolectric", version.ref = "robolectric" }
 junit = { module = "junit:junit", version.ref = "junit" }
 
 [plugins]
