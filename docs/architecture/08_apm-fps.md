@@ -2,6 +2,11 @@
 
 > FPS 监控：Choreographer VSync + FrameMetrics + 掉帧/卡顿/冻结分级
 
+## 2026-07-07 优化更新
+
+- FrameMetrics 队列有界化：`MAX_PENDING_FRAMES=1024`，溢出丢弃最旧帧（O(1) 计数器，避免 ConcurrentLinkedQueue.size 的 O(n)）。
+- FrameMetrics 注册/注销失败经 `Apm.recordInternalError` 计数（逐帧 getMetric 仍保留 0L 降级不计数，避免热路径开销）。
+
 ## 2026-07-04 实现状态
 
 - FPS 使用窗口内实际累计帧间隔计算，不再用理论窗口时长估算。

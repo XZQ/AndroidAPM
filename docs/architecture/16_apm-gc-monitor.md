@@ -4,6 +4,10 @@
 
 ---
 
+## 2026-07-07 优化更新
+
+- `Debug.getRuntimeStat` 改为直接调用（API 23+ 公开 API，minSdk 24），移除不必要的反射；异常经 `Apm.recordInternalError` 计数。
+
 ## 类图
 
 ```

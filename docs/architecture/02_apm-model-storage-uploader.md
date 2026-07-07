@@ -2,6 +2,17 @@
 
 > 数据模型、本地存储、上传通道
 
+## 2026-07-07 优化更新
+
+- `ProtobufSerializer` 补齐 field 13 `priority`（枚举名），与 Line Protocol 字段语义一致；`apm_event.proto` 已同步。
+- `EventStore` 新增 `appendBatch`（默认逐条）；`SQLiteEventStore` 批量事务写入 + 缓存行数计数（每 512 次写入重同步）替代每条 COUNT(*)；`data` 列不再冗余存储 line protocol（`readRecent` 从 payload BLOB 解码渲染，旧行兼容）。
+- `PendingEventStore` 新增 `pruneExpired(maxRetryCount, maxAgeMs)`（默认 no-op，SQLite 实现真实清理）。
+- WAL 改用官方 `setWriteAheadLoggingEnabled(true)`：原 `execSQL("PRAGMA journal_mode=WAL")` 在现代 Android 直接抛异常（Robolectric 测试捕获的真实缺陷）。
+- `HttpApmUploader`：读尽并关闭响应/错误流保住 keep-alive；解析 429/503 `Retry-After`（秒/HTTP-date）经 `ApmUploader.retryAfterHintMs()` 透出。
+- `RetryingApmUploader` 退避改为独立调度线程延迟重投，失败批次不再阻塞整个上传队列。
+- 新增 `UploaderLogger` 接口（apm-uploader 无法依赖 apm-core 的 ApmLogger），由宿主注入实现日志门控。
+- `SQLiteEventStore` 获得 Robolectric 直接测试（9 例：批量/淘汰/outbox/重试/清理/坏行/golden readRecent）。
+
 ## 2026-07-04 实现状态
 
 - `ApmEventCodec` 提供有版本、限长、可逆的二进制持久化格式。

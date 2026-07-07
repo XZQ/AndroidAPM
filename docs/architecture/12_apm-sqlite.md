@@ -4,6 +4,11 @@
 
 ---
 
+## 2026-07-07 优化更新
+
+- 新增 `ApmSQLiteDatabase` 自动计时包装器：委托 `SQLiteDatabase` 的 query/rawQuery/insert/update/delete/execSQL 并自动走 `onSqlExecuted` 分析管线（零依赖自动捕获；手动埋点 API 不变）。
+- `QueryPlanAnalyzer` 执行失败经 `Apm.recordInternalError` 计数。
+
 ## 类图
 
 ```

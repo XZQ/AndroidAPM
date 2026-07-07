@@ -16,15 +16,25 @@ Read this file first, then follow the read order below.
 
 ## Current Verified Baseline
 
-- Verification date: `2026-07-04`
-- Documentation handoff snapshot: `2026-07-06`
-- Build units: `23`
-- Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `1` included build (`apm-plugin`)
-- Main source files: `121`
-- Test files: `57`
-- Recent implementation commit: `cd2a409 Refactor: Harden runtime delivery and native alignment`
-- Previous documentation baseline commit: `a7b2a0a Docs: Sync runtime hardening commit`
-- Current hardening: atomic IPC publish, critical-event IPC handoff, configurable HTTP Gzip, lazy FPS monitor creation, and 16KB native page alignment.
+- Verification date: `2026-07-07`
+- Build units: `24`
+- Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `2` included builds (`apm-plugin`, `build-logic`)
+- Main source files: `128` (123 Kotlin + 4 C + 1 proto)
+- Test files: `63`
+- Recent implementation commits: 2026-07-07 optimization series (see `git log --oneline -n 20`)
+- Current hardening (2026-07-07 series):
+  - build-logic convention plugin + POM metadata + optional signing
+  - JNI static-binding fixes (apm-io, apm-crash) with contract tests
+  - native SIGQUIT ANR detection shipped (`libapm-anr.so`, flag-poll design)
+  - protobuf priority field, HTTP stream draining + Retry-After hints
+  - dispatcher bounded-queue batch pipeline off the caller thread,
+    SQLite batch transactions + cached row counter, rate-limiter LRU,
+    non-blocking upload retry backoff, outbox TTL pruning, IPC file batching
+  - ApplicationExitInfo exit-reason collection (API 30+), true process-start
+    launch baseline, real clock-tick CPU math, ApmSQLiteDatabase wrapper
+  - WAL enabled via setWriteAheadLoggingEnabled (execSQL PRAGMA crashed)
+  - shared ApmExecutors, Robolectric-backed SQLiteEventStore tests,
+    CI triggers for main/master + lint report artifacts
 - Verified commands:
   - `./gradlew assembleDebug`
   - `./gradlew testDebugUnitTest`
@@ -46,6 +56,8 @@ Read this file first, then follow the read order below.
 ## Working Rules
 
 - Add KDoc for all `public` / `internal` / `private` properties and methods.
+- Create SDK threads/executors through `com.apm.core.ApmExecutors`; apm-uploader (which cannot see apm-core) keeps module-local executors and logs through the injected `UploaderLogger`.
+- Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)` instead of empty catch blocks.
 - Add inline comments at important branches, loops, exception handling, assignments with business meaning, and callbacks.
 - Extract magic numbers and strings into named constants unless the value is a trivial `0`, `1`, or `-1`.
 - Use English commit messages in the format `Type: Subject`.

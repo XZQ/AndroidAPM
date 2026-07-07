@@ -34,15 +34,15 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 | # | 维度 | 模块 | 核心能力 |
 |---|------|------|---------|
 | 1 | [内存](docs/architecture/03_apm-memory.md) | apm-memory | Heap/PSS 采样、Activity/Fragment/ViewModel 泄漏检测、OOM 预警、Hprof Dump & Strip、NativeHeap 监控 |
-| 2 | [崩溃](docs/architecture/04_apm-crash.md) | apm-crash | Java UncaughtExceptionHandler、Native 信号解析(SIGSEGV/SIGABRT)、Tombstone 扫描 |
-| 3 | [ANR](docs/architecture/05_apm-anr.md) | apm-anr | Watchdog 默认检测、可选 SIGQUIT 回调接入、traces.txt 解析、5 类原因分类、堆栈去重 |
-| 4 | [启动](docs/architecture/06_apm-launch.md) | apm-launch | 6 阶段冷启动追踪、热启动/温启动、Choreographer 首帧检测、瓶颈分析 |
+| 2 | [崩溃](docs/architecture/04_apm-crash.md) | apm-crash | Java UncaughtExceptionHandler、Native 信号解析(SIGSEGV/SIGABRT)、Tombstone 扫描、ApplicationExitInfo 退出原因采集(API 30+) |
+| 3 | [ANR](docs/architecture/05_apm-anr.md) | apm-anr | SIGQUIT 信号检测(libapm-anr.so 随模块交付、默认开启、失败自动降级)、Watchdog 兜底、traces.txt 解析、5 类原因分类、堆栈去重 |
+| 4 | [启动](docs/architecture/06_apm-launch.md) | apm-launch | 内核级进程启动基线(Process.getStartElapsedRealtime)、6 阶段冷启动追踪、热启动/温启动、Choreographer 首帧检测、瓶颈分析 |
 | 5 | [网络](docs/architecture/07_apm-network.md) | apm-network | OkHttp Interceptor + EventListener、DNS→TCP→TLS→Headers→Body 全链路耗时、聚合统计 |
 | 6 | [FPS](docs/architecture/08_apm-fps.md) | apm-fps | Choreographer VSync + FrameMetrics 双引擎、掉帧/卡顿/冻结三级分级 |
 | 7 | [慢方法](docs/architecture/09_apm-slow-method.md) | apm-slow-method | 反射 Hook Looper.mLogging + ASM 字节码插桩双引擎、栈采样、热点方法统计 |
 | 8 | [IO](docs/architecture/10_apm-io.md) | apm-io | Native PLT Hook 双层架构、FD 泄漏(/proc/self/fd)、吞吐量统计、Closeable 泄漏(PhantomReference) |
 | 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | 电量下降、CPU Jiffies，以及宿主回调接入的 WakeLock/GPS/Alarm 泛洪监控 |
-| 10 | [SQLite](docs/architecture/12_apm-sqlite.md) | apm-sqlite | 慢查询检测、主线程 DB 操作、大数据量操作、QueryPlan 分析(全表扫描/临时BTree) |
+| 10 | [SQLite](docs/architecture/12_apm-sqlite.md) | apm-sqlite | ApmSQLiteDatabase 自动计时包装器、慢查询检测、主线程 DB 操作、大数据量操作、QueryPlan 分析(全表扫描/临时BTree) |
 | 11 | [WebView](docs/architecture/13_apm-webview.md) | apm-webview | 页面加载、JS/白屏、并发安全的资源瀑布与显式页面隔离 |
 | 12 | [IPC](docs/architecture/14_apm-ipc.md) | apm-ipc | Binder 调用耗时监控、主线程阈值分级、聚合统计 |
 | 13 | [线程](docs/architecture/15_apm-thread-monitor.md) | apm-thread-monitor | 线程数膨胀、同名泄漏、BLOCKED 死锁检测 |
@@ -59,7 +59,8 @@ Android APM Framework 是一个全维度 Android 性能监控框架，当前代�
 - **关键事件落盘** — Crash 等关键事件支持同步持久化，不等待网络请求
 - **SDK 自监控** — 上报 emit/drop/queue/latency 健康指标，并支持自动降级
 - **ASM 插桩** — AGP instrumentation API + ASM 字节码级方法耗时采集
-- **Native Hook** — CMake 构建 libapm-io.so，运行时动态解析 xhook 实现 IO 拦截，JNI 目标按 16KB 页面链接对齐，缺失时自动降级
+- **Native Hook** — CMake 构建 libapm-io.so（运行时解析 xhook 的 IO 拦截）、libapm_crash.so（信号处理器）、libapm-anr.so（SIGQUIT 检测），JNI 目标均按 16KB 页面链接对齐，缺失时自动降级
+- **退出原因采集** — ApplicationExitInfo (API 30+) 启动时读取 ANR/OOM 被杀/系统信号等退因，附 ANR trace 摘要
 - **Hprof 裁剪** — 二进制解析 + 原始数组剥离，大幅缩小 dump 文件
 
 ## 架构
@@ -247,15 +248,15 @@ val okHttpClient = OkHttpClient.Builder()
 | apm-storage | 本地存储 | SQLite 持久化出箱与确认删除 + File RingBuffer 兼容路径 |
 | apm-uploader | 上传通道 | HTTP 单请求批量/可配置 Gzip + Logcat + 有界重试队列 |
 | apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
-| apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone |
-| apm-anr | ANR 监控 | Watchdog + 可选 SIGQUIT 回调 + traces.txt 解析 |
+| apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone + ApplicationExitInfo 退因 |
+| apm-anr | ANR 监控 | SIGQUIT 信号检测 + Watchdog 兜底 + traces.txt 解析 |
 | apm-launch | 启动监控 | 冷/热/温启动 + 6 阶段追踪 |
 | apm-network | 网络监控 | OkHttp 全链路 (DNS→TCP→TLS→Body) |
 | apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
 | apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
 | apm-io | IO 监控 | Native PLT Hook(16KB 页面链接对齐) + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
 | apm-battery | 电量监控 | 电量/CPU + WakeLock/GPS/Alarm 宿主回调 API |
-| apm-sqlite | SQLite 监控 | 慢查询 + QueryPlan 分析 |
+| apm-sqlite | SQLite 监控 | ApmSQLiteDatabase 自动计时 + 慢查询 + QueryPlan 分析 |
 | apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |
 | apm-ipc | IPC 监控 | Binder 调用耗时 |
 | apm-thread-monitor | 线程监控 | 膨胀/泄漏/死锁 |
@@ -275,8 +276,9 @@ val okHttpClient = OkHttpClient.Builder()
 | fork 子进程 Dump (显式开启) | ✅ | ❌ | ✅ |
 | NativeHeap 监控 | ✅ | ❌ | ✅ |
 | Java 崩溃 | ✅ | ✅ | ❌ |
+| ApplicationExitInfo 退出原因 (API 30+) | ✅ | ❌ | ❌ |
 | Native 崩溃信号处理器 + Tombstone | ✅ | ✅ | ❌ |
-| ANR 检测 (Watchdog + 可选 SIGQUIT) | ✅ | ✅ | ❌ |
+| ANR 检测 (SIGQUIT + Watchdog) | ✅ | ✅ | ❌ |
 | ANR 原因分类 | ✅ (5 类) | ❌ | ❌ |
 | 冷启动 6 阶段 | ✅ | ✅ | ❌ |
 | 热启动/温启动 | ✅ | ✅ | ❌ |
@@ -314,7 +316,7 @@ Android-APM/
 │   ├── oom/                   # OOM 预警 + Hprof Dump/Strip
 │   └── nativeheap/            # NativeHeap 监控
 ├── apm-crash/                 # 崩溃监控 (Java + Native)
-├── apm-anr/                   # ANR 监控 (Watchdog + 可选 SIGQUIT)
+├── apm-anr/                   # ANR 监控 (SIGQUIT + Watchdog)
 ├── apm-launch/                # 启动监控 (冷/热/温)
 ├── apm-network/               # 网络监控 (OkHttp)
 ├── apm-fps/                   # FPS 监控 (VSync + FrameMetrics)

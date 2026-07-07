@@ -2,6 +2,11 @@
 
 > 电量监控：电量下降 + CPU Jiffies + 宿主回调接入的 WakeLock/GPS/Alarm
 
+## 2026-07-07 优化更新
+
+- CPU 时钟频率改由 `Os.sysconf(_SC_CLK_TCK)` 读取（原硬编码 100 Hz 在非 100 Hz 内核上有系统性偏差）；使用率语义明确为单核占用分数（1.0=占满一核，上限核数）；换算数学由注入 seam 的单测在 100/250 Hz 下锁定。
+- /proc/self/stat 读取失败经 `Apm.recordInternalError` 计数。
+
 ## 2026-06-15 实现状态
 
 - CPU Jiffies sampler 已由周期任务实际调用并输出持续高 CPU 事件。

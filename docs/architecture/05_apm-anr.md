@@ -1,12 +1,17 @@
 # apm-anr 模块架构
 
-> ANR 监控：Watchdog 默认检测 + 可选 SIGQUIT 回调 + traces.txt + 原因分类 + 去重
+> ANR 监控：SIGQUIT 信号检测（默认开启） + Watchdog 兜底 + traces.txt + 原因分类 + 去重
 
-## 2026-06-15 实现状态
+## 2026-07-07 实现状态
 
-- Watchdog 始终作为默认检测通道启动，并按 `anrTimeoutMs` 计算真实阻塞时长。
-- 仓库当前没有可用的 ANR SIGQUIT JNI 库，因此 `enableSigquitDetection` 默认 `false`；只有宿主提供 native 回调后才应开启。
-- SIGQUIT 不可用不会禁用 Watchdog，也不会导致模块启动失败。
+- **SIGQUIT native 检测已随模块交付**（`apm-anr/src/main/jni/` 编译 `libapm-anr.so`，四 ABI + 16KB 页面对齐），`enableSigquitDetection` 默认 `true`；JNI 加载失败自动降级为 Watchdog-only。
+- Native 层设计（异步信号安全优先）：
+  - 注册时缓存 ART "Signal Catcher" 线程 tid，创建专用接收线程并解除其 SIGQUIT 阻塞；
+  - `sigaction` 处理器内只做两件异步信号安全的事：原子写入时间戳标志 + `tgkill` 把信号定向转发给 Signal Catcher（保留系统 ANR trace dump）；
+  - **不存在信号上下文内的 JNI 回调**：Java 侧由 watchdog 线程经 `SigquitFlagPoller` 轮询 `nativeConsumeSigquitTimestamp()` 消费标志（检测延迟 ≤ `checkIntervalMs`）。
+- `SigquitFlagSource` 接口作为测试 seam，JVM 单测无需加载 .so。
+- Watchdog 始终作为兜底检测通道启动，并按 `anrTimeoutMs` 计算真实阻塞时长。
+- 系统级 ANR 退因兜底由 apm-crash 的 ApplicationExitInfo 采集器（API 30+）提供。
 - 严重级别按 `anrSevereThresholdMs` 与检测持续时间判断。
 
 ---

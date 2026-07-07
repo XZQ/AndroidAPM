@@ -2,6 +2,11 @@
 
 > IO 监控：Native PLT Hook + Java 代理 + FD 泄漏 + 吞吐量 + Closeable 泄漏
 
+## 2026-07-07 优化更新
+
+- JNI 回调修复：`onNativeIoEvent` 移入伴生对象并加 `@JvmStatic`（经活跃实例桥接转发），此前 GetStaticMethodID 查找失败导致 JNI_OnLoad 失败、Native PLT Hook 从未真正生效；契约测试锁定。
+- FD/Closeable 泄漏轮询的静默异常改为 `Apm.recordInternalError` 计数。
+
 ## 2026-07-04 实现状态
 
 - Java fallback 返回真实的 `InputStream`/`OutputStream` 包装器，自动统计 read/write/close。

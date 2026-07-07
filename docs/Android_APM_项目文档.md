@@ -1,8 +1,8 @@
 # Android APM 项目文档
 
-> 最后校验：2026-07-04 | 交接快照：2026-07-06 | `22` 个 root Gradle subproject + `1` 个 included build | 121 个主源码文件（117 Kotlin + 3 C + 1 proto） | 57 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
+> 最后校验：2026-07-07 | `22` 个 root Gradle subproject + `2` 个 included build（apm-plugin、build-logic） | 128 个主源码文件（123 Kotlin + 4 C + 1 proto） | 63 个测试文件 | Debug/Release/Test/Lint/Maven 发布与独立消费验证均已通过
 >
-> 说明：构建单元总数 `23 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `1` 个 included build（`apm-plugin`）
+> 说明：构建单元总数 `24 = 22` 个 root subproject（`4` 个基础模块 + `15` 个监控模块 + `2` 个扩展模块（apm-trace, apm-otel-exporter）+ `apm-sample-app`）+ `2` 个 included build（`apm-plugin` 插桩插件、`build-logic` convention plugin）
 
 ---
 
@@ -75,10 +75,11 @@
 
 ```
 业务模块 → Apm.emit(module, name, kind, severity, priority, fields)
-         → ApmDispatcher（聚合 → 限流 → PII脱敏 → 持久化）
-         → SQLite PendingEventStore（默认，成功确认后删除；重启回放）
-         → PersistentUploadWorker（批量 + Gzip + 指数退避）
-         → FileEventStore / RetryingApmUploader（显式 FILE 配置时）
+         调用线程只捕获 时间戳/线程名/业务上下文快照 后入有界队列（2048）
+         → ApmDispatcher worker（构建 → 聚合 → 限流 → PII脱敏 → appendBatch 单事务落盘）
+         → SQLite PendingEventStore（默认，成功确认后删除；重启回放；空闲清理 retry≥10/7天过期）
+         → PersistentUploadWorker（批量 + Gzip + 指数退避 + Retry-After）
+         → FileEventStore / RetryingApmUploader（显式 FILE 配置时，init 输出降级警告）
 ```
 
 ### 生成图谱
@@ -105,6 +106,7 @@
 | Phase 10: Trace API | 已完成 | apm-trace 手动埋点 Span/Trace API |
 | Phase 11: OTel 对接 | 已完成 | apm-otel-exporter 提供无 SDK 依赖的 Span/Metric/Log 映射结果；网络发送由宿主适配层负责 |
 | Phase 12: 工程硬化 | 已完成 | SQLite 出箱路径、发布配置去除 afterEvaluate、持久化 worker 失败/回退测试、IPC 原子发布与 critical 跨进程交接、HTTP Gzip 配置、FPS 懒初始化、Native 16KB 页面对齐 |
+| Phase 13: 全方位优化（2026-07-07） | 已完成 | 构建收敛（build-logic convention plugin + POM/签名）；JNI 静态绑定修复（io/crash）+ SIGQUIT native 交付（anr）；protobuf priority、HTTP 流卫生 + Retry-After；分发管线搬离调用线程（有界队列 + 批量事务落盘）；限流 LRU、非阻塞重试、outbox TTL、IPC 合批；ApplicationExitInfo 退因、真实启动基线、CPU 时钟修正、ApmSQLiteDatabase；WAL 官方 API 修复；ApmExecutors、Robolectric 存储测试、CI 触发扩展 |
 
 ### 1.2 Git 提交历史
 

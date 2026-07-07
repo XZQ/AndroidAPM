@@ -2,6 +2,16 @@
 
 > 核心框架层：初始化、模块注册、事件分发、限流、灰度
 
+## 2026-07-07 优化更新
+
+- `ApmDispatcher` 重构为有界队列（`QUEUE_CAPACITY=2048`）+ 单 worker 批量循环（`MAX_BATCH_DRAIN=32`）：聚合/限流/脱敏在 worker 线程执行，队列溢出丢弃并计入自监控；`dispatchLazy` 支持事件延迟构建。
+- `RateLimiter` 改为 access-order LRU（上限 256 桶），高基数事件名不再泄漏内存。
+- `PersistentUploadWorker`：每周期单次上传尝试（processLoop 重选为唯一重试层）、尊重 `Retry-After` 提示、空闲周期 `pruneExpired(10, 7天)`。
+- `ProcessEventCoordinator`：异步事件按 `maxLinesPerFile`/500ms 合批为多行 `.ipc` 文件；Base64 fallback 改用 `java.util.Base64`。
+- `UploaderFactory` 注入 `UploaderLogger` 适配器，uploader 日志受 `debugLogging` 门控。
+- 新增 `ApmExecutors` 共享线程设施与 `Apm.recordInternalError(tag, error)` 内部错误门面。
+- `StorageType.FILE` 在 init 时输出显式警告（无持久 outbox，上传退化为尽力而为）。
+
 ## 2026-07-04 实现状态
 
 - `ApmConfig.storageType` 默认 `SQLITE`，持久化存储使用独立 `PersistentUploadWorker` 回放和确认。

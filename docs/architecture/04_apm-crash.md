@@ -2,6 +2,12 @@
 
 > 崩溃监控：Java 崩溃 + Native 崩溃 + Tombstone 解析
 
+## 2026-07-07 优化更新
+
+- `logNativeCrashSignal` 补 `@JvmStatic`：JNI 以 GetStaticMethodID 查找，此前查找必然失败导致 JNI_OnLoad 失败、native 采集静默降级为 tombstone-only；契约测试锁定。
+- 新增 `ExitReasonCollector`（API 30+）：启动后台线程读取 `ApplicationExitInfo` 历史退出原因（ANR/native crash/LMK OOM/系统信号等），SharedPreferences 时间戳去重，ANR 附系统 trace（默认截断 64KB），以 `app_exit` 事件上报；`CrashConfig.collectExitInfo` 默认开启。
+- `ExitInfoSource`/`ExitTimestampStore` seam 使采集逻辑可在 JVM 单测覆盖。
+
 ## 2026-07-04 实现状态
 
 - Java 崩溃事件通过 `Apm.emitCriticalSync()` 在调用原始异常处理器前同步写入本地持久化 outbox。
