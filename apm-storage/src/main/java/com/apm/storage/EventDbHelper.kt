@@ -20,6 +20,14 @@ class EventDbHelper(
     version: Int = DATABASE_VERSION
 ) : SQLiteOpenHelper(context, name, null, version) {
 
+    init {
+        // WAL 模式：读不阻塞写，写不阻塞读。
+        // 必须使用官方 API 而非 execSQL("PRAGMA journal_mode=WAL")——
+        // 该 PRAGMA 会返回结果行，用 execSQL 执行在现代 Android 上直接抛
+        // SQLiteException（"Queries can be performed using query or rawQuery only"）
+        setWriteAheadLoggingEnabled(true)
+    }
+
     /**
      * 创建数据库表。
      * events 表存储所有待上报的 APM 事件。
@@ -42,16 +50,6 @@ class EventDbHelper(
         }
     }
 
-    /**
-     * 数据库打开时启用 WAL 模式，提高并发读写性能。
-     */
-    override fun onOpen(db: SQLiteDatabase) {
-        super.onOpen(db)
-        // WAL 模式：读不阻塞写，写不阻塞读
-        if (!db.isReadOnly) {
-            db.execSQL("PRAGMA journal_mode=WAL")
-        }
-    }
 
     companion object {
         /** 数据库文件名。 */
