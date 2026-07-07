@@ -19,6 +19,18 @@ interface ApmUploader {
      * 默认实现为空，供无状态 uploader 直接复用。
      */
     fun shutdown() = Unit
+
+    /**
+     * 服务端建议的下次重试延迟（毫秒）。
+     *
+     * 最近一次 upload/uploadBatch 失败时由实现方更新（如 HTTP 429/503 的
+     * Retry-After 响应头）；无建议或上次成功时返回 null。
+     * 重试调度方（RetryingApmUploader / PersistentUploadWorker）应在
+     * 计算退避延迟时尊重该提示。
+     *
+     * @return 建议延迟毫秒数，null 表示无建议
+     */
+    fun retryAfterHintMs(): Long? = null
 }
 
 /**

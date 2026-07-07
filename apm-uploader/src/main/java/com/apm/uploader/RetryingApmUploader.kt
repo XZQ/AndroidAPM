@@ -1,6 +1,5 @@
 package com.apm.uploader
 
-import android.util.Log
 import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
 import java.util.concurrent.Executors
@@ -66,7 +65,9 @@ class RetryingApmUploader(
     /** 批量大小：从队列中一次取出的最大事件数。 */
     private val batchSize: Int = DEFAULT_BATCH_SIZE,
     /** 刷盘间隔（毫秒）：队列无数据时的最大等待时间。 */
-    private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS
+    private val flushIntervalMs: Long = DEFAULT_FLUSH_INTERVAL_MS,
+    /** 日志输出，由宿主注入以尊重全局 debugLogging 开关。 */
+    private val logger: UploaderLogger = UploaderLogger.DEFAULT
 ) : ApmUploader {
 
     /**
@@ -115,8 +116,7 @@ class RetryingApmUploader(
             if (!capacityPermits.tryAcquire()) {
                 val evicted = evictLowerPriority(event)
                 if (!evicted || !capacityPermits.tryAcquire()) {
-                    Log.w(
-                        TAG,
+                    logger.w(
                         "Queue at hard capacity ($QUEUE_CAPACITY), dropping ${event.priority} event: ${event.name}"
                     )
                     return false
@@ -138,7 +138,7 @@ class RetryingApmUploader(
         executor.shutdownNow()
         try {
             if (!executor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)) {
-                Log.w(TAG, "Uploader did not drain within ${SHUTDOWN_TIMEOUT_MS}ms")
+                logger.w("Uploader did not drain within ${SHUTDOWN_TIMEOUT_MS}ms")
             }
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
@@ -228,20 +228,23 @@ class RetryingApmUploader(
                 }
             } catch (e: Exception) {
                 if (attempt >= retryPolicy.maxRetries) {
-                    Log.e(TAG, "Upload failed after ${retryPolicy.maxRetries} retries", e)
+                    logger.e("Upload failed after ${retryPolicy.maxRetries} retries", e)
                     return
                 }
             }
 
             attempt++
             if (attempt > retryPolicy.maxRetries) {
-                Log.e(TAG, "Upload failed after ${retryPolicy.maxRetries} retries")
+                logger.e("Upload failed after ${retryPolicy.maxRetries} retries")
                 return
             }
 
             try {
-                // 按指数退避等待后重试。
-                val delay = retryPolicy.delayForAttempt(attempt)
+                // 按指数退避等待后重试；服务端 Retry-After 建议优先于本地退避
+                val delay = maxOf(
+                    retryPolicy.delayForAttempt(attempt),
+                    delegate.retryAfterHintMs() ?: 0L
+                )
                 Thread.sleep(delay)
             } catch (_: InterruptedException) {
                 if (running) {
@@ -254,9 +257,6 @@ class RetryingApmUploader(
     }
 
     companion object {
-        /** Logcat tag。 */
-        private const val TAG = "ApmUploader"
-
         /** 工作线程名。 */
         private const val THREAD_NAME = "apm-upload-retry"
 

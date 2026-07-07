@@ -97,7 +97,8 @@ object Apm {
         // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。
         val uploader: ApmUploader = UploaderFactory.create(
             config = config,
-            durableStore = store is com.apm.storage.PendingEventStore
+            durableStore = store is com.apm.storage.PendingEventStore,
+            logger = logger
         )
 
         // 限流器：按 module/name 分桶，超出配额的事件被丢弃

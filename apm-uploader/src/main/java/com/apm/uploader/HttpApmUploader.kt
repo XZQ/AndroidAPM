@@ -1,10 +1,10 @@
 package com.apm.uploader
 
-import android.util.Log
 import com.apm.model.ApmEvent
 import com.apm.model.ProtobufSerializer
 import com.apm.model.SerializationFormat
 import com.apm.model.toLineProtocol
+import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
@@ -44,8 +44,24 @@ class HttpApmUploader(
     /** 是否启用 Gzip 压缩上传。 */
     private val enableGzip: Boolean = false,
     /** 事件序列化格式。 */
-    private val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL
+    private val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL,
+    /** 日志输出，由宿主注入以尊重全局 debugLogging 开关。 */
+    private val logger: UploaderLogger = UploaderLogger.DEFAULT
 ) : BatchApmUploader {
+
+    /**
+     * 最近一次失败时服务端建议的重试延迟（毫秒）。
+     * 来自 429/503 响应的 Retry-After 头；成功或无建议时为 null。
+     */
+    @Volatile
+    private var lastRetryAfterMs: Long? = null
+
+    /**
+     * 返回服务端建议的下次重试延迟。
+     *
+     * @return Retry-After 换算的毫秒数，无建议时为 null
+     */
+    override fun retryAfterHintMs(): Long? = lastRetryAfterMs
 
     /**
      * 上传单条事件到远端服务器。
@@ -127,6 +143,21 @@ class HttpApmUploader(
 
             // 读取响应码
             val responseCode = connection.responseCode
+
+            // 读尽并关闭响应流：不排空响应体会阻止 HttpURLConnection
+            // 归还底层连接（keep-alive 失效），错误路径还可能泄漏连接
+            drainResponse(connection, responseCode)
+
+            // 限流/服务不可用时解析服务端建议的重试延迟，其余情况清除旧提示
+            lastRetryAfterMs = if (
+                responseCode == HTTP_TOO_MANY_REQUESTS ||
+                responseCode == HTTP_SERVICE_UNAVAILABLE
+            ) {
+                parseRetryAfterMs(connection)
+            } else {
+                null
+            }
+
             return when {
                 // 成功：2xx
                 responseCode in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> {
@@ -134,34 +165,84 @@ class HttpApmUploader(
                 }
                 // 限流：429
                 responseCode == HTTP_TOO_MANY_REQUESTS -> {
-                    Log.w(TAG, "Server rate limited: $responseCode")
+                    logger.w("Server rate limited: $responseCode retryAfterMs=$lastRetryAfterMs")
                     false
                 }
                 // 服务端错误：5xx
                 responseCode >= HTTP_SERVER_ERROR -> {
-                    Log.w(TAG, "Server error: $responseCode")
+                    logger.w("Server error: $responseCode")
                     false
                 }
                 // 其他错误
                 else -> {
-                    Log.w(TAG, "Upload failed: HTTP $responseCode")
+                    logger.w("Upload failed: HTTP $responseCode")
                     false
                 }
             }
         } catch (e: Exception) {
-            // 网络异常（DNS、连接超时、读取超时等）
-            Log.e(TAG, "HTTP upload error: ${e.message}")
-            return false
-        } finally {
-            // 断开连接
+            // 网络异常（DNS、连接超时、读取超时等）：
+            // 交换未完成，此时断开连接释放底层 socket
+            logger.e("HTTP upload error: ${e.message}")
             connection?.disconnect()
+            return false
+        }
+        // 正常完成的交换不调用 disconnect()，让底层连接回到 keep-alive 池复用
+    }
+
+    /**
+     * 读尽并关闭 HTTP 响应流。
+     *
+     * 成功响应读 inputStream，错误响应读 errorStream；
+     * 排空失败不影响上传结果判定。
+     *
+     * @param connection 当前 HTTP 连接
+     * @param responseCode 已读取的响应码
+     */
+    private fun drainResponse(connection: HttpURLConnection, responseCode: Int) {
+        try {
+            // 4xx/5xx 的响应体在 errorStream 中，2xx/3xx 在 inputStream 中
+            val stream: InputStream? = if (responseCode >= HTTP_CLIENT_ERROR) {
+                connection.errorStream
+            } else {
+                connection.inputStream
+            }
+            stream?.use { input ->
+                val buffer = ByteArray(DRAIN_BUFFER_SIZE)
+                // 循环读取直到 EOF，内容直接丢弃，只为让连接可复用
+                while (input.read(buffer) != -1) {
+                    // 丢弃响应内容
+                }
+            }
+        } catch (_: Exception) {
+            // 排空失败（流已关闭/网络中断）不影响上传结果
         }
     }
 
-    companion object {
-        /** Logcat Tag。 */
-        private const val TAG = "HttpApmUploader"
+    /**
+     * 解析 Retry-After 响应头为毫秒延迟。
+     *
+     * 支持两种格式：秒数（如 "120"）与 HTTP-date（绝对时间）。
+     *
+     * @param connection 当前 HTTP 连接
+     * @return 建议延迟毫秒数，无法解析时为 null
+     */
+    private fun parseRetryAfterMs(connection: HttpURLConnection): Long? {
+        val headerValue = connection.getHeaderField(HEADER_RETRY_AFTER) ?: return null
+        // 优先按秒数解析
+        headerValue.trim().toLongOrNull()?.let { seconds ->
+            return (seconds * MILLIS_PER_SECOND).coerceAtLeast(0L)
+        }
+        // 回退按 HTTP-date 解析为绝对时间
+        val dateMs = connection.getHeaderFieldDate(HEADER_RETRY_AFTER, 0L)
+        if (dateMs > 0L) {
+            val delta = dateMs - System.currentTimeMillis()
+            // 过去的时间视为无建议
+            return if (delta > 0L) delta else null
+        }
+        return null
+    }
 
+    companion object {
         /** HTTP 方法：POST。 */
         private const val METHOD_POST = "POST"
 
@@ -201,8 +282,23 @@ class HttpApmUploader(
         /** HTTP 限流状态码。 */
         private const val HTTP_TOO_MANY_REQUESTS = 429
 
+        /** HTTP 服务不可用状态码（可能携带 Retry-After）。 */
+        private const val HTTP_SERVICE_UNAVAILABLE = 503
+
+        /** HTTP 客户端错误状态码起始（errorStream 生效边界）。 */
+        private const val HTTP_CLIENT_ERROR = 400
+
         /** HTTP 服务端错误状态码起始。 */
         private const val HTTP_SERVER_ERROR = 500
+
+        /** Header: Retry-After。 */
+        private const val HEADER_RETRY_AFTER = "Retry-After"
+
+        /** 响应排空缓冲区大小（字节）。 */
+        private const val DRAIN_BUFFER_SIZE = 4096
+
+        /** 每秒毫秒数。 */
+        private const val MILLIS_PER_SECOND = 1000L
 
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
