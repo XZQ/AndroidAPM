@@ -1,10 +1,11 @@
 name: CI
 
+# develop 为日常开发分支；main/master 为发布分支，两者均需 CI 门禁
 on:
   push:
-    branches: [ develop ]
+    branches: [ develop, main, master ]
   pull_request:
-    branches: [ develop ]
+    branches: [ develop, main, master ]
 
 jobs:
   build:
@@ -57,4 +58,13 @@ jobs:
         with:
           name: test-results
           path: '**/build/test-results/**/TEST-*.xml'
+          retention-days: 14
+
+      # lint 报告随构建产出，失败排查时无需本地重跑
+      - name: Upload lint reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lint-reports
+          path: '**/build/reports/lint-results-*.html'
           retention-days: 14
