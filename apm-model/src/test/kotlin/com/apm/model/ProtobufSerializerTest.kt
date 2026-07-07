@@ -195,6 +195,56 @@ class ProtobufSerializerTest {
         assertTrue(containsUtf8(bytes, "hello"))
     }
 
+    // --- 优先级字段测试 ---
+
+    @Test
+    fun `serialize writes priority enum name for every priority`() {
+        // 每个优先级都应以枚举名字符串写入 wire format，与 Line Protocol 字段语义一致
+        for (priority in ApmPriority.values()) {
+            val event = ApmEvent(
+                module = "test",
+                name = "priority_case",
+                timestamp = 5000L,
+                priority = priority
+            )
+
+            val bytes = ProtobufSerializer.serialize(event)
+
+            assertTrue(
+                "Wire format should contain priority name ${priority.name}",
+                containsUtf8(bytes, priority.name)
+            )
+        }
+    }
+
+    @Test
+    fun `serialize writes priority under proto field 13`() {
+        val event = ApmEvent(
+            module = "test",
+            name = "priority_tag",
+            timestamp = 6000L,
+            priority = ApmPriority.CRITICAL
+        )
+
+        val bytes = ProtobufSerializer.serialize(event)
+
+        // 字段 13、wire type 2（length-delimited）的 tag 字节为 (13 shl 3) or 2
+        val priorityTag = ((PRIORITY_FIELD_NUMBER shl 3) or WIRE_TYPE_LENGTH_DELIMITED).toByte()
+        val nameBytes = ApmPriority.CRITICAL.name.toByteArray(Charsets.UTF_8)
+        var found = false
+        // 在 tag 后应紧跟 varint 长度与枚举名字节
+        for (i in 0..(bytes.size - nameBytes.size - 2)) {
+            if (bytes[i] == priorityTag &&
+                bytes[i + 1].toInt() == nameBytes.size &&
+                bytes.copyOfRange(i + 2, i + 2 + nameBytes.size).contentEquals(nameBytes)
+            ) {
+                found = true
+                break
+            }
+        }
+        assertTrue("Priority should be encoded under proto field 13", found)
+    }
+
     // --- 批量序列化测试 ---
 
     @Test
@@ -252,6 +302,14 @@ class ProtobufSerializerTest {
             if (found) return true
         }
         return false
+    }
+
+    companion object {
+        /** priority 的 proto 字段编号，须与 ProtobufSerializer/apm_event.proto 一致。 */
+        private const val PRIORITY_FIELD_NUMBER = 13
+
+        /** protobuf wire type 2：length-delimited（字符串/bytes/嵌套消息）。 */
+        private const val WIRE_TYPE_LENGTH_DELIMITED = 2
     }
 
     /** 创建一个典型的 APM 事件用于测试。 */

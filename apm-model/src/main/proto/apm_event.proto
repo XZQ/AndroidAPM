@@ -51,4 +51,8 @@ message ApmEventMessage {
 
   // 附加键值对。
   map<string, string> extras = 12;
+
+  // 上传优先级枚举名：LOW / NORMAL / HIGH / CRITICAL。
+  // 与 Line Protocol 输出保持同一套字段语义。
+  string priority = 13;
 }

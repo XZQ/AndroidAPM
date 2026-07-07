@@ -35,6 +35,7 @@ object ProtobufSerializer {
      * - 10: fields (map<string,string>)
      * - 11: global_context (map<string,string>)
      * - 12: extras (map<string,string>)
+     * - 13: priority (string enum)
      *
      * @param event 要序列化的 APM 事件
      * @return protobuf 编码的字节数组
@@ -70,6 +71,9 @@ object ProtobufSerializer {
         for ((key, value) in event.extras) {
             writer.writeStringMapEntry(FIELD_EXTRAS, key, value)
         }
+
+        // 上传优先级：与 Line Protocol 一样输出枚举名，保证两种 wire format 字段一致
+        writer.writeString(FIELD_PRIORITY, event.priority.name)
 
         writer.flush()
         return buffer.toByteArray()
@@ -125,6 +129,8 @@ object ProtobufSerializer {
     private const val FIELD_GLOBAL_CONTEXT = 11
     /** 字段 12：附加键值对 map。 */
     private const val FIELD_EXTRAS = 12
+    /** 字段 13：上传优先级枚举名。 */
+    private const val FIELD_PRIORITY = 13
 
     /** 字节掩码。 */
     private const val BYTE_MASK = 0xFF
