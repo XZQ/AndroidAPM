@@ -91,7 +91,16 @@ object Apm {
                 val dbHelper = EventDbHelper(application)
                 SQLiteEventStore(dbHelper)
             }
-            StorageType.FILE -> FileEventStore(application)
+            StorageType.FILE -> {
+                // FILE 存储不实现 PendingEventStore，持久 outbox（崩溃/重启重放、
+                // 成功确认删除）会被静默关闭，上传退化为尽力而为——显式警告接入方
+                logger.w(
+                    "StorageType.FILE has no durable outbox: uploads are " +
+                        "fire-and-forget and events are not replayed after restart. " +
+                        "Use StorageType.SQLITE for durable delivery."
+                )
+                FileEventStore(application)
+            }
         }
 
         // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。

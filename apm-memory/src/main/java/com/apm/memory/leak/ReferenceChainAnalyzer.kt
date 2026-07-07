@@ -1,6 +1,6 @@
 package com.apm.memory.leak
 
-import android.util.Log
+import com.apm.core.Apm
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -82,8 +82,8 @@ class ReferenceChainAnalyzer {
                 )
             }
         } catch (e: Exception) {
-            // Hprof 解析失败，不影响主流程
-            Log.w(TAG, "Reference chain analysis failed: ${e.message}")
+            // Hprof 解析失败，不影响主流程；记入自监控替代直连 Logcat
+            Apm.recordInternalError(ERROR_TAG_CHAIN_ANALYSIS, e)
             return null
         }
     }
@@ -516,8 +516,8 @@ class ReferenceChainAnalyzer {
     }
 
     companion object {
-        /** Log Tag。 */
-        private const val TAG = "RefChainAnalyzer"
+        /** 自监控 tag：引用链分析失败。 */
+        private const val ERROR_TAG_CHAIN_ANALYSIS = "memory_chain_analysis"
 
         /** Hprof magic 前缀。 */
         private const val HPROF_MAGIC_PREFIX = "JAVA PROFILE"

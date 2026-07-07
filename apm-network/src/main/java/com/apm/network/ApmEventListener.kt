@@ -70,12 +70,26 @@ class ApmEventListener(
     )
 
     override fun callStart(call: Call) {
+        // 容量保护：若 callEnd/callFailed 因异常路径未触发，防止 map 无限增长泄漏
+        if (callTimings.size >= MAX_TRACKED_CALLS) {
+            evictOldestTiming()
+        }
         val timing = CallTiming()
         timing.callStartNs = System.nanoTime()
         // OkHttp 4.x 中 request() 是函数调用，不是属性
         timing.url = call.request().url.toString()
         timing.method = call.request().method
         callTimings[call] = timing
+    }
+
+    /**
+     * 逐出开始时间最早的一条计时记录。
+     * 仅在达到容量上限时调用，O(n) 扫描代价可接受（n ≤ MAX_TRACKED_CALLS）。
+     */
+    private fun evictOldestTiming() {
+        // 找到 callStartNs 最小（最早开始）的记录并移除
+        val oldest = callTimings.entries.minByOrNull { it.value.callStartNs } ?: return
+        callTimings.remove(oldest.key)
     }
 
     override fun dnsStart(call: Call, domainName: String) {
@@ -201,6 +215,9 @@ class ApmEventListener(
     }
 
     companion object {
+        /** 同时追踪的最大请求数，超出时逐出最早的记录防止泄漏。 */
+        private const val MAX_TRACKED_CALLS = 256
+
         /** 每毫秒纳秒数。 */
         private const val NANOS_PER_MS = 1_000_000L
         /** URL 最大长度。 */

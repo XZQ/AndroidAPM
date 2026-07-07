@@ -170,19 +170,24 @@ class GcMonitorModule(
 
     /**
      * 读取 Debug.getRuntimeStat。
-     * 使用反射调用，兼容不同 API 版本。
+     * Debug.getRuntimeStat 自 API 23 起为公开 API，minSdk 24 下可直接调用，
+     * 无需反射（此前的反射写法是不必要的间接层）。
      */
     private fun getRuntimeStat(statName: String): String? {
         return try {
-            val debugClass = Class.forName("android.os.Debug")
-            val method = debugClass.getMethod("getRuntimeStat", String::class.java)
-            method.invoke(null, statName) as? String
+            // ART 未提供该统计项时返回 null，由调用方降级为 0
+            android.os.Debug.getRuntimeStat(statName)
         } catch (e: Exception) {
+            // 个别 ROM 实现异常时降级，并记入自监控
+            Apm.recordInternalError(ERROR_TAG_RUNTIME_STAT, e)
             null
         }
     }
 
     companion object {
+        /** 自监控 tag：Debug.getRuntimeStat 调用失败。 */
+        private const val ERROR_TAG_RUNTIME_STAT = "gc_runtime_stat"
+
         /** 模块名。 */
         private const val MODULE_NAME = "gc_monitor"
         /** Memory Churn 告警事件名。 */
