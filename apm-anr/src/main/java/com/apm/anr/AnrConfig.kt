@@ -13,8 +13,11 @@ data class AnrConfig(
     val enableAnrMonitor: Boolean = true,
     /** 主线程堆栈最大截取长度。 */
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
-    /** 是否启用 SIGQUIT 信号检测（比 Watchdog 更精准）。需要 JNI 支持。 */
-    val enableSigquitDetection: Boolean = false,
+    /**
+     * 是否启用 SIGQUIT 信号检测（比 Watchdog 更精准）。
+     * libapm-anr.so 已随模块交付，默认开启；JNI 加载失败时自动降级为 Watchdog。
+     */
+    val enableSigquitDetection: Boolean = true,
     /** 是否尝试读取 /data/anr/traces.txt 文件。 */
     val enableTracesFileReading: Boolean = true,
     /** 是否启用 ANR 原因分类（CPU/IO/LOCK/DEADLOCK）。 */

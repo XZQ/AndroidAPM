@@ -68,6 +68,22 @@ class AnrModule(
     /** SIGQUIT 调度器。 */
     private val sigquitAnalysisDispatcher = SigquitAnalysisDispatcher(::scheduleSigquitAnalysis)
 
+    /**
+     * Native SIGQUIT 标志源。
+     * 信号处理器只写时间戳，Java 侧经此轮询消费（避免信号上下文 JNI 回调）。
+     */
+    private val nativeSigquitSource = SigquitFlagSource { nativeConsumeSigquitTimestamp() }
+
+    /**
+     * 测试注入的 SIGQUIT 标志源替身；非空时优先于 native 源。
+     * 仅供同模块单元测试使用。
+     */
+    internal var sigquitFlagSourceOverride: SigquitFlagSource? = null
+
+    /** SIGQUIT 标志轮询器，由 watchdog 循环每轮驱动；null 表示 SIGQUIT 检测不可用。 */
+    @Volatile
+    private var sigquitPoller: SigquitFlagPoller? = null
+
     // --- ANR 去重 ---
     /** 上次 ANR 上报时间戳。 */
     private val lastReportTimeMs = AtomicLong(0L)
@@ -95,6 +111,11 @@ class AnrModule(
             false
         }
 
+        // 组装 SIGQUIT 标志轮询器：测试替身优先，其次 native 源（注册成功时）
+        val flagSource = sigquitFlagSourceOverride
+            ?: if (sigquitReady) nativeSigquitSource else null
+        sigquitPoller = flagSource?.let { SigquitFlagPoller(it, ::onSigquitReceived) }
+
         // Watchdog remains active as the public, portable detection channel.
         startWatchdog()
 
@@ -104,6 +125,7 @@ class AnrModule(
     /** 停止监控。 */
     override fun onStop() {
         running = false
+        sigquitPoller = null
         watchdogThread?.interrupt()
         watchdogThread = null
         // 注销 SIGQUIT 处理器
@@ -155,8 +177,9 @@ class AnrModule(
     }
 
     /**
-     * JNI 回调：SIGQUIT 信号触发时由 native 层调用。
-     * 注意：此方法在信号处理器线程中执行，必须快速返回。
+     * SIGQUIT 信号消费入口。
+     * 由 watchdog 线程在轮询到 native 标志（[SigquitFlagPoller]）时调用；
+     * 信号处理器本身只写原子标志，绝不直接回调 Java。
      */
     private fun onSigquitReceived() {
         // 将重分析工作切到独立线程，避免依赖已阻塞的主线程。
@@ -204,6 +227,9 @@ class AnrModule(
      */
     private fun watchdogLoop() {
         while (running) {
+            // 先消费 native SIGQUIT 标志：系统投递的信号优先于 watchdog 推断
+            sigquitPoller?.pollOnce()
+
             tick.set(false)
             mainHandler.post { tick.set(true) }
 
@@ -480,11 +506,18 @@ class AnrModule(
     // Native 方法声明
     // ========================================================================
 
-    /** 注册 SIGQUIT 信号处理器。 */
+    /** 注册 SIGQUIT 信号处理器（安装 sigaction + 专用接收线程）。 */
     private external fun nativeRegisterSigquitHandler()
 
-    /** 注销 SIGQUIT 信号处理器。 */
+    /** 注销 SIGQUIT 信号处理器（恢复原始处理并停止接收线程）。 */
     private external fun nativeUnregisterSigquitHandler()
+
+    /**
+     * 消费最近一次 SIGQUIT 的时间戳。
+     *
+     * @return epoch 毫秒；0 表示自上次消费以来没有新信号
+     */
+    private external fun nativeConsumeSigquitTimestamp(): Long
 
     companion object {
         /** 自监控 tag：系统 trace 文件读取失败。 */

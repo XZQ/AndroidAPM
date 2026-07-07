@@ -6,6 +6,21 @@ plugins {
 android {
     // 模块自身的命名空间
     namespace = "com.apm.anr"
+
+    defaultConfig {
+        // 携带 JNI 的模块需要显式声明支持的 ABI
+        ndk {
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+        }
+    }
+
+    // JNI/CMake 构建配置：编译 libapm-anr.so（SIGQUIT 信号检测）
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/jni/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
 }
 
 dependencies {

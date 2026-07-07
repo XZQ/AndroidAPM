@@ -41,11 +41,11 @@ class AnrModuleTest {
         assertEquals(4_000, config.maxStackTraceLength)
     }
 
-    /** 默认关闭未随产物交付的 SIGQUIT JNI 检测。 */
+    /** SIGQUIT JNI 检测已随产物交付，默认开启（加载失败自动降级 Watchdog）。 */
     @Test
-    fun `default sigquit detection is disabled`() {
+    fun `default sigquit detection is enabled`() {
         val config = AnrConfig()
-        assertFalse(config.enableSigquitDetection)
+        assertTrue(config.enableSigquitDetection)
     }
 
     /** 默认开启 traces 文件读取。 */
