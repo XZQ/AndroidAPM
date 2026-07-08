@@ -28,10 +28,7 @@ import java.io.OutputStream
  * ioModule.onIoOperation(path, opType, durationMs, bytes)
  * ```
  */
-class IoModule(
-    /** 模块配置。 */
-    private val config: IoConfig = IoConfig()
-) : ApmModule {
+class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -112,13 +109,10 @@ class IoModule(
      * @param durationMs 操作耗时（毫秒）
      * @param bytes 操作字节数
      */
-    fun onIoOperation(
-        path: String,
-        opType: String,
-        durationMs: Long,
-        bytes: Long = 0
-    ) {
-        if (!started) return
+    fun onIoOperation(path: String, opType: String, durationMs: Long, bytes: Long = 0) {
+        if (!started) {
+            return
+        }
 
         // 判断是否在主线程
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
@@ -129,7 +123,9 @@ class IoModule(
         // 大 buffer 操作
         val isLargeBuffer = bytes >= config.largeBufferSize
 
-        if (!isSlowOnMainThread && !isSlowIo && !isLargeBuffer) return
+        if (!isSlowOnMainThread && !isSlowIo && !isLargeBuffer) {
+            return
+        }
 
         val fields = mutableMapOf<String, Any?>(
             FIELD_PATH to path.take(MAX_PATH_LENGTH),

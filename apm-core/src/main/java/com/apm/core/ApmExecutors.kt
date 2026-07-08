@@ -27,10 +27,7 @@ object ApmExecutors {
      * @param priority 线程优先级，默认最低优先级
      * @return daemon 线程工厂
      */
-    fun threadFactory(
-        name: String,
-        priority: Int = Thread.MIN_PRIORITY
-    ): ThreadFactory = ThreadFactory { runnable ->
+    fun threadFactory(name: String, priority: Int = Thread.MIN_PRIORITY): ThreadFactory = ThreadFactory { runnable ->
         Thread(runnable, normalizeName(name)).apply {
             // daemon + 低优先级：监控线程不阻止退出、不与宿主抢 CPU
             isDaemon = true
@@ -57,10 +54,7 @@ object ApmExecutors {
      * @param priority 线程优先级
      * @return 单线程定时执行器
      */
-    fun newSingleThreadScheduledExecutor(
-        name: String,
-        priority: Int = Thread.MIN_PRIORITY
-    ): ScheduledExecutorService =
+    fun newSingleThreadScheduledExecutor(name: String, priority: Int = Thread.MIN_PRIORITY): ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor(threadFactory(name, priority))
 
     /**
@@ -71,11 +65,7 @@ object ApmExecutors {
      * @param block 线程体
      * @return 已启动的线程
      */
-    fun startThread(
-        name: String,
-        priority: Int = Thread.MIN_PRIORITY,
-        block: Runnable
-    ): Thread = Thread(block, normalizeName(name)).apply {
+    fun startThread(name: String, priority: Int = Thread.MIN_PRIORITY, block: Runnable): Thread = Thread(block, normalizeName(name)).apply {
         isDaemon = true
         this.priority = priority
         start()

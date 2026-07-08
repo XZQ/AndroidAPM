@@ -96,12 +96,7 @@ class ApmSQLiteDatabase(
      * @param whereArgs 绑定参数
      * @return 受影响行数
      */
-    fun update(
-        table: String,
-        values: ContentValues,
-        whereClause: String?,
-        whereArgs: Array<String>?
-    ): Int {
+    fun update(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?): Int {
         val startMs = SystemClock.elapsedRealtime()
         val affected = delegate.update(table, values, whereClause, whereArgs)
         report("UPDATE $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}", startMs, affected)

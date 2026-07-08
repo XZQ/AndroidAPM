@@ -106,13 +106,7 @@ class ApmInitProvider : ContentProvider() {
      * 查询操作，本 Provider 不支持。
      * @return 始终返回 null
      */
-    override fun query(
-        uri: Uri,
-        projection: Array<out String>?,
-        selection: String?,
-        selectionArgs: Array<out String>?,
-        sortOrder: String?
-    ): Cursor? = null
+    override fun query(uri: Uri, projection: Array<out String>?, selection: String?, selectionArgs: Array<out String>?, sortOrder: String?): Cursor? = null
 
     /**
      * 返回 MIME 类型，本 Provider 不支持。
@@ -136,12 +130,7 @@ class ApmInitProvider : ContentProvider() {
      * 更新操作，本 Provider 不支持。
      * @return 始终返回 0
      */
-    override fun update(
-        uri: Uri,
-        values: ContentValues?,
-        selection: String?,
-        selectionArgs: Array<out String>?
-    ): Int = 0
+    override fun update(uri: Uri, values: ContentValues?, selection: String?, selectionArgs: Array<out String>?): Int = 0
 
     companion object {
         /** Logcat tag。 */

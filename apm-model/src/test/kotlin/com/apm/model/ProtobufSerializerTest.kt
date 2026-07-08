@@ -287,8 +287,12 @@ class ProtobufSerializerTest {
      */
     private fun containsUtf8(bytes: ByteArray, text: String): Boolean {
         val textBytes = text.toByteArray(Charsets.UTF_8)
-        if (textBytes.isEmpty()) return true
-        if (bytes.size < textBytes.size) return false
+        if (textBytes.isEmpty()) {
+            return true
+        }
+        if (bytes.size < textBytes.size) {
+            return false
+        }
 
         // 简单的滑动窗口搜索
         for (i in 0..(bytes.size - textBytes.size)) {
@@ -299,7 +303,9 @@ class ProtobufSerializerTest {
                     break
                 }
             }
-            if (found) return true
+            if (found) {
+                return true
+            }
         }
         return false
     }

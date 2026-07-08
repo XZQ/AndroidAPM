@@ -4,12 +4,7 @@ package com.apm.launch
  * 热启动/温启动恢复过程跟踪器。
  * 使用后台停留时长决定类型，使用前台恢复链路时长决定上报耗时。
  */
-internal class RelaunchTracker(
-    /** 热温启动分界阈值。 */
-    private val warmStartThresholdMs: Long,
-    /** 允许上报的最大恢复耗时。 */
-    private val launchTimeoutMs: Long
-) {
+internal class RelaunchTracker(private val warmStartThresholdMs: Long, private val launchTimeoutMs: Long) {
 
     /** 上一次所有 Activity 都停止的时间点。 */
     private var lastStoppedAtMs: Long? = null

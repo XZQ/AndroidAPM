@@ -111,11 +111,7 @@ class HttpApmUploaderTest {
      * @property headers 额外响应头
      * @property body 响应体文本
      */
-    private data class RawResponse(
-        val status: Int,
-        val headers: Map<String, String> = emptyMap(),
-        val body: String = ""
-    )
+    private data class RawResponse(val status: Int, val headers: Map<String, String> = emptyMap(), val body: String = "")
 
     /**
      * 启动一个按顺序回放预置响应的裸 socket HTTP 服务，运行测试体。
@@ -125,10 +121,7 @@ class HttpApmUploaderTest {
      * @param responses 依次回放的响应列表
      * @param block 测试体，接收 uploader 与已处理请求计数
      */
-    private fun withRawHttpServer(
-        responses: List<RawResponse>,
-        block: (HttpApmUploader, AtomicInteger) -> Unit
-    ) {
+    private fun withRawHttpServer(responses: List<RawResponse>, block: (HttpApmUploader, AtomicInteger) -> Unit) {
         ServerSocket(0).use { server ->
             val requestCount = AtomicInteger(0)
             val serverThread = Thread {

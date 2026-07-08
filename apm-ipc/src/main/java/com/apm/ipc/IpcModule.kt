@@ -58,17 +58,17 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
      * @param methodName 方法名（如 getService）
      * @param durationMs 调用耗时（毫秒）
      */
-    fun onBinderCallComplete(
-        interfaceName: String,
-        methodName: String,
-        durationMs: Long
-    ) {
-        if (!started) return
+    fun onBinderCallComplete(interfaceName: String, methodName: String, durationMs: Long) {
+        if (!started) {
+            return
+        }
 
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
         val threshold = if (isMainThread) config.mainThreadBinderThresholdMs else config.binderThresholdMs
 
-        if (durationMs < threshold) return
+        if (durationMs < threshold) {
+            return
+        }
 
         val fields = mutableMapOf<String, Any?>(
             FIELD_INTERFACE to interfaceName,

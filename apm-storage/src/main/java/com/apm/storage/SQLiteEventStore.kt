@@ -22,11 +22,7 @@ import java.util.concurrent.atomic.AtomicLong
  * @param dbHelper SQLite 数据库助手
  * @param maxEvents 最大存储事件数，超出时自动淘汰
  */
-class SQLiteEventStore(
-    private val dbHelper: EventDbHelper,
-    /** 最大存储事件数。超出后按优先级 ASC + timestamp ASC 淘汰。 */
-    private val maxEvents: Int = DEFAULT_MAX_EVENTS
-) : PendingEventStore {
+class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvents: Int = DEFAULT_MAX_EVENTS) : PendingEventStore {
 
     /**
      * 缓存的行数计数器。
@@ -55,7 +51,9 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun appendBatch(events: List<ApmEvent>) {
-        if (events.isEmpty()) return
+        if (events.isEmpty()) {
+            return
+        }
         appendBatchLocked(events)
     }
 
@@ -113,7 +111,9 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun readRecent(limit: Int): List<String> {
-        if (limit <= 0) return emptyList()
+        if (limit <= 0) {
+            return emptyList()
+        }
 
         val db = dbHelper.readableDatabase
         val results = mutableListOf<String>()
@@ -161,7 +161,9 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun readPending(limit: Int): List<PendingEvent> {
-        if (limit <= 0) return emptyList()
+        if (limit <= 0) {
+            return emptyList()
+        }
 
         val db = dbHelper.readableDatabase
         val results = mutableListOf<PendingEvent>()
@@ -211,7 +213,9 @@ class SQLiteEventStore(
      * @return 删除的行数
      */
     private fun deletePendingLocked(ids: List<Long>): Int {
-        if (ids.isEmpty()) return 0
+        if (ids.isEmpty()) {
+            return 0
+        }
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
         val deleted = db.delete(
@@ -233,7 +237,9 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun markRetry(ids: List<Long>) {
-        if (ids.isEmpty()) return
+        if (ids.isEmpty()) {
+            return
+        }
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
         db.execSQL(
@@ -303,7 +309,9 @@ class SQLiteEventStore(
      */
     private fun trimIfNeeded(db: SQLiteDatabase) {
         val currentCount = cachedRowCount.get()
-        if (currentCount <= maxEvents) return
+        if (currentCount <= maxEvents) {
+            return
+        }
 
         val toDelete = (currentCount - maxEvents).toInt()
         // 查找要淘汰的事件 ID
@@ -342,7 +350,9 @@ class SQLiteEventStore(
             arrayOf("COUNT(*)"),
             null, null, null, null, null
         ).use { cursor ->
-            if (cursor.moveToFirst()) return cursor.getLong(0)
+            if (cursor.moveToFirst()) {
+                return cursor.getLong(0)
+            }
         }
         return 0L
     }

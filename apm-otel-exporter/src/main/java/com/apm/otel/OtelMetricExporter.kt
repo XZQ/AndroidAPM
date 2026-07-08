@@ -29,7 +29,9 @@ object OtelMetricExporter {
      */
     fun toMetricData(event: ApmEvent): List<Map<String, Any?>> {
         // 只有 METRIC 类型事件映射为 Metric
-        if (event.kind != ApmEventKind.METRIC) return emptyList()
+        if (event.kind != ApmEventKind.METRIC) {
+            return emptyList()
+        }
 
         val metricName = "apm.${event.module}.${event.name}"
         val baseAttributes = mutableMapOf<String, String>()

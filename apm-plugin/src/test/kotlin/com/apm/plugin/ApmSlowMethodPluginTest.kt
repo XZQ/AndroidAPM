@@ -279,10 +279,7 @@ class ApmSlowMethodPluginTest {
      * @param config 插件配置。
      * @return 转换后的字节码。
      */
-    private fun transformClassWithDefaultConfig(
-        classFilePath: String,
-        config: ApmSlowMethodExtension
-    ): ByteArray {
+    private fun transformClassWithDefaultConfig(classFilePath: String, config: ApmSlowMethodExtension): ByteArray {
         return transformClassWithBytes(SIMPLE_CLASS_BYTES, classFilePath, config)
     }
 
@@ -294,11 +291,7 @@ class ApmSlowMethodPluginTest {
      * @param config 插件配置。
      * @return 转换后的字节码。
      */
-    private fun transformClassWithBytes(
-        bytes: ByteArray,
-        classFilePath: String,
-        config: ApmSlowMethodExtension
-    ): ByteArray {
+    private fun transformClassWithBytes(bytes: ByteArray, classFilePath: String, config: ApmSlowMethodExtension): ByteArray {
         // 通过反射调用 private transformClass 方法
         val method = ApmClassTransformer::class.java.getDeclaredMethod(
             "transformClass",
@@ -358,21 +351,9 @@ class ApmSlowMethodPluginTest {
         val calls = mutableListOf<String>()
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
-                override fun visitMethod(
-                    access: Int,
-                    name: String,
-                    descriptor: String,
-                    signature: String?,
-                    exceptions: Array<String>?
-                ): MethodVisitor {
+                override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<String>?): MethodVisitor {
                     return object : MethodVisitor(Opcodes.ASM9) {
-                        override fun visitMethodInsn(
-                            opcode: Int,
-                            owner: String,
-                            name: String,
-                            descriptor: String,
-                            isInterface: Boolean
-                        ) {
+                        override fun visitMethodInsn(opcode: Int, owner: String, name: String, descriptor: String, isInterface: Boolean) {
                             // 只记录慢方法 tracer 的调用，避免构造函数干扰断言。
                             if (owner == TRACER_CLASS) {
                                 calls += name
@@ -398,26 +379,16 @@ class ApmSlowMethodPluginTest {
         var catchAllHandlers = 0
         ClassReader(bytes).accept(
             object : ClassVisitor(Opcodes.ASM9) {
-                override fun visitMethod(
-                    access: Int,
-                    name: String,
-                    descriptor: String,
-                    signature: String?,
-                    exceptions: Array<String>?
-                ): MethodVisitor? {
-                    if (name != "work") return null
+                override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<String>?): MethodVisitor? {
+                    if (name != "work") {
+                        return null
+                    }
                     return object : MethodVisitor(Opcodes.ASM9) {
                         override fun visitLdcInsn(value: Any?) {
                             if (value is String) constants += value
                         }
 
-                        override fun visitMethodInsn(
-                            opcode: Int,
-                            owner: String,
-                            name: String,
-                            descriptor: String,
-                            isInterface: Boolean
-                        ) {
+                        override fun visitMethodInsn(opcode: Int, owner: String, name: String, descriptor: String, isInterface: Boolean) {
                             if (owner == TRACER_CLASS) calls += name
                         }
 
@@ -444,11 +415,7 @@ class ApmSlowMethodPluginTest {
      * @property constants string constants
      * @property catchAllHandlers number of catch-all handlers
      */
-    private data class MethodInspection(
-        val calls: List<String>,
-        val constants: List<String>,
-        val catchAllHandlers: Int
-    )
+    private data class MethodInspection(val calls: List<String>, val constants: List<String>, val catchAllHandlers: Int)
 
     /**
      * 创建测试用 jar 文件。

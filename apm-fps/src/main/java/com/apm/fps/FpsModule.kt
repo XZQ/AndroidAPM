@@ -41,7 +41,9 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
 
     /** 注册 Activity 生命周期回调，用于场景感知。 */
     override fun onStart() {
-        if (!config.enableFpsMonitor) return
+        if (!config.enableFpsMonitor) {
+            return
+        }
         apmContext?.application?.registerActivityLifecycleCallbacks(this)
         apmContext?.logger?.d("FPS module started, frameMetrics=${config.enableFrameMetrics}")
     }
@@ -137,7 +139,9 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
                 || stats.jankCount > 0
                 || stats.frozenCount > 0
                 || stats.dropSeverity > FrameStats.DROP_SEVERITY_NONE
-        if (!needReport) return
+        if (!needReport) {
+            return
+        }
 
         val fields = mutableMapOf<String, Any?>(
             FIELD_FPS to stats.fps,

@@ -13,10 +13,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 线程安全：所有计数器使用 Atomic 类型，无锁更新。
  */
-class SdkSelfMonitor(
-    /** 健康报告生成间隔（毫秒）。 */
-    private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS
-) {
+class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS) {
     /** 发射事件计数。 */
     private val emitCount = AtomicLong(0L)
 
@@ -69,7 +66,9 @@ class SdkSelfMonitor(
         var prev: Long
         do {
             prev = maxUploadLatencyMs.get()
-            if (ms <= prev) break
+            if (ms <= prev) {
+                break
+            }
         } while (!maxUploadLatencyMs.compareAndSet(prev, ms))
     }
 

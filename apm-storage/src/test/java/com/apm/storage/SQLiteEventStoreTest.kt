@@ -43,11 +43,7 @@ class SQLiteEventStoreTest {
      * @param timestamp 时间戳
      * @return 测试事件
      */
-    private fun event(
-        name: String,
-        priority: ApmPriority = ApmPriority.NORMAL,
-        timestamp: Long = System.currentTimeMillis()
-    ): ApmEvent = ApmEvent(
+    private fun event(name: String, priority: ApmPriority = ApmPriority.NORMAL, timestamp: Long = System.currentTimeMillis()): ApmEvent = ApmEvent(
         module = "test",
         name = name,
         priority = priority,

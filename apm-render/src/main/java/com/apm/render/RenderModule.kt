@@ -26,10 +26,7 @@ import com.apm.model.ApmPriority
  * 注意：过度绘制的精确检测需要配合系统开发者选项（Show HW Overdraw），
  * 本模块侧重 View 层级分析，帮助减少不必要的嵌套。
  */
-class RenderModule(
-    /** 模块配置。 */
-    private val config: RenderConfig = RenderConfig()
-) : ApmModule, Application.ActivityLifecycleCallbacks {
+class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModule, Application.ActivityLifecycleCallbacks {
 
     override val name: String = MODULE_NAME
 
@@ -47,7 +44,9 @@ class RenderModule(
 
     /** 注册 Activity 生命周期回调。 */
     override fun onStart() {
-        if (!config.enableRenderMonitor) return
+        if (!config.enableRenderMonitor) {
+            return
+        }
         monitoring = true
         apmContext?.application?.registerActivityLifecycleCallbacks(this)
         apmContext?.logger?.d("Render module started")
@@ -64,7 +63,9 @@ class RenderModule(
      * 延迟是为了等布局完成。
      */
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        if (!monitoring) return
+        if (!monitoring) {
+            return
+        }
         mainHandler.postDelayed({
             inspectViewTree(activity)
         }, INSPECT_DELAY_MS)
@@ -157,10 +158,7 @@ class RenderModule(
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
     /** View 树遍历结果。 */
-    private data class ViewTraversalResult(
-        val viewCount: Int,
-        val maxDepth: Int
-    )
+    private data class ViewTraversalResult(val viewCount: Int, val maxDepth: Int)
 
     companion object {
         /** 模块名。 */

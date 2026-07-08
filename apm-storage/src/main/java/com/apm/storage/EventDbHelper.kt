@@ -12,13 +12,7 @@ import android.database.sqlite.SQLiteOpenHelper
  *
  * WAL 模式启用以提高并发读写性能。
  */
-class EventDbHelper(
-    context: Context,
-    /** 数据库名称。 */
-    name: String = DATABASE_NAME,
-    /** 数据库版本。 */
-    version: Int = DATABASE_VERSION
-) : SQLiteOpenHelper(context, name, null, version) {
+class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int = DATABASE_VERSION) : SQLiteOpenHelper(context, name, null, version) {
 
     init {
         // WAL 模式：读不阻塞写，写不阻塞读。

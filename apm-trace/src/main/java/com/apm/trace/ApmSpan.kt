@@ -112,7 +112,9 @@ class ApmSpan internal constructor(
      * @return this，支持链式调用
      */
     fun start(): ApmSpan {
-        if (!config.enabled) return this
+        if (!config.enabled) {
+            return this
+        }
         startTimestampMs = System.currentTimeMillis()
 
         // 构建 Span 上下文
@@ -138,7 +140,9 @@ class ApmSpan internal constructor(
      * 多次调用安全（幂等）。
      */
     fun end() {
-        if (!config.enabled || isFinished) return
+        if (!config.enabled || isFinished) {
+            return
+        }
         endTimestampMs = System.currentTimeMillis()
 
         // 超时检查

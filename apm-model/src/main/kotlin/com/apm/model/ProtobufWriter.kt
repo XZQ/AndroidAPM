@@ -16,10 +16,7 @@ import java.io.ByteArrayOutputStream
  *
  * 写入的字节流可被标准 protobuf 库（Java/C++/Go/Python）反序列化。
  */
-internal class ProtobufWriter(
-    /** 底层字节输出流。 */
-    private val stream: ByteArrayOutputStream
-) {
+internal class ProtobufWriter(private val stream: ByteArrayOutputStream) {
 
     /**
      * 写入 int64 字段（varint 编码）。

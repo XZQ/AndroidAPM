@@ -8,10 +8,7 @@ import com.apm.model.toLineProtocol
  * Logcat 上传实现。将事件输出到 Android Logcat。
  * 用于开发调试阶段，无需服务端对接。
  */
-class LogcatApmUploader(
-    /** 上传目标地址。为空时使用占位标识。 */
-    private val endpoint: String = ""
-) : ApmUploader {
+class LogcatApmUploader(private val endpoint: String = "") : ApmUploader {
 
     /**
      * 将事件格式化后输出到 Logcat。

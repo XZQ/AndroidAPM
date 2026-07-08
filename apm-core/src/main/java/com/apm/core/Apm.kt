@@ -59,12 +59,11 @@ object Apm {
      * @param application 宿主 Application
      * @param config 全局配置
      */
-    fun init(
-        application: Application,
-        config: ApmConfig
-    ) {
+    fun init(application: Application, config: ApmConfig) {
         synchronized(initLock) {
-            if (state != null) return
+            if (state != null) {
+                return
+            }
             doInit(application, config)
         }
     }
@@ -195,7 +194,9 @@ object Apm {
     fun register(module: ApmModule) {
         synchronized(initLock) {
             // The duplicate check and insertion must be one atomic operation.
-            if (modules.any { it.name == module.name }) return
+            if (modules.any { it.name == module.name }) {
+                return
+            }
             modules += module
             // 如果框架已初始化，立即启动新注册的模块
             if (state != null) {
@@ -327,7 +328,9 @@ object Apm {
      */
     private fun startModule(module: ApmModule) {
         val currentState = state ?: return
-        if (currentState.startedModules.any { it.name == module.name }) return
+        if (currentState.startedModules.any { it.name == module.name }) {
+            return
+        }
         val config = currentState.context.config
         val shouldRun = ProcessModuleFilter.shouldRunInCurrentProcess(
             moduleName = module.name,
@@ -418,11 +421,10 @@ object Apm {
     /**
      * Creates periodic SDK health reporting and automatic throttling.
      */
-    private fun createSelfMonitoringExecutor(
-        config: ApmConfig,
-        monitor: SdkSelfMonitor?
-    ): ScheduledExecutorService? {
-        if (monitor == null || config.selfMonitorIntervalMs <= 0L) return null
+    private fun createSelfMonitoringExecutor(config: ApmConfig, monitor: SdkSelfMonitor?): ScheduledExecutorService? {
+        if (monitor == null || config.selfMonitorIntervalMs <= 0L) {
+            return null
+        }
         return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
@@ -460,7 +462,9 @@ object Apm {
     private fun applyAutoThrottle(moduleNames: List<String>) {
         val currentState = state ?: return
         for (module in currentState.startedModules.toList()) {
-            if (module.name !in moduleNames) continue
+            if (module.name !in moduleNames) {
+                continue
+            }
             runCatching { module.onStop() }
                 .onSuccess {
                     currentState.startedModules.remove(module)

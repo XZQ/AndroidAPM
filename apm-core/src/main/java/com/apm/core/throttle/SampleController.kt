@@ -32,10 +32,7 @@ interface DynamicConfigProvider {
  * 灰度发布控制器。
  * 按功能开关、用户 ID、百分比控制 APM 功能的开启/关闭。
  */
-class GrayReleaseController(
-    /** 动态配置提供者，用于读取远程开关。 */
-    private val configProvider: DynamicConfigProvider = DynamicConfigProvider.NOOP
-) {
+class GrayReleaseController(private val configProvider: DynamicConfigProvider = DynamicConfigProvider.NOOP) {
     /** 本地功能开关覆盖。优先级高于远程配置。 */
     private val featureFlags = ConcurrentHashMap<String, Boolean>()
 
@@ -83,8 +80,12 @@ class GrayReleaseController(
      * @return true 表示命中采样
      */
     fun isInSample(userId: String, sampleRate: Float): Boolean {
-        if (sampleRate >= 1.0f) return true
-        if (sampleRate <= 0.0f) return false
+        if (sampleRate >= 1.0f) {
+            return true
+        }
+        if (sampleRate <= 0.0f) {
+            return false
+        }
         // 取模保证同一用户结果稳定，避免重复开关
         val hash = (userId.hashCode() and HASH_MASK) % MODULUS
         return hash < (sampleRate * MODULUS).toInt()

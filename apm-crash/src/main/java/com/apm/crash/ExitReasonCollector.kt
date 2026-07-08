@@ -85,7 +85,9 @@ internal class ExitReasonCollector(
         // 按时间升序处理，保证 newestProcessed 单调推进
         for (record in records.sortedBy(ExitRecord::timestampMs)) {
             // 去重：跳过上次已处理的记录
-            if (record.timestampMs <= lastProcessed) continue
+            if (record.timestampMs <= lastProcessed) {
+                continue
+            }
             emit(EVENT_APP_EXIT, severityFor(record.reasonCode), buildFields(record))
             newestProcessed = maxOf(newestProcessed, record.timestampMs)
         }

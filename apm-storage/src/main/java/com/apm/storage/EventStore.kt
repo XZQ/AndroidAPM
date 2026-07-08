@@ -52,11 +52,7 @@ interface EventStore {
  * @property event decoded event
  * @property retryCount number of failed upload cycles
  */
-data class PendingEvent(
-    val id: Long,
-    val event: ApmEvent,
-    val retryCount: Int
-)
+data class PendingEvent(val id: Long, val event: ApmEvent, val retryCount: Int)
 
 /**
  * Durable event store that supports acknowledged upload processing.

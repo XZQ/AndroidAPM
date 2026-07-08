@@ -180,7 +180,9 @@ internal class ApmDispatcher(
      * @return true when local persistence succeeded
      */
     fun dispatchCriticalSync(event: ApmEvent): Boolean {
-        if (shutdown) return false
+        if (shutdown) {
+            return false
+        }
         selfMonitor?.recordEmit()
         return runCatching {
             val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
@@ -239,12 +241,16 @@ internal class ApmDispatcher(
             }
             for (event in expanded) {
                 // 限流检查（ERROR/FATAL 跳过限流，保证关键事件不丢失）
-                if (!passesRateLimit(event)) continue
+                if (!passesRateLimit(event)) {
+                    continue
+                }
                 // PII 脱敏：在存储和上传前对文本字段执行脱敏
                 toPersist += piiSanitizer?.sanitize(event) ?: event
             }
         }
-        if (toPersist.isEmpty()) return
+        if (toPersist.isEmpty()) {
+            return
+        }
 
         try {
             val startTime = System.currentTimeMillis()
@@ -290,7 +296,9 @@ internal class ApmDispatcher(
             return true
         }
         val key = "${event.module}/${event.name}"
-        if (rateLimiter.tryAcquire(key)) return true
+        if (rateLimiter.tryAcquire(key)) {
+            return true
+        }
         logger.d("Rate limited: $key")
         // 记录事件丢弃
         selfMonitor?.recordDrop(event.priority)

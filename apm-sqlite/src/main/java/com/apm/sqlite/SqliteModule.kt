@@ -26,10 +26,7 @@ import com.apm.model.ApmPriority
  * sqliteModule.onSqlExecuted(sql, durationMs, affectedRows)
  * ```
  */
-class SqliteModule(
-    /** 模块配置。 */
-    private val config: SqliteConfig = SqliteConfig()
-) : ApmModule {
+class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -61,13 +58,10 @@ class SqliteModule(
      * @param affectedRows 影响行数
      * @param databaseName 数据库名称
      */
-    fun onSqlExecuted(
-        sql: String,
-        durationMs: Long,
-        affectedRows: Int = 0,
-        databaseName: String = ""
-    ) {
-        if (!started) return
+    fun onSqlExecuted(sql: String, durationMs: Long, affectedRows: Int = 0, databaseName: String = "") {
+        if (!started) {
+            return
+        }
 
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
         val isSlowQuery = durationMs >= config.slowQueryThresholdMs
@@ -75,7 +69,9 @@ class SqliteModule(
         val isLargeRows = affectedRows >= config.largeAffectedRowsThreshold
 
         // 无异常则跳过
-        if (!isSlowQuery && !isMainThreadDb && !isLargeRows) return
+        if (!isSlowQuery && !isMainThreadDb && !isLargeRows) {
+            return
+        }
 
         val fields = mutableMapOf<String, Any?>(
             FIELD_SQL to sql.take(config.maxSqlLength),

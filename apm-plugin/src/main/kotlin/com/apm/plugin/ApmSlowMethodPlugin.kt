@@ -124,10 +124,7 @@ abstract class ApmSlowMethodAsmClassVisitorFactory :
      * @param nextClassVisitor 下游 class visitor。
      * @return 注入慢方法探针的 visitor。
      */
-    override fun createClassVisitor(
-        classContext: com.android.build.api.instrumentation.ClassContext,
-        nextClassVisitor: ClassVisitor
-    ): ClassVisitor {
+    override fun createClassVisitor(classContext: com.android.build.api.instrumentation.ClassContext, nextClassVisitor: ClassVisitor): ClassVisitor {
         // 具体类名由 visitor.visit() 捕获，避免依赖 AGP 内部 class name 表示格式。
         return ApmClassTransformer.createClassVisitor(
             api = Opcodes.ASM9,

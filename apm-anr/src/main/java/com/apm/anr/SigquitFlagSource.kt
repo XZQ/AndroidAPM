@@ -22,12 +22,7 @@ internal fun interface SigquitFlagSource {
  * 从 watchdog 循环中抽出的纯逻辑：消费标志源，有信号时触发分析回调。
  * 独立成类便于 JVM 单元测试覆盖。
  */
-internal class SigquitFlagPoller(
-    /** 信号标志来源（native 或测试替身）。 */
-    private val source: SigquitFlagSource,
-    /** 检测到信号时的回调（转发到 SIGQUIT 分析调度）。 */
-    private val onSigquit: () -> Unit
-) {
+internal class SigquitFlagPoller(private val source: SigquitFlagSource, private val onSigquit: () -> Unit) {
 
     /**
      * 执行一次轮询。

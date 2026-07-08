@@ -22,10 +22,7 @@ import com.apm.model.ApmPriority
  * 原理：频繁的 GC（Memory Churn）会导致主线程卡顿，
  * 大量短命对象分配是常见原因。本模块帮助定位此类问题。
  */
-class GcMonitorModule(
-    /** 模块配置。 */
-    private val config: GcMonitorConfig = GcMonitorConfig()
-) : ApmModule {
+class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -42,7 +39,9 @@ class GcMonitorModule(
     /** 定时检测任务。 */
     private val checkTask = object : Runnable {
         override fun run() {
-            if (!monitoring) return
+            if (!monitoring) {
+                return
+            }
             checkGc()
             mainHandler.postDelayed(this, config.checkIntervalMs)
         }
@@ -53,7 +52,9 @@ class GcMonitorModule(
     }
 
     override fun onStart() {
-        if (!config.enableGcMonitor) return
+        if (!config.enableGcMonitor) {
+            return
+        }
         monitoring = true
         // 采集初始快照
         lastStats = collectGcStats()

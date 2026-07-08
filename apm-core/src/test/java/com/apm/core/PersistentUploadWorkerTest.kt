@@ -156,10 +156,7 @@ class PersistentUploadWorkerTest {
     }
 
     /** Batch uploader that records accepted event names. */
-    private class RecordingBatchUploader(
-        /** Upload completion signal. */
-        private val uploaded: CountDownLatch
-    ) : BatchApmUploader {
+    private class RecordingBatchUploader(private val uploaded: CountDownLatch) : BatchApmUploader {
         /** Names accepted by the uploader. */
         val names = mutableListOf<String>()
 
@@ -172,10 +169,7 @@ class PersistentUploadWorkerTest {
     }
 
     /** Batch uploader that rejects all work while recording the attempt. */
-    private class FailingBatchUploader(
-        /** Upload attempt signal. */
-        private val attempted: CountDownLatch
-    ) : BatchApmUploader {
+    private class FailingBatchUploader(private val attempted: CountDownLatch) : BatchApmUploader {
         /** Rejects the batch to exercise durable retry retention. */
         override fun uploadBatch(events: List<ApmEvent>): Boolean {
             attempted.countDown()
@@ -184,10 +178,7 @@ class PersistentUploadWorkerTest {
     }
 
     /** Single-event uploader used to verify non-batch fallback behavior. */
-    private class RecordingSingleUploader(
-        /** Upload completion signal. */
-        private val uploaded: CountDownLatch
-    ) : com.apm.uploader.ApmUploader {
+    private class RecordingSingleUploader(private val uploaded: CountDownLatch) : com.apm.uploader.ApmUploader {
         /** Names accepted by the uploader. */
         val names = mutableListOf<String>()
 

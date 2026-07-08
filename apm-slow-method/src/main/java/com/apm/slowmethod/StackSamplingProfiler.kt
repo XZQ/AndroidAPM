@@ -16,10 +16,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * - 开销远低于全量插桩（只在触发时采样）
  * - 精度高于纯 Looper hook（能定位到具体方法）
  */
-class StackSamplingProfiler(
-    /** 模块配置。 */
-    private val config: SlowMethodConfig
-) {
+class StackSamplingProfiler(private val config: SlowMethodConfig) {
 
     /** 采样线程，避免在主线程上做采样操作。 */
     private val samplingThread = HandlerThread(THREAD_NAME).apply { start() }
@@ -41,8 +38,12 @@ class StackSamplingProfiler(
      * 在独立线程上定期抓取主线程堆栈，持续 samplingWindowMs 毫秒。
      */
     fun startSampling() {
-        if (sampling) return
-        if (!config.enableStackSampling) return
+        if (sampling) {
+            return
+        }
+        if (!config.enableStackSampling) {
+            return
+        }
         sampling = true
         sampleCount = 0
         hotMethods.clear()
@@ -50,7 +51,9 @@ class StackSamplingProfiler(
         // 定期采样任务
         val samplingRunnable = object : Runnable {
             override fun run() {
-                if (!sampling) return
+                if (!sampling) {
+                    return
+                }
                 // 抓取主线程堆栈
                 captureMainThreadStack()
                 sampleCount++
@@ -95,7 +98,9 @@ class StackSamplingProfiler(
         for (element in stackTrace) {
             val signature = "${element.className}.${element.methodName}"
             // 跳过系统类
-            if (shouldSkip(signature)) continue
+            if (shouldSkip(signature)) {
+                continue
+            }
             hotMethods.getOrPut(signature) { AtomicInteger(0) }.incrementAndGet()
         }
     }

@@ -40,10 +40,7 @@ import java.util.concurrent.atomic.AtomicLong
  *    - ANR 后尝试读取 /data/anr/traces.txt
  *    - 获取系统视角的完整线程堆栈
  */
-class AnrModule(
-    /** 模块配置。 */
-    private val config: AnrConfig = AnrConfig()
-) : ApmModule {
+class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -97,7 +94,9 @@ class AnrModule(
 
     /** 启动 ANR 监控。优先 SIGQUIT，降级 Watchdog。 */
     override fun onStart() {
-        if (!config.enableAnrMonitor) return
+        if (!config.enableAnrMonitor) {
+            return
+        }
         running = true
         anrDetected.set(false)
         sigquitAnalysisExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -239,7 +238,9 @@ class AnrModule(
                 break
             }
 
-            if (!running) break
+            if (!running) {
+                break
+            }
 
             // tick 未被消费且尚未报告过 ANR
             if (!tick.get()) {
@@ -351,7 +352,9 @@ class AnrModule(
      * @return 堆栈采样列表。
      */
     private fun collectStackSamples(): List<String> {
-        if (config.stackSampleCount <= 1) return emptyList()
+        if (config.stackSampleCount <= 1) {
+            return emptyList()
+        }
 
         val samples = mutableListOf<String>()
         // 注意：此处已在 ANR 回调中，主线程可能仍在阻塞
@@ -430,7 +433,9 @@ class AnrModule(
      * 相同表示主线程一直卡在同一个调用点（疑似死锁）。
      */
     private fun allSamplesIdentical(samples: List<String>): Boolean {
-        if (samples.isEmpty()) return false
+        if (samples.isEmpty()) {
+            return false
+        }
         return samples.all { it == samples[0] }
     }
 
@@ -486,7 +491,9 @@ class AnrModule(
     private fun isDuplicateAnr(now: Long, fingerprint: String): Boolean {
         val lastTime = lastReportTimeMs.get()
         // 超出窗口，不算重复
-        if (now - lastTime > config.anrDeduplicationWindowMs) return false
+        if (now - lastTime > config.anrDeduplicationWindowMs) {
+            return false
+        }
         // 窗口内相同指纹，视为重复
         return fingerprint == lastStackFingerprint
     }

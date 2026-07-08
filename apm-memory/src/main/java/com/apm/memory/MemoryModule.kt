@@ -30,10 +30,7 @@ import kotlin.random.Random
  * Apm.register(MemoryModule(MemoryConfig()))
  * ```
  */
-class MemoryModule(
-    /** 内存模块配置。 */
-    private val config: MemoryConfig = MemoryConfig()
-) : ApmModule, Application.ActivityLifecycleCallbacks, DefaultLifecycleObserver {
+class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModule, Application.ActivityLifecycleCallbacks, DefaultLifecycleObserver {
 
     override val name: String = MODULE_NAME
 
@@ -86,7 +83,9 @@ class MemoryModule(
 
         /** onTrimMemory 回调，高危级别触发即时采样。 */
         override fun onTrimMemory(level: Int) {
-            if (!config.enableTrimCallbacks) return
+            if (!config.enableTrimCallbacks) {
+                return
+            }
             // 仅响应高危级别
             if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ||
                 level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL ||
@@ -116,7 +115,9 @@ class MemoryModule(
      * 启动模块。注册生命周期回调，启动各子功能。
      */
     override fun onStart() {
-        if (started || !samplingEnabled) return
+        if (started || !samplingEnabled) {
+            return
+        }
         started = true
 
         // 注册生命周期回调
@@ -164,7 +165,9 @@ class MemoryModule(
      * 停止模块。释放所有资源。
      */
     override fun onStop() {
-        if (!started) return
+        if (!started) {
+            return
+        }
         started = false
 
         // 注销生命周期回调
@@ -222,7 +225,9 @@ class MemoryModule(
      * @param reason 采样原因标识
      */
     fun captureOnce(reason: String = REASON_MANUAL) {
-        if (!samplingEnabled || !Apm.isInitialized()) return
+        if (!samplingEnabled || !Apm.isInitialized()) {
+            return
+        }
         val snapshot = sampler.buildSnapshot(currentScene, foreground)
         reporter.onSnapshot(snapshot, reason)
         // OOM 检查独立于上报逻辑，始终执行
@@ -271,7 +276,9 @@ class MemoryModule(
      * @param viewModel ViewModel instance to inspect
      */
     fun checkViewModel(viewModel: androidx.lifecycle.ViewModel) {
-        if (!started || !config.enableViewModelLeak) return
+        if (!started || !config.enableViewModelLeak) {
+            return
+        }
         viewModelLeakDetector?.checkViewModel(viewModel)?.let(reporter::onLeakFound)
     }
 

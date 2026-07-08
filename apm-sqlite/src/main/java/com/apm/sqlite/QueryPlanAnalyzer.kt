@@ -14,10 +14,7 @@ import com.apm.model.ApmSeverity
  * 2. USE TEMP B-TREE → 需要排序索引
  * 3. AUTOINDEX → 查询优化器自动创建临时索引，说明设计有问题
  */
-class QueryPlanAnalyzer(
-    /** 分析配置。 */
-    private val config: SqliteConfig
-) {
+class QueryPlanAnalyzer(private val config: SqliteConfig) {
 
     /**
      * 查询计划问题数据类。

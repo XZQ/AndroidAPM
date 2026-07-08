@@ -22,10 +22,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  *
  * 线程安全：所有回调在主线程执行，统计数据通过 volatile/synchronized 保护。
  */
-class FpsMonitor(
-    /** 模块配置。 */
-    private val config: FpsConfig = FpsConfig()
-) {
+class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
 
     /** Choreographer 实例，用于注册 VSync 回调。 */
     private val choreographer = Choreographer.getInstance()
@@ -118,7 +115,9 @@ class FpsMonitor(
      * 注册 VSync 回调，开始采集帧率数据。
      */
     fun start() {
-        if (monitoring) return
+        if (monitoring) {
+            return
+        }
         monitoring = true
         // 重置统计
         frameCount = 0
@@ -154,7 +153,9 @@ class FpsMonitor(
      */
     private val frameCallback = object : Choreographer.FrameCallback {
         override fun doFrame(frameTimeNanos: Long) {
-            if (!monitoring) return
+            if (!monitoring) {
+                return
+            }
 
             if (lastFrameTimeNanos > 0L) {
                 // 计算帧间隔（纳秒）
@@ -254,7 +255,9 @@ class FpsMonitor(
      * 计算窗口内 measure/layout、draw、sync、swapBuffers 的总耗时。
      */
     private fun aggregateFrameMetrics(): FrameMetricsBreakdown? {
-        if (frameMetricsQueue.isEmpty()) return null
+        if (frameMetricsQueue.isEmpty()) {
+            return null
+        }
 
         var totalMeasureLayout = 0L
         var totalDraw = 0L
@@ -296,7 +299,9 @@ class FpsMonitor(
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
             try {
                 val listener = Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
-                    if (!monitoring) return@OnFrameMetricsAvailableListener
+                    if (!monitoring) {
+                        return@OnFrameMetricsAvailableListener
+                    }
                     // 提取各阶段耗时
                     val breakdown = extractFrameMetrics(frameMetrics)
                     // 有界保护：窗口上报停滞时丢弃最旧帧，防止队列无限增长

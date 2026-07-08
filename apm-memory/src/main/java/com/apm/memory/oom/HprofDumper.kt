@@ -18,14 +18,7 @@ import java.util.concurrent.Executors
  * 默认使用直接 dump（Debug.dumpHprofData），会产生 1~3 秒的 STW。
  * fork 子进程 dump 依赖设备/ART 兼容性，需通过 [MemoryConfig.enableForkHprofDump] 显式开启。
  */
-internal class HprofDumper(
-    /** 应用上下文，用于获取缓存目录。 */
-    private val context: Context,
-    /** 内存模块配置。 */
-    private val config: MemoryConfig,
-    /** 日志接口。 */
-    private val logger: ApmLogger
-) {
+internal class HprofDumper(private val context: Context, private val config: MemoryConfig, private val logger: ApmLogger) {
     /** dump 工作线程。 */
     private val dumpExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, THREAD_NAME)
@@ -66,7 +59,9 @@ internal class HprofDumper(
      * @param reason dump 触发原因
      */
     fun dumpAsync(reason: String) {
-        if (!config.enableHprofDump) return
+        if (!config.enableHprofDump) {
+            return
+        }
         dumpExecutor.execute { dumpInternal(reason) }
     }
 
@@ -100,7 +95,9 @@ internal class HprofDumper(
         }
 
         // dump 失败或文件为空，不继续处理
-        if (!hprofFile.exists() || hprofFile.length() == 0L) return
+        if (!hprofFile.exists() || hprofFile.length() == 0L) {
+            return
+        }
 
         // 可选 strip 裁剪（减少 60%~80% 文件大小）
         val uploadFile = if (config.enableHprofStrip) {

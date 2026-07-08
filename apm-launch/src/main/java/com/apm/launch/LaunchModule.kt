@@ -31,10 +31,7 @@ import com.apm.model.ApmPriority
  *
  * 使用 SystemClock.elapsedRealtime() 确保不受系统时钟调整影响。
  */
-class LaunchModule(
-    /** 模块配置。 */
-    private val config: LaunchConfig = LaunchConfig()
-) : ApmModule, Application.ActivityLifecycleCallbacks {
+class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModule, Application.ActivityLifecycleCallbacks {
 
     override val name: String = MODULE_NAME
 
@@ -130,7 +127,9 @@ class LaunchModule(
      * @param providerName ContentProvider 类名。
      */
     fun onContentProviderCreateStart(providerName: String) {
-        if (!config.enablePhaseTracking || !config.enableContentProviderTracking) return
+        if (!config.enablePhaseTracking || !config.enableContentProviderTracking) {
+            return
+        }
         // 记录开始时间到 ThreadLocal 避免并发问题
         providerStartTimes[providerName] = SystemClock.elapsedRealtime()
     }
@@ -141,7 +140,9 @@ class LaunchModule(
      * @param providerName ContentProvider 类名。
      */
     fun onContentProviderCreateEnd(providerName: String) {
-        if (!config.enablePhaseTracking || !config.enableContentProviderTracking) return
+        if (!config.enablePhaseTracking || !config.enableContentProviderTracking) {
+            return
+        }
         val startTime = providerStartTimes.remove(providerName) ?: return
         val duration = SystemClock.elapsedRealtime() - startTime
         contentProviderTotalMs += duration
@@ -153,7 +154,9 @@ class LaunchModule(
      * 在 Application.onCreate() 入口调用。
      */
     fun onAppOnCreateStart() {
-        if (!config.enablePhaseTracking) return
+        if (!config.enablePhaseTracking) {
+            return
+        }
         appOnCreateStartMs = SystemClock.elapsedRealtime()
     }
 
@@ -162,7 +165,9 @@ class LaunchModule(
      * 在 Application.onCreate() 出口调用。
      */
     fun onAppOnCreateEnd() {
-        if (!config.enablePhaseTracking) return
+        if (!config.enablePhaseTracking) {
+            return
+        }
         appOnCreateEndMs = SystemClock.elapsedRealtime()
     }
 
@@ -173,21 +178,27 @@ class LaunchModule(
      * 只执行一次，触发首帧渲染监听。
      */
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        if (firstActivityCreated) return
+        if (firstActivityCreated) {
+            return
+        }
 
         if (config.enablePhaseTracking) {
             // 记录 Phase 4: firstActivity.onCreate 开始
             firstActivityOnCreateMs = SystemClock.elapsedRealtime()
         }
 
-        if (!config.enableColdStart) return
+        if (!config.enableColdStart) {
+            return
+        }
         firstActivityCreated = true
 
         val now = SystemClock.elapsedRealtime()
         val coldStartMs = now - processStartMs
 
         // 超时阈值内的才算有效冷启动
-        if (coldStartMs > config.launchTimeoutMs) return
+        if (coldStartMs > config.launchTimeoutMs) {
+            return
+        }
 
         // 判断告警级别
         val severity = when {
@@ -283,12 +294,16 @@ class LaunchModule(
         val measurement = relaunchTracker.onActivityResumed(SystemClock.elapsedRealtime()) ?: return
         val eventName = when (measurement.launchType) {
             RelaunchTracker.LAUNCH_TYPE_HOT -> {
-                if (!config.enableHotStart) return
+                if (!config.enableHotStart) {
+                    return
+                }
                 EVENT_HOT_START
             }
 
             RelaunchTracker.LAUNCH_TYPE_WARM -> {
-                if (!config.enableWarmStart) return
+                if (!config.enableWarmStart) {
+                    return
+                }
                 EVENT_WARM_START
             }
 
@@ -324,7 +339,9 @@ class LaunchModule(
             android.view.Choreographer.getInstance().postFrameCallback(object :
                 android.view.Choreographer.FrameCallback {
                 override fun doFrame(frameTimeNanos: Long) {
-                    if (firstFrameRendered) return
+                    if (firstFrameRendered) {
+                        return
+                    }
                     firstFrameRendered = true
                     firstFrameRenderedMs = SystemClock.elapsedRealtime()
                     reportFirstFrame()

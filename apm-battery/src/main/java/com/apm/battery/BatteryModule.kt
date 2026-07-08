@@ -25,10 +25,7 @@ import java.util.concurrent.ConcurrentLinkedQueue
  * 2. 跟踪活跃 WakeLock 的持有时长
  * 3. 检测 GPS/Sensor 等高耗电硬件的持续使用
  */
-class BatteryModule(
-    /** 模块配置。 */
-    private val config: BatteryConfig = BatteryConfig()
-) : ApmModule {
+class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -63,7 +60,9 @@ class BatteryModule(
     /** 定时检测任务。 */
     private val checkTask = object : Runnable {
         override fun run() {
-            if (!started) return
+            if (!started) {
+                return
+            }
             checkBatteryDrain()
             checkWakeLocks()
             checkGpsSessions()
@@ -92,7 +91,9 @@ class BatteryModule(
 
     /** 注册电量广播和定时检测。 */
     override fun onStart() {
-        if (!config.enableBatteryMonitor) return
+        if (!config.enableBatteryMonitor) {
+            return
+        }
         started = true
         // 注册电量变化广播
         apmContext?.application?.registerReceiver(batteryReceiver,
@@ -145,7 +146,9 @@ class BatteryModule(
      * 由外部（如代理 PowerManager）调用。
      */
     fun onWakeLockAcquired(tag: String) {
-        if (!started || !config.enableWakeLockHook) return
+        if (!started || !config.enableWakeLockHook) {
+            return
+        }
         activeWakeLocks[tag] = System.currentTimeMillis()
     }
 
@@ -154,7 +157,9 @@ class BatteryModule(
      * 检查持有时长是否超过阈值。
      */
     fun onWakeLockReleased(tag: String) {
-        if (!started || !config.enableWakeLockHook) return
+        if (!started || !config.enableWakeLockHook) {
+            return
+        }
         val acquireTime = activeWakeLocks.remove(tag) ?: return
         val duration = System.currentTimeMillis() - acquireTime
         if (duration >= config.wakeLockThresholdMs) {
@@ -178,7 +183,9 @@ class BatteryModule(
      * @param tag stable location request identifier
      */
     fun onGpsStarted(tag: String) {
-        if (!started || !config.enableGpsMonitor) return
+        if (!started || !config.enableGpsMonitor) {
+            return
+        }
         activeGpsSessions[tag] = System.currentTimeMillis()
     }
 
@@ -188,7 +195,9 @@ class BatteryModule(
      * @param tag stable location request identifier
      */
     fun onGpsStopped(tag: String) {
-        if (!started || !config.enableGpsMonitor) return
+        if (!started || !config.enableGpsMonitor) {
+            return
+        }
         val startedAt = activeGpsSessions.remove(tag) ?: return
         val duration = System.currentTimeMillis() - startedAt
         if (duration >= config.gpsThresholdMs) {
@@ -203,7 +212,9 @@ class BatteryModule(
      * emitted when the configured count is reached within one check interval.
      */
     fun onAlarmScheduled() {
-        if (!started || !config.enableAlarmMonitor || config.alarmFloodThreshold <= 0) return
+        if (!started || !config.enableAlarmMonitor || config.alarmFloodThreshold <= 0) {
+            return
+        }
         val now = System.currentTimeMillis()
         alarmTimestamps += now
         removeExpiredAlarms(now)
@@ -258,7 +269,9 @@ class BatteryModule(
 
     /** 检查长时间持有的 WakeLock。 */
     private fun checkWakeLocks() {
-        if (!config.enableWakeLockHook) return
+        if (!config.enableWakeLockHook) {
+            return
+        }
         val now = System.currentTimeMillis()
         for ((tag, acquireTime) in activeWakeLocks.toMap()) {
             val duration = now - acquireTime
@@ -279,7 +292,9 @@ class BatteryModule(
 
     /** Checks application-reported GPS sessions that are still active. */
     private fun checkGpsSessions() {
-        if (!config.enableGpsMonitor) return
+        if (!config.enableGpsMonitor) {
+            return
+        }
         val now = System.currentTimeMillis()
         for ((tag, startedAt) in activeGpsSessions) {
             val duration = now - startedAt

@@ -67,7 +67,9 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * 记录开始时间，用于计算加载耗时。
      */
     fun onPageStarted(url: String) {
-        if (!started) return
+        if (!started) {
+            return
+        }
         // 记录页面加载起始时间
         pageLoadStartMap[url] = System.currentTimeMillis()
         // 通知瀑布图追踪器当前活跃页面
@@ -80,7 +82,9 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * 同时触发资源瀑布图完成回调。
      */
     fun onPageFinished(url: String) {
-        if (!started) return
+        if (!started) {
+            return
+        }
         val startTime = pageLoadStartMap.remove(url) ?: return
         val duration = System.currentTimeMillis() - startTime
 
@@ -108,9 +112,13 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * 超阈值则上报。
      */
     fun onJsEvalComplete(url: String, jsSnippet: String, durationMs: Long) {
-        if (!started) return
+        if (!started) {
+            return
+        }
         // 未达阈值时不报
-        if (durationMs < config.jsExecutionThresholdMs) return
+        if (durationMs < config.jsExecutionThresholdMs) {
+            return
+        }
 
         Apm.emit(
             module = MODULE_NAME,
@@ -130,7 +138,9 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * 页面加载超时后仍未有内容渲染时调用。
      */
     fun onWhiteScreen(url: String, durationMs: Long) {
-        if (!started) return
+        if (!started) {
+            return
+        }
         Apm.emit(
             module = MODULE_NAME,
             name = EVENT_WHITE_SCREEN,
@@ -155,18 +165,18 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * @param durationMs 调用耗时（毫秒）
      * @param success 是否调用成功
      */
-    fun onJsBridgeCall(
-        url: String,
-        bridgeName: String,
-        direction: String,
-        durationMs: Long,
-        success: Boolean
-    ) {
-        if (!started) return
+    fun onJsBridgeCall(url: String, bridgeName: String, direction: String, durationMs: Long, success: Boolean) {
+        if (!started) {
+            return
+        }
         // 未启用 JS Bridge 监控时跳过
-        if (!config.enableJsBridgeMonitor) return
+        if (!config.enableJsBridgeMonitor) {
+            return
+        }
         // 未达阈值时不报
-        if (durationMs < config.jsBridgeThresholdMs) return
+        if (durationMs < config.jsBridgeThresholdMs) {
+            return
+        }
 
         Apm.emit(
             module = MODULE_NAME,
@@ -193,15 +203,14 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      * @param sourceUrl 错误来源文件 URL，可为 null
      * @param line 错误所在行号，0 表示未知
      */
-    fun onJsConsoleError(
-        url: String,
-        errorMessage: String,
-        sourceUrl: String?,
-        line: Int
-    ) {
-        if (!started) return
+    fun onJsConsoleError(url: String, errorMessage: String, sourceUrl: String?, line: Int) {
+        if (!started) {
+            return
+        }
         // 未启用 JS Console 监控时跳过
-        if (!config.enableJsConsoleMonitor) return
+        if (!config.enableJsConsoleMonitor) {
+            return
+        }
 
         // 构建事件字段
         val fields = mutableMapOf<String, Any?>(

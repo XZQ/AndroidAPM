@@ -17,12 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 线程安全：使用 Atomic 类型保证并发采样场景下的状态一致性。
  */
-internal class OomMonitor(
-    /** 内存模块配置。 */
-    private val config: MemoryConfig,
-    /** Hprof dump 器，可选。 */
-    private val hprofDumper: HprofDumper?
-) {
+internal class OomMonitor(private val config: MemoryConfig, private val hprofDumper: HprofDumper?) {
     /** 上一次 dump 的时间戳，用于冷却控制。 */
     private val lastDumpTime = AtomicLong(0L)
     /** 是否已触发过 dump（首次不冷却）。 */
@@ -44,7 +39,9 @@ internal class OomMonitor(
      * - >= warnRatio：仅 WARN 告警
      */
     private fun checkJavaHeapThreshold(snapshot: MemorySnapshot) {
-        if (snapshot.javaHeapMaxMb <= 0L) return
+        if (snapshot.javaHeapMaxMb <= 0L) {
+            return
+        }
         val ratio = snapshot.javaHeapUsedMb.toFloat() / snapshot.javaHeapMaxMb
 
         when {
@@ -151,13 +148,19 @@ internal class OomMonitor(
      */
     private fun triggerDump(reason: String) {
         val dumper = hprofDumper ?: return
-        if (!config.enableHprofDump) return
+        if (!config.enableHprofDump) {
+            return
+        }
         val now = System.currentTimeMillis()
         val last = lastDumpTime.get()
         // 冷却期内跳过
-        if (hasTriggeredDump.get() && now - last < config.dumpCooldownMs) return
+        if (hasTriggeredDump.get() && now - last < config.dumpCooldownMs) {
+            return
+        }
         // CAS 保证只有一个线程能触发
-        if (!lastDumpTime.compareAndSet(last, now)) return
+        if (!lastDumpTime.compareAndSet(last, now)) {
+            return
+        }
         hasTriggeredDump.set(true)
         dumper.dumpAsync(reason)
     }

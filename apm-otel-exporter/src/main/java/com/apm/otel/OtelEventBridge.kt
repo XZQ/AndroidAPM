@@ -21,10 +21,7 @@ import com.apm.model.ApmEventKind
  * bridge.export(event)
  * ```
  */
-class OtelEventBridge(
-    /** OTel 配置。 */
-    private val config: OtelConfig
-) {
+class OtelEventBridge(private val config: OtelConfig) {
 
     /**
      * Maps one APM event into OTel-compatible structured data.
@@ -35,7 +32,9 @@ class OtelEventBridge(
      * @return mapping result containing Span/Metric/Log-compatible data
      */
     fun export(event: ApmEvent): ExportResult {
-        if (!config.enabled) return ExportResult(emptyList(), emptyList(), emptyList())
+        if (!config.enabled) {
+            return ExportResult(emptyList(), emptyList(), emptyList())
+        }
 
         val spans = mutableListOf<Map<String, Any?>>()
         val metrics = mutableListOf<Map<String, Any?>>()

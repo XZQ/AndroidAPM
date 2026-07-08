@@ -77,7 +77,9 @@ class HttpApmUploader(
      * @return true 表示完整批次上传成功
      */
     override fun uploadBatch(events: List<ApmEvent>): Boolean {
-        if (events.isEmpty()) return true
+        if (events.isEmpty()) {
+            return true
+        }
         val payload = when (serializationFormat) {
             SerializationFormat.PROTOBUF -> ProtobufSerializer.serializeBatch(events)
             SerializationFormat.LINE_PROTOCOL -> {

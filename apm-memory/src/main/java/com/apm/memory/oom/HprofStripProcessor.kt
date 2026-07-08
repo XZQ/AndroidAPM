@@ -70,10 +70,14 @@ internal class HprofStripProcessor {
         val headerBytes = mutableListOf<Byte>()
         while (true) {
             val b = input.read()
-            if (b < 0) break
+            if (b < 0) {
+                break
+            }
             output.write(b)
             headerBytes.add(b.toByte())
-            if (b == 0) break
+            if (b == 0) {
+                break
+            }
         }
         // identifier size (4 bytes) + timestamp (8 bytes) = 12 bytes
         val remaining = ByteArray(12)

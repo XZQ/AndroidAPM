@@ -10,10 +10,7 @@ import java.util.concurrent.TimeUnit
  * 使用单线程定时执行器，按前后台不同间隔周期触发采样。
  * 线程优先级设为 MIN_PRIORITY，减少对主线程的影响。
  */
-internal class MemorySampleScheduler(
-    /** 采样动作回调，由 MemoryModule 注入。 */
-    private val sampleAction: () -> Unit
-) {
+internal class MemorySampleScheduler(private val sampleAction: () -> Unit) {
     /** 单线程定时执行器。 */
     private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
         Thread(runnable, THREAD_NAME).apply {

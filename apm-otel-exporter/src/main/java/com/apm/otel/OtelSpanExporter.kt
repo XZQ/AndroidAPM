@@ -34,7 +34,9 @@ object OtelSpanExporter {
      */
     fun toSpanData(event: ApmEvent): Map<String, Any?>? {
         // 只有 ALERT 类型事件映射为 Span
-        if (event.kind != ApmEventKind.ALERT) return null
+        if (event.kind != ApmEventKind.ALERT) {
+            return null
+        }
 
         val attributes = mutableMapOf<String, Any>()
         // 事件基础信息作为属性

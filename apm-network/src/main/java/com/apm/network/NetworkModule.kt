@@ -39,10 +39,7 @@ import java.util.concurrent.atomic.AtomicLong
  * }
  * ```
  */
-class NetworkModule(
-    /** 模块配置。 */
-    private val config: NetworkConfig = NetworkConfig()
-) : ApmModule {
+class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -99,7 +96,9 @@ class NetworkModule(
         responseSize: Long = 0,
         error: String? = null
     ) {
-        if (!started) return
+        if (!started) {
+            return
+        }
 
         // 更新聚合统计
         totalRequests.incrementAndGet()
@@ -182,9 +181,13 @@ class NetworkModule(
      * @param stats 分阶段网络统计数据
      */
     fun onNetworkPhaseStats(stats: NetworkRequestStats) {
-        if (!started) return
+        if (!started) {
+            return
+        }
         // 只上报慢请求的分阶段数据，避免数据量过大
-        if (stats.totalMs < config.slowThresholdMs && stats.error == null) return
+        if (stats.totalMs < config.slowThresholdMs && stats.error == null) {
+            return
+        }
 
         val fields = mutableMapOf<String, Any?>(
             FIELD_URL to stats.url,

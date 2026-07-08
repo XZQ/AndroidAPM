@@ -14,11 +14,7 @@ import java.util.ArrayDeque
  *
  * 线程安全：所有公开方法使用 @Synchronized 保证串行访问。
  */
-class FileEventStore(
-    context: Context,
-    /** 环形缓冲区最大行数。超出后丢弃最旧的记录。 */
-    private val maxLines: Int = DEFAULT_MAX_LINES
-) : EventStore {
+class FileEventStore(context: Context, private val maxLines: Int = DEFAULT_MAX_LINES) : EventStore {
 
     /** 事件存储文件路径。 */
     private val eventFile = File(context.filesDir, FILE_PATH)
@@ -38,9 +34,13 @@ class FileEventStore(
      * 使用 double-check + synchronized 保证只加载一次。
      */
     private fun ensureInit() {
-        if (initialized) return
+        if (initialized) {
+            return
+        }
         synchronized(this) {
-            if (initialized) return
+            if (initialized) {
+                return
+            }
             // 确保目录和文件存在
             eventFile.parentFile?.mkdirs()
             if (!eventFile.exists()) {
@@ -86,7 +86,9 @@ class FileEventStore(
     @Synchronized
     override fun readRecent(limit: Int): List<String> {
         ensureInit()
-        if (limit <= 0 || recentLines.isEmpty()) return emptyList()
+        if (limit <= 0 || recentLines.isEmpty()) {
+            return emptyList()
+        }
         return recentLines.toList().takeLast(limit).reversed()
     }
 

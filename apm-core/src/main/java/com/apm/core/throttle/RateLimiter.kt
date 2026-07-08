@@ -13,14 +13,7 @@ import java.util.concurrent.atomic.AtomicLong
  * 线程安全：桶集合通过 synchronized 保护（tryAcquire 已迁移到
  * dispatcher worker 线程执行，锁竞争极低）；桶内计数使用 AtomicLong CAS。
  */
-class RateLimiter(
-    /** 每个时间窗口内允许的最大事件数。 */
-    private val maxEventsPerWindow: Int,
-    /** 限流窗口时长（毫秒）。 */
-    private val windowMs: Long,
-    /** 桶数量上限，超出时按 LRU 逐出最久未使用的桶。 */
-    private val maxBuckets: Int = DEFAULT_MAX_BUCKETS
-) {
+class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Long, private val maxBuckets: Int = DEFAULT_MAX_BUCKETS) {
     /**
      * key → 令牌桶映射。
      * access-order 模式：每次访问将条目移至末尾，头部即最久未使用；
@@ -64,12 +57,7 @@ class RateLimiter(
      * 单个令牌桶。使用 CAS 无锁实现。
      * 窗口到期时自动补充令牌到满。
      */
-    private class TokenBucket(
-        /** 桶容量 = 时间窗口内允许的最大事件数。 */
-        private val capacity: Int,
-        /** 窗口时长（毫秒）。 */
-        private val windowMs: Long
-    ) {
+    private class TokenBucket(private val capacity: Int, private val windowMs: Long) {
         /** 当前可用令牌数。 */
         private val tokens = AtomicLong(capacity.toLong())
         /** 上一次补充令牌的时间戳。 */
@@ -83,8 +71,12 @@ class RateLimiter(
             refill()
             while (true) {
                 val current = tokens.get()
-                if (current <= 0) return false
-                if (tokens.compareAndSet(current, current - 1)) return true
+                if (current <= 0) {
+                    return false
+                }
+                if (tokens.compareAndSet(current, current - 1)) {
+                    return true
+                }
             }
         }
 
@@ -95,7 +87,9 @@ class RateLimiter(
         private fun refill() {
             val now = System.currentTimeMillis()
             val last = lastRefill.get()
-            if (now - last < windowMs) return
+            if (now - last < windowMs) {
+                return
+            }
             // 只有 CAS 成功的线程才执行补充
             if (lastRefill.compareAndSet(last, now)) {
                 tokens.set(capacity.toLong())

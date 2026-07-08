@@ -110,7 +110,9 @@ class NativeIoHook(private val config: IoConfig) {
      * 优先安装 Native PLT Hook，失败则降级为 Java 代理。
      */
     fun init() {
-        if (initialized) return
+        if (initialized) {
+            return
+        }
         initialized = true
 
         // 注册为 JNI 静态回调的活跃实例，Native 事件经伴生对象桥接到本实例
@@ -201,7 +203,9 @@ class NativeIoHook(private val config: IoConfig) {
 
             /** Closes the source and completes the tracking session once. */
             override fun close() {
-                if (closed) return
+                if (closed) {
+                    return
+                }
                 closed = true
                 try {
                     source.close()
@@ -248,7 +252,9 @@ class NativeIoHook(private val config: IoConfig) {
 
             /** Closes the source and completes the tracking session once. */
             override fun close() {
-                if (closed) return
+                if (closed) {
+                    return
+                }
                 closed = true
                 try {
                     source.close()
@@ -296,8 +302,12 @@ class NativeIoHook(private val config: IoConfig) {
      * @param bufferUsed 使用的 buffer 大小。
      */
     fun onRead(path: String, bytesRead: Int, bufferUsed: Int) {
-        if (!initialized) return
-        if (bytesRead <= 0) return
+        if (!initialized) {
+            return
+        }
+        if (bytesRead <= 0) {
+            return
+        }
 
         // 更新吞吐量统计
         if (config.enableThroughputStats) {
@@ -347,7 +357,9 @@ class NativeIoHook(private val config: IoConfig) {
      * @param bufferUsed caller buffer size
      */
     fun onWrite(path: String, bytesWritten: Int, bufferUsed: Int) {
-        if (!initialized || bytesWritten <= 0) return
+        if (!initialized || bytesWritten <= 0) {
+            return
+        }
         if (config.enableThroughputStats) {
             totalWriteBytes.addAndGet(bytesWritten.toLong())
             totalIoOps.incrementAndGet()
@@ -436,7 +448,9 @@ class NativeIoHook(private val config: IoConfig) {
         while (initialized) {
             try {
                 Thread.sleep(FD_CHECK_INTERVAL_MS)
-                if (!initialized) break
+                if (!initialized) {
+                    break
+                }
 
                 // 读取 /proc/self/fd 目录统计 FD 数量
                 val fdCount = countOpenFds()
@@ -542,14 +556,10 @@ class NativeIoHook(private val config: IoConfig) {
      * @param durationMs 耗时（毫秒）。
      * @param isMainThread 是否主线程。
      */
-    internal fun handleNativeIoEvent(
-        operation: String,
-        path: String,
-        bytes: Long,
-        durationMs: Long,
-        isMainThread: Boolean
-    ) {
-        if (!initialized) return
+    internal fun handleNativeIoEvent(operation: String, path: String, bytes: Long, durationMs: Long, isMainThread: Boolean) {
+        if (!initialized) {
+            return
+        }
 
         // 主线程 IO 检测
         if (isMainThread && durationMs >= config.mainThreadIoThresholdMs) {
@@ -632,7 +642,9 @@ class NativeIoHook(private val config: IoConfig) {
      * @param bufferCount 单次拷贝中的 buffer 切片数。
      */
     fun onBufferCopy(fromPath: String, toPath: String, bytes: Long, bufferCount: Int) {
-        if (!initialized || !config.enableZeroCopyDetection) return
+        if (!initialized || !config.enableZeroCopyDetection) {
+            return
+        }
         // 构建拷贝链 key
         val chainKey = "${fromPath}$CHAIN_KEY_SEPARATOR$toPath"
         val chain = copyChains.getOrPut(chainKey) { CopyChain(fromPath, toPath) }
@@ -651,13 +663,17 @@ class NativeIoHook(private val config: IoConfig) {
         while (initialized) {
             try {
                 Thread.sleep(ZERO_COPY_CHECK_INTERVAL_MS)
-                if (!initialized) break
+                if (!initialized) {
+                    break
+                }
 
                 // 遍历所有拷贝链
                 for ((key, chain) in copyChains) {
                     val copyCount = chain.copyCount.get()
                     // 至少发生足够次数的拷贝才检测
-                    if (copyCount < ZERO_COPY_MIN_COPY_COUNT) continue
+                    if (copyCount < ZERO_COPY_MIN_COPY_COUNT) {
+                        continue
+                    }
                     // 计算平均每次拷贝的 buffer 数量
                     val avgBuffers = chain.bufferCountSum.get().toDouble() / copyCount
                     // 平均 buffer 数量超过阈值 → 检测到零拷贝优化机会
@@ -730,10 +746,7 @@ class NativeIoHook(private val config: IoConfig) {
      * @property sessionId unique proxy session id
      * @property path logical file path
      */
-    private data class CloseableMetadata(
-        val sessionId: Int,
-        val path: String
-    )
+    private data class CloseableMetadata(val sessionId: Int, val path: String)
 
     /** 路径维度的吞吐量统计。 */
     class ThroughputStats(
@@ -795,13 +808,7 @@ class NativeIoHook(private val config: IoConfig) {
          * @param isMainThread 是否主线程。
          */
         @JvmStatic
-        private fun onNativeIoEvent(
-            operation: String,
-            path: String,
-            bytes: Long,
-            durationMs: Long,
-            isMainThread: Boolean
-        ) {
+        private fun onNativeIoEvent(operation: String, path: String, bytes: Long, durationMs: Long, isMainThread: Boolean) {
             // 无活跃实例（未初始化或已销毁）时直接丢弃事件
             activeHook?.handleNativeIoEvent(operation, path, bytes, durationMs, isMainThread)
         }

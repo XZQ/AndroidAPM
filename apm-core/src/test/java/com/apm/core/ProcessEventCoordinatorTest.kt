@@ -110,7 +110,9 @@ class ProcessEventCoordinatorTest {
             while (System.currentTimeMillis() < deadline) {
                 val published = dir.listFilesByExtension(READY_EXTENSION)
                     .sumOf { file -> file.readLines().count { it.isNotBlank() } }
-                if (published + writer.pendingBufferSize() == BATCH_EVENT_COUNT) break
+                if (published + writer.pendingBufferSize() == BATCH_EVENT_COUNT) {
+                    break
+                }
                 Thread.sleep(POLL_INTERVAL_MS)
             }
             // 全部事件就位后只做一次收尾 flush，避免把批次切碎

@@ -92,7 +92,9 @@ class ProcessEventCoordinator internal constructor(
      * 上传进程启动定期扫描，非上传进程准备写入目录。
      */
     fun start() {
-        if (started) return
+        if (started) {
+            return
+        }
         started = true
 
         if (isUploaderProcess) {
@@ -114,8 +116,12 @@ class ProcessEventCoordinator internal constructor(
      * @param event 待传输的事件
      */
     fun writeEvent(event: ApmEvent) {
-        if (isUploaderProcess) return // 上传进程直接走主通道，无需 IPC
-        if (!started) return
+        if (isUploaderProcess) {
+            return // 上传进程直接走主通道，无需 IPC
+        }
+        if (!started) {
+            return
+        }
 
         writeExecutor.execute {
             try {
@@ -162,7 +168,9 @@ class ProcessEventCoordinator internal constructor(
         val batch: List<ApmEvent>
         synchronized(pendingLock) {
             flushScheduled = false
-            if (pendingEvents.isEmpty()) return
+            if (pendingEvents.isEmpty()) {
+                return
+            }
             batch = ArrayList(pendingEvents)
             pendingEvents.clear()
         }
@@ -197,8 +205,12 @@ class ProcessEventCoordinator internal constructor(
      * @return true 表示事件文件已完整发布
      */
     fun writeEventSync(event: ApmEvent): Boolean {
-        if (isUploaderProcess) return false
-        if (!started) return false
+        if (isUploaderProcess) {
+            return false
+        }
+        if (!started) {
+            return false
+        }
         // critical 事件不进缓冲，立即单文件发布保证可见性
         return runCatching { publishBatchFile(listOf(event)) }.getOrDefault(false)
     }
@@ -210,7 +222,9 @@ class ProcessEventCoordinator internal constructor(
      * @return true 表示发布成功
      */
     private fun publishBatchFile(events: List<ApmEvent>): Boolean {
-        if (events.isEmpty()) return true
+        if (events.isEmpty()) {
+            return true
+        }
         val fileStem = nextFileStem()
         val tempFile = File(ipcDir, "$fileStem$IPC_TEMP_EXTENSION")
         val readyFile = File(ipcDir, "$fileStem$IPC_FILE_EXTENSION")
@@ -247,7 +261,9 @@ class ProcessEventCoordinator internal constructor(
      * 仅上传进程调用。读取后删除已消费的文件。
      */
     private fun scanAndConsume() {
-        if (!started) return
+        if (!started) {
+            return
+        }
         try {
             val files = ipcDir.listFiles { file ->
                 file.name.endsWith(IPC_FILE_EXTENSION)
@@ -313,7 +329,9 @@ class ProcessEventCoordinator internal constructor(
     private fun consumeFile(file: File) {
         val lines = file.readLines()
         for (line in lines) {
-            if (line.isBlank()) continue
+            if (line.isBlank()) {
+                continue
+            }
             try {
                 // Decode the complete event so no fields are lost across processes.
                 val event = parseLineProtocol(line)

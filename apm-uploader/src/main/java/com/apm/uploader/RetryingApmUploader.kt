@@ -28,7 +28,9 @@ data class RetryPolicy(
      * @return 延迟毫秒数，不超过 [maxDelayMs]
      */
     fun delayForAttempt(attempt: Int): Long {
-        if (attempt <= 0) return 0L
+        if (attempt <= 0) {
+            return 0L
+        }
         var delay = baseDelayMs.toFloat()
         repeat(attempt - 1) {
             delay = (delay * backoffMultiplier).coerceAtMost(maxDelayMs.toFloat())
@@ -209,7 +211,9 @@ class RetryingApmUploader(
                         capacityPermits.release(drained)
                     }
                 }
-                if (batch.isEmpty()) continue
+                if (batch.isEmpty()) {
+                    continue
+                }
                 uploadBatchAttempt(batch.toList(), FIRST_ATTEMPT)
             } catch (_: InterruptedException) {
                 if (running) {
@@ -244,7 +248,9 @@ class RetryingApmUploader(
             logger.w("Upload attempt ${attempt + 1} threw: ${e.message}")
             false
         }
-        if (uploadSucceeded) return
+        if (uploadSucceeded) {
+            return
+        }
 
         val nextAttempt = attempt + 1
         if (nextAttempt > retryPolicy.maxRetries) {

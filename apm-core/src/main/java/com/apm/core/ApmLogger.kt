@@ -19,10 +19,7 @@ interface ApmLogger {
  * 基于 Android Logcat 的日志实现。
  * 调试日志受 [enabled] 开关控制，警告和错误始终输出。
  */
-internal class AndroidApmLogger(
-    /** 是否输出 Log.d 级别日志。 */
-    private val enabled: Boolean
-) : ApmLogger {
+internal class AndroidApmLogger(private val enabled: Boolean) : ApmLogger {
 
     override fun d(message: String) {
         // 仅在开启调试模式时输出，避免线上性能开销

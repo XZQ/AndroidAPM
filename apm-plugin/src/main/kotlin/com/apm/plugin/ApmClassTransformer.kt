@@ -40,11 +40,7 @@ object ApmClassTransformer {
      * @param className 可选类名；为空时从 visit 回调中读取。
      * @return 注入慢方法探针的 visitor。
      */
-    fun createClassVisitor(
-        api: Int,
-        classVisitor: org.objectweb.asm.ClassVisitor,
-        className: String? = null
-    ): org.objectweb.asm.ClassVisitor {
+    fun createClassVisitor(api: Int, classVisitor: org.objectweb.asm.ClassVisitor, className: String? = null): org.objectweb.asm.ClassVisitor {
         return ApmClassVisitor(
             api = api,
             classVisitor = classVisitor,
@@ -135,11 +131,7 @@ object ApmClassTransformer {
      * @param config 插件配置。
      * @return 插桩后的字节码。
      */
-    private fun transformClass(
-        bytes: ByteArray,
-        className: String,
-        config: ApmSlowMethodExtension
-    ): ByteArray {
+    private fun transformClass(bytes: ByteArray, className: String, config: ApmSlowMethodExtension): ByteArray {
         if (!config.enabled) {
             return bytes
         }
@@ -188,14 +180,7 @@ object ApmClassTransformer {
         /**
          * 访问 class 头部并捕获当前类名。
          */
-        override fun visit(
-            version: Int,
-            access: Int,
-            name: String?,
-            signature: String?,
-            superName: String?,
-            interfaces: Array<String>?
-        ) {
+        override fun visit(version: Int, access: Int, name: String?, signature: String?, superName: String?, interfaces: Array<String>?) {
             // AGP instrumentation 场景下从 class visit 回调捕获内部类名。
             if (className.isBlank() && name != null) {
                 className = name.replace('/', '.')
@@ -206,13 +191,7 @@ object ApmClassTransformer {
         /**
          * 访问方法并为可插桩方法创建 AdviceAdapter。
          */
-        override fun visitMethod(
-            access: Int,
-            name: String,
-            descriptor: String,
-            signature: String?,
-            exceptions: Array<String>?
-        ): MethodVisitor? {
+        override fun visitMethod(access: Int, name: String, descriptor: String, signature: String?, exceptions: Array<String>?): MethodVisitor? {
             val mv = super.visitMethod(access, name, descriptor, signature, exceptions)
             // 跳过构造函数、静态初始化块和合成的 acc\$ 方法
             if (name == "<init>" || name == "<clinit>" || name.contains("$")) {
@@ -289,7 +268,9 @@ object ApmClassTransformer {
         override fun onMethodExit(opcode: Int) {
             super.onMethodExit(opcode)
             // Explicit and propagated exceptions are balanced by the catch-all handler.
-            if (opcode == Opcodes.ATHROW) return
+            if (opcode == Opcodes.ATHROW) {
+                return
+            }
             emitMethodExit()
         }
 

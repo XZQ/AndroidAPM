@@ -26,11 +26,7 @@ internal object UploaderFactory {
      * @param logger 核心日志实现，适配为 uploader 内部日志以尊重 debugLogging 开关
      * @return 可直接交给分发器使用的 uploader
      */
-    fun create(
-        config: ApmConfig,
-        durableStore: Boolean = false,
-        logger: ApmLogger? = null
-    ): ApmUploader {
+    fun create(config: ApmConfig, durableStore: Boolean = false, logger: ApmLogger? = null): ApmUploader {
         // 把 core 的 ApmLogger 适配为 uploader 模块的 UploaderLogger；
         // 未传入时退回 uploader 模块默认实现（警告/错误可见，调试静默）
         val uploaderLogger = logger?.let { adaptLogger(it) } ?: UploaderLogger.DEFAULT
@@ -77,11 +73,7 @@ internal object UploaderFactory {
      * @param uploaderLogger uploader 内部日志实现
      * @return HTTP 或 Logcat uploader
      */
-    private fun createDefaultUploader(
-        endpoint: String,
-        config: ApmConfig,
-        uploaderLogger: UploaderLogger
-    ): ApmUploader {
+    private fun createDefaultUploader(endpoint: String, config: ApmConfig, uploaderLogger: UploaderLogger): ApmUploader {
         return if (endpoint.startsWith(HTTP_PREFIX) || endpoint.startsWith(HTTPS_PREFIX)) {
             HttpApmUploader(
                 endpoint = endpoint,

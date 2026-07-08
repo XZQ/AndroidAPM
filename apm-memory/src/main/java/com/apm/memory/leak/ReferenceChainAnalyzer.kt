@@ -32,7 +32,9 @@ class ReferenceChainAnalyzer {
      * @return 引用链分析结果，失败时返回 null
      */
     fun analyze(hprofFile: File, targetClassName: String): ReferenceChainResult? {
-        if (!hprofFile.exists() || hprofFile.length() == 0L) return null
+        if (!hprofFile.exists() || hprofFile.length() == 0L) {
+            return null
+        }
 
         val startTime = System.currentTimeMillis()
         try {
@@ -64,7 +66,9 @@ class ReferenceChainAnalyzer {
                     .filter { it.value == targetClassId }
                     .map { it.key }
 
-                if (targetInstances.isEmpty()) return null
+                if (targetInstances.isEmpty()) {
+                    return null
+                }
 
                 // 4. BFS 从所有 GC Root 搜索最短路径到目标实例
                 val chain = bfsShortestPath(
@@ -98,13 +102,19 @@ class ReferenceChainAnalyzer {
         var b: Int
         while (true) {
             b = file.read()
-            if (b == -1) return null // 文件结束
-            if (b == 0) break // null 终止符
+            if (b == -1) {
+                return null // 文件结束
+            }
+            if (b == 0) {
+                break // null 终止符
+            }
             magicBytes.write(b)
         }
         val magic = magicBytes.toString(Charsets.UTF_8.name())
         // 验证是否为有效的 Hprof 文件
-        if (!magic.startsWith(HPROF_MAGIC_PREFIX)) return null
+        if (!magic.startsWith(HPROF_MAGIC_PREFIX)) {
+            return null
+        }
 
         // 读取 identifier size（4 字节，大端序）
         val idSizeBytes = ByteArray(ID_SIZE_BYTES)
@@ -142,7 +152,9 @@ class ReferenceChainAnalyzer {
         while (true) {
             // record header: tag (1 byte) + time (4 bytes) + length (4 bytes)
             val tag = file.read()
-            if (tag == -1) break // EOF
+            if (tag == -1) {
+                break // EOF
+            }
             file.skipBytes(RECORD_TIME_BYTES)
             val length = file.readInt()
 
@@ -189,7 +201,9 @@ class ReferenceChainAnalyzer {
         val endPos = file.filePointer + length
         while (file.filePointer < endPos) {
             val subTag = file.read()
-            if (subTag == -1) break
+            if (subTag == -1) {
+                break
+            }
 
             when (subTag) {
                 // GC Root: JNI Global
@@ -281,12 +295,7 @@ class ReferenceChainAnalyzer {
      * 解析 CLASS_DUMP 子记录。
      * 提取类的 superclass 引用和字段信息。
      */
-    private fun parseClassDump(
-        file: RandomAccessFile,
-        idSize: Int,
-        classNameMap: MutableMap<Long, String>,
-        classSuperClassMap: MutableMap<Long, Long>
-    ) {
+    private fun parseClassDump(file: RandomAccessFile, idSize: Int, classNameMap: MutableMap<Long, String>, classSuperClassMap: MutableMap<Long, Long>) {
         // class object ID
         val classId = readId(file, idSize)
         file.skipBytes(U4_BYTES) // stack trace
@@ -345,13 +354,10 @@ class ReferenceChainAnalyzer {
      * 从实例字段数据中提取对象引用。
      * 简化版：按 idSize 对齐扫描，假设每个位置可能是对象引用。
      */
-    private fun extractObjectRefs(
-        instanceId: Long,
-        fieldData: ByteArray,
-        idSize: Int,
-        instanceFields: MutableMap<Long, MutableMap<String, Long>>
-    ) {
-        if (fieldData.size < idSize) return
+    private fun extractObjectRefs(instanceId: Long, fieldData: ByteArray, idSize: Int, instanceFields: MutableMap<Long, MutableMap<String, Long>>) {
+        if (fieldData.size < idSize) {
+            return
+        }
         val fields = instanceFields.getOrPut(instanceId) { mutableMapOf() }
         // 按 idSize 对齐扫描字段数据
         var offset = 0

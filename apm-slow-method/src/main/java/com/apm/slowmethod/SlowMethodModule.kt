@@ -19,10 +19,7 @@ import com.apm.model.ApmPriority
  * 1. Looper.mLogging 反射 hook — 检测 Message 级别总耗时
  * 2. StackSamplingProfiler 触发式采样 — 定位具体热点方法（折中方案）
  */
-class SlowMethodModule(
-    /** 模块配置。 */
-    private val config: SlowMethodConfig = SlowMethodConfig()
-) : ApmModule {
+class SlowMethodModule(private val config: SlowMethodConfig = SlowMethodConfig()) : ApmModule {
 
     override val name: String = MODULE_NAME
 
@@ -55,7 +52,9 @@ class SlowMethodModule(
      * 通过反射设置 mLogging 字段。
      */
     override fun onStart() {
-        if (!config.enableSlowMethod) return
+        if (!config.enableSlowMethod) {
+            return
+        }
         monitoring = true
         // Reflection is used only to preserve an existing logger; installation
         // itself uses the supported public API.
@@ -94,14 +93,18 @@ class SlowMethodModule(
          */
         override fun println(log: String) {
             originPrinter?.takeUnless { it === this }?.println(log)
-            if (!monitoring) return
+            if (!monitoring) {
+                return
+            }
 
             if (log.startsWith(DISPATCH_PREFIX)) {
                 // 消息开始分发，记录开始时间
                 dispatchStartTime = SystemClock.uptimeMillis()
             } else if (log.startsWith(FINISH_PREFIX)) {
                 // 消息分发完成，计算耗时
-                if (dispatchStartTime <= 0L) return
+                if (dispatchStartTime <= 0L) {
+                    return
+                }
                 val duration = SystemClock.uptimeMillis() - dispatchStartTime
                 dispatchStartTime = 0L
 
@@ -155,7 +158,9 @@ class SlowMethodModule(
      * 将热点方法附加到 APM 事件中上报。
      */
     private fun onSamplingResult(topMethods: List<StackSamplingProfiler.MethodSample>, sampleCount: Int) {
-        if (topMethods.isEmpty()) return
+        if (topMethods.isEmpty()) {
+            return
+        }
 
         // 构造热点方法摘要
         val methodsSummary = topMethods.joinToString(LINE_SEPARATOR) { sample ->

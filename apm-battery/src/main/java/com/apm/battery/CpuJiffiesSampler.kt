@@ -61,7 +61,9 @@ class CpuJiffiesSampler(
      * 计算当前 CPU 使用率并检测持续高 CPU。
      */
     fun sample() {
-        if (!sampling) return
+        if (!sampling) {
+            return
+        }
 
         val currentJiffies = readProcessJiffies()
         val currentTime = clock()
@@ -109,12 +111,16 @@ class CpuJiffiesSampler(
         jiffiesReader?.let { return it() }
         try {
             val file = File(PROC_SELF_STAT)
-            if (!file.exists()) return 0L
+            if (!file.exists()) {
+                return 0L
+            }
             val reader = BufferedReader(FileReader(file), BUFFER_SIZE)
             reader.use {
                 val line = it.readLine() ?: return 0L
                 val parts = line.split(" ")
-                if (parts.size < FIELD_STIME_INDEX + 1) return 0L
+                if (parts.size < FIELD_STIME_INDEX + 1) {
+                    return 0L
+                }
                 // utime = index 13, stime = index 14
                 val utime = parts[FIELD_UTIME_INDEX].toLongOrNull() ?: 0L
                 val stime = parts[FIELD_STIME_INDEX].toLongOrNull() ?: 0L

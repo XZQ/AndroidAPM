@@ -11,10 +11,7 @@ import com.apm.model.ApmPriority
  * 内存事件上报器。
  * 负责将内存快照、告警、泄漏检测结果通过 APM 管道上报。
  */
-internal class MemoryReporter(
-    /** 内存模块配置。 */
-    private val config: MemoryConfig
-) {
+internal class MemoryReporter(private val config: MemoryConfig) {
     /**
      * 处理一次内存快照。
      * 执行流程：

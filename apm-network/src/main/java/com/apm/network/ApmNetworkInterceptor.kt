@@ -15,10 +15,7 @@ import java.io.IOException
  *     .build()
  * ```
  */
-class ApmNetworkInterceptor(
-    /** 网络监控模块引用。 */
-    private val networkModule: NetworkModule
-) : Interceptor {
+class ApmNetworkInterceptor(private val networkModule: NetworkModule) : Interceptor {
 
     @Throws(IOException::class)
     override fun intercept(chain: Interceptor.Chain): Response {

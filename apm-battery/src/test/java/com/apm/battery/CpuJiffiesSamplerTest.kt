@@ -21,12 +21,7 @@ class CpuJiffiesSamplerTest {
      * @param threshold 高 CPU 阈值（单核分数）
      * @return 采样器与回调结果引用
      */
-    private fun buildSampler(
-        clockTickHz: Long,
-        jiffies: AtomicLong,
-        nowMs: AtomicLong,
-        threshold: Float
-    ): Pair<CpuJiffiesSampler, AtomicLong> {
+    private fun buildSampler(clockTickHz: Long, jiffies: AtomicLong, nowMs: AtomicLong, threshold: Float): Pair<CpuJiffiesSampler, AtomicLong> {
         val reportedPercent = AtomicLong(NO_REPORT)
         val sampler = CpuJiffiesSampler(
             config = BatteryConfig(

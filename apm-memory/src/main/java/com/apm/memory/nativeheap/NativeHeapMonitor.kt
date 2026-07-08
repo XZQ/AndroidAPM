@@ -22,7 +22,9 @@ internal class NativeHeapMonitor {
      * @return true 启用成功
      */
     fun enable(): Boolean {
-        if (enabled) return true
+        if (enabled) {
+            return true
+        }
         enabled = true
         return true
     }
@@ -32,7 +34,9 @@ internal class NativeHeapMonitor {
      * @return 统计数据，未启用时返回空
      */
     fun getStats(): NativeHeapStats {
-        if (!enabled) return NativeHeapStats()
+        if (!enabled) {
+            return NativeHeapStats()
+        }
         return NativeHeapStats(
             currentBytes = Debug.getNativeHeapAllocatedSize(),
             peakBytes = 0L, // Debug API 不直接提供峰值
@@ -48,7 +52,9 @@ internal class NativeHeapMonitor {
      * @param scene 当前场景
      */
     fun reportStats(scene: String) {
-        if (!enabled) return
+        if (!enabled) {
+            return
+        }
         val stats = getStats()
         Apm.emit(
             module = MODULE,

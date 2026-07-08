@@ -71,8 +71,12 @@ class ResourceWaterfall(private val config: WebviewConfig) {
     fun onResourceStart(pageUrl: String, request: WebResourceRequest) {
         // 忽略非 HTTP 请求（如 data:、blob: 等）
         val url = request.url.toString()
-        if (!url.startsWith(HTTP_PREFIX) && !url.startsWith(HTTPS_PREFIX)) return
-        if (pageUrl.isEmpty()) return
+        if (!url.startsWith(HTTP_PREFIX) && !url.startsWith(HTTPS_PREFIX)) {
+            return
+        }
+        if (pageUrl.isEmpty()) {
+            return
+        }
 
         val startedAt = System.currentTimeMillis()
         resourceStartTimes.getOrPut(resourceKey(pageUrl, url)) {
@@ -89,7 +93,9 @@ class ResourceWaterfall(private val config: WebviewConfig) {
         }
 
         // 检查资源数量是否已达上限
-        if (records.size >= config.maxTrackedResources) return
+        if (records.size >= config.maxTrackedResources) {
+            return
+        }
 
         // 添加资源记录
         records.add(
@@ -121,7 +127,9 @@ class ResourceWaterfall(private val config: WebviewConfig) {
      */
     fun onResourceEnd(pageUrl: String, url: String, response: WebResourceResponse?) {
         // 查找并移除开始时间
-        if (pageUrl.isEmpty()) return
+        if (pageUrl.isEmpty()) {
+            return
+        }
         val key = resourceKey(pageUrl, url)
         val starts = resourceStartTimes[key] ?: return
         val startTime = starts.poll() ?: return
@@ -178,7 +186,9 @@ class ResourceWaterfall(private val config: WebviewConfig) {
 
         // 过滤出已完成加载的资源（有有效结束时间）
         val completedRecords = records.filter { it.endTimeMs > 0 }
-        if (completedRecords.isEmpty()) return
+        if (completedRecords.isEmpty()) {
+            return
+        }
 
         // 识别慢资源
         val slowResources = completedRecords.filter {
@@ -307,7 +317,9 @@ class ResourceWaterfall(private val config: WebviewConfig) {
      * @return 内容长度字节数，获取失败返回 0
      */
     private fun extractContentLength(response: WebResourceResponse?): Long {
-        if (response == null) return 0L
+        if (response == null) {
+            return 0L
+        }
         return try {
             val headers = response.responseHeaders ?: return 0L
             // 遍历响应头查找 Content-Length

@@ -12,11 +12,7 @@ import com.apm.core.Apm
  * @param installHooks Native Hook 安装动作。
  * @param uninstallHooks Native Hook 卸载动作。
  */
-internal class NativeIoHookInstaller(
-    private val loadLibrary: () -> Unit,
-    private val installHooks: () -> Unit,
-    private val uninstallHooks: () -> Unit
-) {
+internal class NativeIoHookInstaller(private val loadLibrary: () -> Unit, private val installHooks: () -> Unit, private val uninstallHooks: () -> Unit) {
     /** Native Hook 是否已成功安装。 */
     private var installed = false
 
@@ -49,7 +45,9 @@ internal class NativeIoHookInstaller(
      * @return true 表示执行过卸载；false 表示此前未安装或卸载失败。
      */
     fun uninstall(): Boolean {
-        if (!installed) return false
+        if (!installed) {
+            return false
+        }
         return try {
             uninstallHooks()
             installed = false

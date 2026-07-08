@@ -34,7 +34,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
      * 保存原始 handler，崩溃发生时先上报再委托。
      */
     override fun onStart() {
-        if (!config.enableJavaCrash && !config.enableNativeCrash) return
+        if (!config.enableJavaCrash && !config.enableNativeCrash) {
+            return
+        }
 
         // 启用 Java 崩溃链路：替换默认未捕获异常处理器。
         if (config.enableJavaCrash) {
@@ -64,7 +66,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
      */
     private fun startExitReasonCollection() {
         // 版本与开关守卫：ApplicationExitInfo 自 API 30 起可用
-        if (!config.collectExitInfo || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        if (!config.collectExitInfo || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            return
+        }
         val application = apmContext?.application ?: return
 
         val collector = ExitReasonCollector(

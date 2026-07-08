@@ -70,13 +70,7 @@ data class NumericStats(
         /**
          * Builds statistics from streaming totals and a bounded percentile sample.
          */
-        fun fromSummary(
-            samples: List<Double>,
-            min: Double,
-            max: Double,
-            sum: Double,
-            sampleCount: Int
-        ): NumericStats {
+        fun fromSummary(samples: List<Double>, min: Double, max: Double, sum: Double, sampleCount: Int): NumericStats {
             if (sampleCount <= 0 || samples.isEmpty()) {
                 return fromSortedSamples(emptyList())
             }
@@ -94,11 +88,15 @@ data class NumericStats(
 
         /** 计算百分位数（线性插值）。 */
         private fun percentile(sorted: List<Double>, p: Double): Double {
-            if (sorted.size == 1) return sorted[0]
+            if (sorted.size == 1) {
+                return sorted[0]
+            }
             val index = p * (sorted.size - 1)
             val lower = index.toInt()
             val upper = lower + 1
-            if (upper >= sorted.size) return sorted.last()
+            if (upper >= sorted.size) {
+                return sorted.last()
+            }
             val fraction = index - lower
             return sorted[lower] + fraction * (sorted[upper] - sorted[lower])
         }

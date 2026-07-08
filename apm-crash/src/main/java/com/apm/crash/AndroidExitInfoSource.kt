@@ -10,10 +10,7 @@ import android.os.Build
  * 仅在 API 30+ 使用（由调用方做运行时版本守卫）。
  */
 @TargetApi(Build.VERSION_CODES.R)
-internal class AndroidExitInfoSource(
-    /** 应用上下文。 */
-    private val context: Context
-) : ExitInfoSource {
+internal class AndroidExitInfoSource(private val context: Context) : ExitInfoSource {
 
     /**
      * 读取系统记录的历史进程退出原因。
@@ -56,10 +53,7 @@ internal class AndroidExitInfoSource(
 /**
  * 基于 SharedPreferences 的退出记录处理位置存储。
  */
-internal class PrefsExitTimestampStore(
-    /** 应用上下文。 */
-    context: Context
-) : ExitTimestampStore {
+internal class PrefsExitTimestampStore(context: Context) : ExitTimestampStore {
 
     /** 退出采集专用的偏好存储。 */
     private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

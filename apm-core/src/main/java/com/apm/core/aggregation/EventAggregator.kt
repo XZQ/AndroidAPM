@@ -50,7 +50,9 @@ class EventAggregator(
      */
     @Synchronized
     fun process(event: ApmEvent): List<ApmEvent> {
-        if (!enabled) return listOf(event)
+        if (!enabled) {
+            return listOf(event)
+        }
 
         return when (event.kind) {
             // METRIC 事件进入聚合桶
@@ -72,7 +74,9 @@ class EventAggregator(
      */
     @Synchronized
     fun flush(): List<ApmEvent> {
-        if (buckets.isEmpty()) return emptyList()
+        if (buckets.isEmpty()) {
+            return emptyList()
+        }
 
         val results = mutableListOf<ApmEvent>()
         val now = System.currentTimeMillis()
@@ -101,7 +105,9 @@ class EventAggregator(
         val iterator = buckets.entries.iterator()
         while (iterator.hasNext()) {
             val (key, bucket) = iterator.next()
-            if (now - bucket.windowStartMs < windowMs) continue
+            if (now - bucket.windowStartMs < windowMs) {
+                continue
+            }
             iterator.remove()
             if (bucket.eventCount > 0) {
                 results += bucket.toAggregatedEvent(now).toApmEvent()
@@ -220,7 +226,9 @@ private class AggregationBucket(
                 is String -> value.toDoubleOrNull()
                 else -> null
             } ?: continue
-            if (this.fields.size >= MAX_FIELDS_PER_BUCKET && key !in this.fields) continue
+            if (this.fields.size >= MAX_FIELDS_PER_BUCKET && key !in this.fields) {
+                continue
+            }
             this.fields.getOrPut(key) {
                 NumericAccumulator(maxSamplesPerField.coerceAtLeast(1))
             }.add(numericValue)
@@ -259,10 +267,7 @@ private class AggregationBucket(
 /**
  * Streaming numeric summary with a bounded percentile reservoir.
  */
-private class NumericAccumulator(
-    /** Maximum retained percentile samples. */
-    private val reservoirSize: Int
-) {
+private class NumericAccumulator(private val reservoirSize: Int) {
     /** Bounded percentile sample reservoir. */
     private val reservoir = ArrayList<Double>(reservoirSize)
 

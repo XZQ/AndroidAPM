@@ -62,7 +62,9 @@ internal class ActivityLeakDetector(
      */
     private fun triggerGcAndCheck(key: String, className: String) {
         // 如果 key 已被移除（如模块 stop），跳过检查
-        if (!destroyedKeys.contains(key)) return
+        if (!destroyedKeys.contains(key)) {
+            return
+        }
 
         // 主动触发 GC（仅在泄漏检查线程，不影响用户操作）
         Runtime.getRuntime().gc()
@@ -107,7 +109,9 @@ internal class ActivityLeakDetector(
                 for (field in clazz.declaredFields) {
                     field.isAccessible = true
                     val value = try { field.get(activity) } catch (e: Exception) { null }
-                    if (value == null) continue
+                    if (value == null) {
+                        continue
+                    }
                     // 检查常见泄漏源
                     val fieldName = "${clazz.simpleName}.${field.name}"
                     when (value) {

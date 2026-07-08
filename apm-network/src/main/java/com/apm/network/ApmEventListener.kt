@@ -231,11 +231,7 @@ class ApmEventListener(
          * 创建 EventListener.Factory。
          * 用于 OkHttp Builder 的 eventListenerFactory 方法。
          */
-        fun factory(
-            networkModule: NetworkModule,
-            slowThresholdMs: Long = 3000L,
-            reportSummary: Boolean = false
-        ): EventListener.Factory {
+        fun factory(networkModule: NetworkModule, slowThresholdMs: Long = 3000L, reportSummary: Boolean = false): EventListener.Factory {
             return EventListener.Factory {
                 ApmEventListener(networkModule, slowThresholdMs, reportSummary)
             }

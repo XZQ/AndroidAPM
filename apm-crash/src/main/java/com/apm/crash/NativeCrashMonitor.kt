@@ -86,7 +86,9 @@ object NativeCrashMonitor {
      * @param unsafeSignalCallback 是否允许在信号处理器内直接回调 Java；仅建议调试环境使用
      */
     fun init(unsafeSignalCallback: Boolean = false) {
-        if (initialized) return
+        if (initialized) {
+            return
+        }
         initialized = true
         try {
             // 加载 JNI 库
@@ -144,12 +146,7 @@ object NativeCrashMonitor {
      * @param faultAddr 故障地址
      */
     @JvmStatic
-    fun logNativeCrashSignal(
-        signal: Int,
-        threadName: String = "",
-        backtrace: String = "",
-        faultAddr: String = ""
-    ) {
+    fun logNativeCrashSignal(signal: Int, threadName: String = "", backtrace: String = "", faultAddr: String = "") {
         Apm.emit(
             module = MODULE,
             name = EVENT_NATIVE_CRASH,
@@ -177,12 +174,16 @@ object NativeCrashMonitor {
     fun checkRecentTombstone() {
         val now = System.currentTimeMillis()
         // 限制检查频率
-        if (now - lastCheckTime < TOMBSTONE_CHECK_INTERVAL_MS) return
+        if (now - lastCheckTime < TOMBSTONE_CHECK_INTERVAL_MS) {
+            return
+        }
         lastCheckTime = now
 
         try {
             val tombstoneDir = File(TOMBSTONE_DIR)
-            if (!tombstoneDir.exists() || !tombstoneDir.isDirectory) return
+            if (!tombstoneDir.exists() || !tombstoneDir.isDirectory) {
+                return
+            }
 
             // 查找最近修改的 tombstone 文件
             val recentFile = tombstoneDir.listFiles()

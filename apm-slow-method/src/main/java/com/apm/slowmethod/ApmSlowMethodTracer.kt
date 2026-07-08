@@ -89,7 +89,9 @@ object ApmSlowMethodTracer {
      */
     @JvmStatic
     fun methodEnter(methodSignature: String) {
-        if (!enabled) return
+        if (!enabled) {
+            return
+        }
         val stack = getOrCreateStack()
         stack.push(Pair(methodSignature, SystemClock.elapsedRealtimeNanos()))
     }
@@ -102,11 +104,15 @@ object ApmSlowMethodTracer {
      */
     @JvmStatic
     fun methodExit(methodSignature: String) {
-        if (!enabled) return
+        if (!enabled) {
+            return
+        }
         val stack = getOrCreateStack()
 
         // Unwind stale frames until the matching method is found.
-        if (stack.isEmpty()) return
+        if (stack.isEmpty()) {
+            return
+        }
         var top: Pair<String, Long>? = null
         while (stack.isNotEmpty()) {
             val candidate = stack.pop()
@@ -200,9 +206,5 @@ object ApmSlowMethodTracer {
      * @property hitCount 命中次数。
      * @property totalDurationMs 累计耗时（毫秒）。
      */
-    class HotMethodInfo(
-        val methodSignature: String,
-        val hitCount: AtomicInteger = AtomicInteger(0),
-        val totalDurationMs: AtomicLong = AtomicLong(0L)
-    )
+    class HotMethodInfo(val methodSignature: String, val hitCount: AtomicInteger = AtomicInteger(0), val totalDurationMs: AtomicLong = AtomicLong(0L))
 }

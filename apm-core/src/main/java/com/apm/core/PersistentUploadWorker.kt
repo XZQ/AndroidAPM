@@ -147,7 +147,9 @@ internal class PersistentUploadWorker(
      * @param timeoutMs maximum wait duration
      */
     private fun awaitWake(timeoutMs: Long) {
-        if (!running) return
+        if (!running) {
+            return
+        }
         try {
             wakeSignal.poll(timeoutMs.coerceAtLeast(MIN_WAIT_MS), TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {

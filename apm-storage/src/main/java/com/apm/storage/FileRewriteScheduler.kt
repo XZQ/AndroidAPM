@@ -4,10 +4,7 @@ package com.apm.storage
  * FileEventStore 文件重写节奏控制器。
  * 仅按新增 append 次数触发重写，避免缓冲区打满后每次都整文件重写。
  */
-internal class FileRewriteScheduler(
-    /** 重写间隔：每累计追加多少次触发一次文件裁剪。 */
-    private val rewriteInterval: Int
-) {
+internal class FileRewriteScheduler(private val rewriteInterval: Int) {
 
     /** 自上次 reset 以来的累计追加次数。 */
     private var appendCount: Int = 0

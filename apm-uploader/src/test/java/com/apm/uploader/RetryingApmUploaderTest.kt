@@ -76,12 +76,7 @@ class RetryingApmUploaderTest {
     /**
      * 按顺序返回上传结果的 uploader。
      */
-    private class SequenceUploader(
-        /** 每次上传的期望结果。 */
-        private val results: List<Boolean>,
-        /** 成功后发出的完成信号。 */
-        private val successLatch: CountDownLatch? = null
-    ) : ApmUploader {
+    private class SequenceUploader(private val results: List<Boolean>, private val successLatch: CountDownLatch? = null) : ApmUploader {
 
         /** 调用次数。 */
         val attempts = AtomicInteger(0)

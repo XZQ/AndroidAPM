@@ -13,10 +13,7 @@ import java.io.File
  *
  * 注意：PSS 采集耗时 5~20ms，必须在子线程调用。
  */
-internal class MemorySampler(
-    /** 应用上下文，用于获取系统服务。 */
-    private val context: Context
-) {
+internal class MemorySampler(private val context: Context) {
     /** ActivityManager 实例，用于查询系统内存状态。 */
     private val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
     /** Java Runtime 实例，用于查询 Java Heap。 */
@@ -82,7 +79,9 @@ internal class MemorySampler(
      * @return (gcCount, gcTimeMs)
      */
     private fun collectGcStats(): Pair<Long, Long> {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return 0L to 0L
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) {
+            return 0L to 0L
+        }
         val count = Debug.getRuntimeStat("art.gc.gc-count")?.toLongOrNull() ?: 0L
         val time = Debug.getRuntimeStat("art.gc.gc-time")?.toLongOrNull() ?: 0L
         return count to time
@@ -115,10 +114,7 @@ internal class MemorySampler(
     private fun Long.toMb(): Long = this / BYTES_PER_MB
 
     /** /proc/self/status 的解析结果。 */
-    private data class ProcStatus(
-        val vmRssKb: Long,
-        val vmPeakKb: Long
-    )
+    private data class ProcStatus(val vmRssKb: Long, val vmPeakKb: Long)
 
     companion object {
         /** 字节/KB。 */

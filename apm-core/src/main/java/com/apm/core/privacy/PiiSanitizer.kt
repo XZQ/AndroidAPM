@@ -24,12 +24,7 @@ import com.apm.core.ApmLogger
  *
  * 线程安全：[SanitizationRule] 列表在构造后不可变，sanitize 方法无副作用。
  */
-class PiiSanitizer(
-    /** 脱敏规则列表，按序执行。 */
-    private val rules: List<SanitizationRule> = DefaultSanitizationRules.all(),
-    /** 日志接口。 */
-    private val logger: ApmLogger? = null
-) {
+class PiiSanitizer(private val rules: List<SanitizationRule> = DefaultSanitizationRules.all(), private val logger: ApmLogger? = null) {
 
     /**
      * 对事件执行 PII 脱敏。
@@ -42,7 +37,9 @@ class PiiSanitizer(
      * @return 脱敏后的事件副本
      */
     fun sanitize(event: ApmEvent): ApmEvent {
-        if (rules.isEmpty()) return event
+        if (rules.isEmpty()) {
+            return event
+        }
 
         // 对 fields 中的字符串值执行脱敏
         val sanitizedFields = event.fields.mapValues { (_, value) ->

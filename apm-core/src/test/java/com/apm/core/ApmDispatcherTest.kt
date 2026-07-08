@@ -110,11 +110,7 @@ class ApmDispatcherTest {
      * @param name 事件名
      * @return 标准 APM 事件
      */
-    private fun createEvent(
-        name: String,
-        priority: ApmPriority = ApmPriority.NORMAL,
-        fields: Map<String, Any?> = emptyMap()
-    ): ApmEvent {
+    private fun createEvent(name: String, priority: ApmPriority = ApmPriority.NORMAL, fields: Map<String, Any?> = emptyMap()): ApmEvent {
         return ApmEvent(
             module = "core",
             name = name,
@@ -163,10 +159,7 @@ class ApmDispatcherTest {
     /**
      * 记录型上传器。
      */
-    private class RecordingUploader(
-        /** 成功上传后的同步信号。 */
-        private val latch: CountDownLatch? = null
-    ) : ApmUploader {
+    private class RecordingUploader(private val latch: CountDownLatch? = null) : ApmUploader {
 
         /** 已上传事件。 */
         val events = mutableListOf<ApmEvent>()
@@ -188,10 +181,7 @@ class ApmDispatcherTest {
     /**
      * 拒绝型上传器。
      */
-    private class RejectingUploader(
-        /** 拒绝后的同步信号。 */
-        private val latch: CountDownLatch
-    ) : ApmUploader {
+    private class RejectingUploader(private val latch: CountDownLatch) : ApmUploader {
 
         /**
          * 拒绝上传事件。
@@ -243,7 +233,9 @@ class ApmDispatcherTest {
         val deadline = System.currentTimeMillis() + AWAIT_TIMEOUT_SECONDS * MILLIS_PER_SECOND
         while (System.currentTimeMillis() < deadline) {
             // dispatcher 在后台线程更新自监控，测试侧短轮询等待可见结果。
-            if (predicate()) return
+            if (predicate()) {
+                return
+            }
             Thread.sleep(WAIT_POLL_INTERVAL_MS)
         }
     }
