@@ -1,22 +1,19 @@
 package com.apm.memory
 
-import java.util.concurrent.Executors
+import com.apm.core.ApmExecutors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
  * 内存采样调度器。
- * 使用单线程定时执行器，按前后台不同间隔周期触发采样。
- * 线程优先级设为 MIN_PRIORITY，减少对主线程的影响。
+ * 使用 [ApmExecutors] 单线程定时执行器（默认最低优先级），按前后台不同间隔周期触发采样。
+ *
+ * @param sampleAction 每次采样周期触发的回调
  */
 internal class MemorySampleScheduler(private val sampleAction: () -> Unit) {
-    /** 单线程定时执行器。 */
-    private val executor: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor { runnable ->
-        Thread(runnable, THREAD_NAME).apply {
-            priority = Thread.MIN_PRIORITY
-        }
-    }
+    /** 单线程定时执行器：周期性内存轮询非时间敏感，经 [ApmExecutors] 以最低优先级后台执行。 */
+    private val executor: ScheduledExecutorService = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME)
 
     /** 当前定时任务的 Future，用于取消和重新调度。 */
     private var future: ScheduledFuture<*>? = null

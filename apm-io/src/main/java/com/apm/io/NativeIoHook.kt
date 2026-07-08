@@ -2,6 +2,7 @@ package com.apm.io
 
 import android.os.Looper
 import com.apm.core.Apm
+import com.apm.core.ApmExecutors
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -123,25 +124,18 @@ class NativeIoHook(private val config: IoConfig) {
             installNativePltHook()
         }
 
-        // 启动 Closeable 泄漏检测线程
+        // 三个后台监视器统一走 ApmExecutors，保证 daemon + "apm-" 前缀命名 + 最低优先级，
+        // 既便于线程 dump 定位，也不会阻止宿主进程退出。
         if (config.enableCloseableLeak) {
-            val leakThread = Thread({ monitorCloseableLeaks() }, THREAD_NAME_LEAK)
-            leakThread.isDaemon = true
-            leakThread.start()
+            ApmExecutors.startThread(THREAD_NAME_LEAK) { monitorCloseableLeaks() }
         }
 
-        // 启动 FD 泄漏检测线程
         if (config.enableFdLeakDetection) {
-            val fdThread = Thread({ monitorFdLeaks() }, THREAD_NAME_FD)
-            fdThread.isDaemon = true
-            fdThread.start()
+            ApmExecutors.startThread(THREAD_NAME_FD) { monitorFdLeaks() }
         }
 
-        // 启动零拷贝检测线程
         if (config.enableZeroCopyDetection) {
-            val zcThread = Thread({ monitorZeroCopy() }, THREAD_NAME_ZERO_COPY)
-            zcThread.isDaemon = true
-            zcThread.start()
+            ApmExecutors.startThread(THREAD_NAME_ZERO_COPY) { monitorZeroCopy() }
         }
     }
 

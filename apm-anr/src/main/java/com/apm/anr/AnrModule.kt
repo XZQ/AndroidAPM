@@ -5,12 +5,12 @@ import android.os.Looper
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.ApmExecutors
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.io.File
 import java.util.concurrent.ExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
@@ -99,9 +99,11 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         }
         running = true
         anrDetected.set(false)
-        sigquitAnalysisExecutor = Executors.newSingleThreadExecutor { runnable ->
-            Thread(runnable, SIGQUIT_ANALYSIS_THREAD_NAME)
-        }
+        // SIGQUIT 分析属于时间敏感型信号处置，使用普通优先级避免被宿主负载饿死而延误 ANR 判定。
+        sigquitAnalysisExecutor = ApmExecutors.newSingleThreadExecutor(
+            SIGQUIT_ANALYSIS_THREAD_NAME,
+            ApmExecutors.PRIORITY_MEASUREMENT
+        )
 
         // 尝试注册 SIGQUIT 信号处理器
         val sigquitReady = if (config.enableSigquitDetection) {

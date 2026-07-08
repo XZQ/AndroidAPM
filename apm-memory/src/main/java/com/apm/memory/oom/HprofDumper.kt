@@ -3,13 +3,13 @@ package com.apm.memory.oom
 import android.content.Context
 import android.os.Debug
 import com.apm.core.Apm
+import com.apm.core.ApmExecutors
 import com.apm.core.ApmLogger
 import com.apm.memory.MemoryConfig
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.io.File
-import java.util.concurrent.Executors
 
 /**
  * Hprof 文件 Dump 器。
@@ -17,12 +17,14 @@ import java.util.concurrent.Executors
  *
  * 默认使用直接 dump（Debug.dumpHprofData），会产生 1~3 秒的 STW。
  * fork 子进程 dump 依赖设备/ART 兼容性，需通过 [MemoryConfig.enableForkHprofDump] 显式开启。
+ *
+ * @param context 应用上下文，用于获取 hprof 缓存目录
+ * @param config 内存模块配置（含 dump 阈值与 fork dump 开关）
+ * @param logger 日志接口
  */
 internal class HprofDumper(private val context: Context, private val config: MemoryConfig, private val logger: ApmLogger) {
-    /** dump 工作线程。 */
-    private val dumpExecutor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, THREAD_NAME)
-    }
+    /** dump 工作线程：执行 Debug.dumpHprofData 会产生 1~3s STW，故使用最低优先级后台线程降低对宿主的影响。 */
+    private val dumpExecutor = ApmExecutors.newSingleThreadExecutor(THREAD_NAME)
 
     /** hprof 文件存储目录。 */
     private val hprofDir = File(context.cacheDir, HPROF_DIR_PATH).apply { mkdirs() }

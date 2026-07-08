@@ -3,11 +3,11 @@ package com.apm.threadmonitor
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.ApmExecutors
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.util.concurrent.ScheduledExecutorService
-import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
@@ -43,9 +43,8 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             return
         }
         monitoring = true
-        scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, THREAD_NAME)
-        }.apply {
+        // 周期性线程快照采集非时间敏感，使用最低优先级后台执行。
+        scheduler = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 { if (monitoring) checkThreads() },
                 config.checkIntervalMs,

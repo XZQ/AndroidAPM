@@ -16,7 +16,7 @@ Read this file first, then follow the read order below.
 
 ## Current Verified Baseline
 
-- Verification date: `2026-07-07`
+- Verification date: `2026-07-08`
 - Build units: `24`
 - Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `2` included builds (`apm-plugin`, `build-logic`)
 - Main source files: `128` (123 Kotlin + 4 C + 1 proto)

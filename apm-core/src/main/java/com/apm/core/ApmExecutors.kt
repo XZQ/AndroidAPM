@@ -11,7 +11,8 @@ import java.util.concurrent.ThreadFactory
  * 统一各组件创建线程的方式：
  * - 线程名带 "apm-" 前缀，便于 systrace/线程 dump 中定位 SDK 线程
  * - 全部为 daemon 线程，绝不阻止宿主进程退出
- * - 后台任务默认使用最低优先级，减少与宿主主流程的 CPU 竞争
+ * - 后台任务默认使用最低优先级（PRIORITY_BACKGROUND），减少与宿主主流程的 CPU 竞争
+ * - 提供两级优先级常量 PRIORITY_BACKGROUND（聚合/IO/上传）与 PRIORITY_MEASUREMENT（采样/信号分析），按任务性质选配
  *
  * 各监控模块与核心组件应优先使用本工具而非裸 new Thread()/Executors。
  */
@@ -19,6 +20,12 @@ object ApmExecutors {
 
     /** SDK 线程名统一前缀。 */
     private const val THREAD_NAME_PREFIX = "apm-"
+
+    /** 后台任务优先级：最低优先级，用于聚合/IO/上传等可延迟工作，避免与宿主主流程争夺 CPU。 */
+    const val PRIORITY_BACKGROUND: Int = Thread.MIN_PRIORITY
+
+    /** 测量/采样任务优先级：普通优先级，用于栈采样、ANR 信号分析等时间敏感任务，避免被宿主负载饿死而引入测量抖动。 */
+    const val PRIORITY_MEASUREMENT: Int = Thread.NORM_PRIORITY
 
     /**
      * 创建命名线程工厂。

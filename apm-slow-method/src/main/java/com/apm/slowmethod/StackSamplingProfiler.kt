@@ -3,6 +3,7 @@ package com.apm.slowmethod
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.Looper
+import com.apm.core.ApmExecutors
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -15,11 +16,21 @@ import java.util.concurrent.atomic.AtomicInteger
  * 采样模式是 Matrix 全量插桩和 Looper hook 之间的折中方案：
  * - 开销远低于全量插桩（只在触发时采样）
  * - 精度高于纯 Looper hook（能定位到具体方法）
+ *
+ * @param config 慢方法配置（含采样开关、采样间隔与窗口、Top N 数量）
  */
 class StackSamplingProfiler(private val config: SlowMethodConfig) {
 
-    /** 采样线程，避免在主线程上做采样操作。 */
-    private val samplingThread = HandlerThread(THREAD_NAME).apply { start() }
+    /**
+     * 采样线程，避免在主线程上做采样操作。
+     * 显式设为普通优先级：栈采样是时间敏感型测量，若被宿主负载饿死会导致采样间隔漂移、
+     * 热点统计失真。HandlerThread 默认即为普通优先级，此处显式声明以固化该契约。
+     */
+    private val samplingThread = HandlerThread(THREAD_NAME).apply {
+        // 复用 SDK 两级优先级常量：栈采样是时间敏感型测量，用普通优先级避免被宿主负载饿死而采样失真。
+        priority = ApmExecutors.PRIORITY_MEASUREMENT
+        start()
+    }
     /** 采样线程 Handler。 */
     private val samplingHandler = Handler(samplingThread.looper)
     /** 方法热点计数器：方法签名 → 出现次数。 */
