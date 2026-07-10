@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F8FBFE"/>
+      <stop offset="1" stop-color="#EEF4FA"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="6" stdDeviation="8" flood-color="#12355B" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M0,0 L12,6 L0,12 Z" fill="#52657A"/>
+    </marker>
+    <style>
+      .title { font: 700 38px 'Microsoft YaHei', Arial, sans-serif; fill: #12355B; }
+      .subtitle { font: 400 20px 'Microsoft YaHei', Arial, sans-serif; fill: #52657A; }
+      .node-title { font: 700 23px 'Microsoft YaHei', Arial, sans-serif; }
+      .body { font: 400 18px 'Microsoft YaHei', Arial, sans-serif; fill: #2F4052; }
+      .label { font: 600 16px 'Microsoft YaHei', Arial, sans-serif; fill: #40556B; }
+      .pill { font: 600 16px 'Microsoft YaHei', Arial, sans-serif; }
+      .boundary { font: 700 18px 'Microsoft YaHei', Arial, sans-serif; fill: #9B5C17; }
+    </style>
+  </defs>
+  <rect width="1600" height="900" fill="url(#background)"/>
+  <text x="70" y="70" class="title">AndroidAPM 事件管线</text>
+  <text x="70" y="108" class="subtitle">acknowledged at-least-once；成功确认后删除</text>
+  <g filter="url(#shadow)"><rect x="60" y="220" width="250" height="170" rx="18" fill="#F0FAF7" stroke="#157A6E" stroke-width="3"/><rect x="60" y="220" width="10" height="170" rx="5" fill="#157A6E"/><text x="84" y="262" class="node-title" fill="#157A6E">事件来源</text><text x="84" y="302" class="body">监控回调</text><text x="84" y="330" class="body">显式 API</text><text x="84" y="358" class="body">插桩计时</text><rect x="365" y="220" width="250" height="170" rx="18" fill="#F4F8FC" stroke="#1F5A94" stroke-width="3"/><rect x="365" y="220" width="10" height="170" rx="5" fill="#1F5A94"/><text x="389" y="262" class="node-title" fill="#1F5A94">Dispatcher</text><text x="389" y="302" class="body">有界队列</text><text x="389" y="330" class="body">批量出队</text><text x="389" y="358" class="body">调用方非阻塞</text><rect x="670" y="220" width="250" height="170" rx="18" fill="#FFF8F1" stroke="#B25D16" stroke-width="3"/><rect x="670" y="220" width="10" height="170" rx="5" fill="#B25D16"/><text x="694" y="262" class="node-title" fill="#B25D16">SQLite outbox</text><text x="694" y="302" class="body">批量事务</text><text x="694" y="330" class="body">TTL pruning</text><text x="694" y="358" class="body">进程重启恢复</text><rect x="975" y="220" width="250" height="170" rx="18" fill="#F8F4FC" stroke="#6D4AA5" stroke-width="3"/><rect x="975" y="220" width="10" height="170" rx="5" fill="#6D4AA5"/><text x="999" y="262" class="node-title" fill="#6D4AA5">Upload worker</text><text x="999" y="302" class="body">读取批次</text><text x="999" y="330" class="body">Retry-After</text><text x="999" y="358" class="body">非阻塞退避</text><rect x="1280" y="220" width="260" height="170" rx="18" fill="#FFF8E8" stroke="#9B5C17" stroke-width="3"/><rect x="1280" y="220" width="10" height="170" rx="5" fill="#9B5C17"/><text x="1304" y="262" class="node-title" fill="#9B5C17">Transport</text><text x="1304" y="302" class="body">可注入实现</text><text x="1304" y="330" class="body">外部 collector</text><text x="1304" y="358" class="body">仓库外系统</text><line x1="310" y1="305" x2="365" y2="305" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)"/><line x1="615" y1="305" x2="670" y2="305" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)"/><line x1="920" y1="305" x2="975" y2="305" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)"/><line x1="1225" y1="305" x2="1280" y2="305" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)"/><line x1="1410" y1="390" x2="795" y2="560" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)" stroke-dasharray="12 9"/><rect x="1030.5" y="449.0" width="144" height="30" rx="9" fill="#FFFFFF" opacity="0.94"/><text x="1102.5" y="470.0" class="label" text-anchor="middle">成功确认</text><line x1="1100" y1="390" x2="1100" y2="610" stroke="#52657A" stroke-width="4" marker-end="url(#arrow)" stroke-dasharray="12 9"/><rect x="1028.0" y="474.0" width="144" height="30" rx="9" fill="#FFFFFF" opacity="0.94"/><text x="1100.0" y="495.0" class="label" text-anchor="middle">失败/限流</text><rect x="670" y="560" width="250" height="120" rx="18" fill="#F0FAF7" stroke="#157A6E" stroke-width="3"/><rect x="670" y="560" width="10" height="120" rx="5" fill="#157A6E"/><text x="694" y="602" class="node-title" fill="#157A6E">删除已确认批次</text><text x="694" y="642" class="body">ack 后 delete</text><rect x="975" y="610" width="250" height="120" rx="18" fill="#FFF8F1" stroke="#B25D16" stroke-width="3"/><rect x="975" y="610" width="10" height="120" rx="5" fill="#B25D16"/><text x="999" y="652" class="node-title" fill="#B25D16">保留并重试</text><text x="999" y="692" class="body">至少一次交付</text><rect x="60" y="770" width="194" height="38" rx="19" fill="#157A6E" opacity="0.12"/><text x="157.0" y="795" text-anchor="middle" class="pill" fill="#157A6E">已实现：持久化恢复</text><rect x="360" y="770" width="320" height="38" rx="19" fill="#B25D16" opacity="0.12"/><text x="520.0" y="795" text-anchor="middle" class="pill" fill="#B25D16">未保证：exactly-once</text><rect x="700" y="770" width="338" height="38" rx="19" fill="#9B5C17" opacity="0.12"/><text x="869.0" y="795" text-anchor="middle" class="pill" fill="#9B5C17">未实现：claim / lease</text></g>
+  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-10</text>
+</svg>

@@ -54,13 +54,21 @@
 - `android-apm-monitoring-modules`
 - `android-apm-slow-method-instrumentation`
 
-SVG 是可维护源；PNG 是分发预览。修改架构拓扑后必须同时刷新两种格式。
+`docs/generate_diagrams.py` 是可维护源，SVG 和 PNG 都是派生产物。修改架构拓扑后，在仓库根目录运行：
+
+```bash
+python docs/generate_diagrams.py
+python docs/generate_report.py
+```
+
+第二条命令会把最新 PNG 一并嵌入两份 DOCX 报告。
 
 ## 历史与报告产物
 
 - `../APM_Review_2026-07-08.md`：历史评审及当前处置状态
 - `../APM_Optimization_2026-07-08.md`：历史优化建议及当前落地状态
 - `../APM_对比报告.docx`、`../APM_框架对比报告.docx`：可分发报告
+- `../generate_report.py`：两份 DOCX 的可维护生成源
 - `../记录.zip`、`../绘制.jpeg`：历史参考资料，不作为当前代码证明
 
 ## 文档规则
