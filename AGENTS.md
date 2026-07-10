@@ -25,15 +25,17 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
-Fresh checks executed on `2026-07-10` before this documentation sync:
+Fresh checks executed on `2026-07-10` against the completed documentation-sync tip:
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
-./gradlew.bat -p apm-plugin test --no-daemon
+./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
+./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
+./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-The current documentation task reruns the same checks before publishing. Older records for `lintDebug`, `assembleRelease`, `publishToMavenLocal`, and the Maven consumer smoke build remain historical evidence until those commands are rerun against the current tip.
+All commands passed under JDK `21.0.11`. The generated XML reports contain `68` suites and `479` tests with `0` failures/errors/skips; lint produced `21` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,570,504` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM), and the isolated consumer resolved them successfully.
 
 ## Project Boundary
 
@@ -100,6 +102,6 @@ Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, 
 
 1. `git status --short --branch`
 2. Relevant Gradle tests/builds under JDK 21
-3. Documentation stale-claim and local-link checks
+3. `python docs/verify_docs.py` plus documentation stale-claim checks
 4. `git diff --check`
 5. After push: exact equality among `HEAD`, `origin/develop`, and `git ls-remote origin refs/heads/develop`

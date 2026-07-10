@@ -197,22 +197,30 @@ worker 单轮 drain 最多 32 条：
 
 根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛 20 个 Android library 的 compileSdk/minSdk/Java 版本。`apm-plugin` 作为 included build 独立测试。
 
-当前本地开发命令：
+2026-07-10 在 JDK 21.0.11 执行的开发验证：
 
 ```powershell
-./gradlew.bat testDebugUnitTest
-./gradlew.bat assembleDebug
-./gradlew.bat -p apm-plugin test
+./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
+./gradlew.bat assembleDebug --no-daemon
+./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
 ```
 
-完整发布验证链：
+同日执行的完整发布验证链：
 
 ```powershell
-./gradlew.bat lintDebug assembleRelease publishToMavenLocal
-./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug
+./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
+./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-历史上完整链曾通过，但必须以 `AGENTS.md` 当前日期区分现场重跑和历史证据。仓库没有外部 Maven 发布凭据或已完成的 Central 发布。
+全部命令通过。现场产物与报告为：
+
+- 68 个 JUnit XML 测试套件、479 个测试，0 failures / 0 errors / 0 skipped；
+- 21 份 `lint-results-debug.html`；
+- `apm-sample-app-release-unsigned.apk`，4,570,504 字节；
+- Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
+- 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
+
+仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十一、测试策略
 

@@ -102,15 +102,17 @@ Apm.emit
 
 ## 验证
 
-2026-07-10 已在 JDK 21 执行：
+2026-07-10 已在 JDK 21.0.11 对完成文档同步的当前 tip 执行：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
-./gradlew.bat -p apm-plugin test --no-daemon
+./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
+./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
+./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-文档同步完成前会再次执行并记录最终结果。较早日期的 `lintDebug`、`assembleRelease`、`publishToMavenLocal` 与 smoke consumer 成功记录属于历史基线，不自动代表新 tip。
+全部通过。XML 报告合计 68 个套件、479 个测试，0 failures / 0 errors / 0 skipped；生成 21 份 lint HTML、4,570,504 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。独立 consumer 已从本地制品清理重建成功。
 
 ## 新电脑接手
 

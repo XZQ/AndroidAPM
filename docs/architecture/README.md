@@ -59,9 +59,10 @@
 ```bash
 python docs/generate_diagrams.py
 python docs/generate_report.py
+python docs/verify_docs.py
 ```
 
-第二条命令会把最新 PNG 一并嵌入两份 DOCX 报告。
+第二条命令会把最新 PNG 一并嵌入两份 DOCX 报告；第三条命令检查全部 Markdown 的 UTF-8 编码和本地链接。
 
 ## 历史与报告产物
 
