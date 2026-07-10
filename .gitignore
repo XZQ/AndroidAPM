@@ -21,7 +21,6 @@ Thumbs.db
 .~*
 # NDK/CMake build cache
 .cxx/
-/docs/
 /.workbuddy/
 /.github/
 /.claude/
