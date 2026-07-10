@@ -2,8 +2,7 @@
 
 ## Purpose
 
-This file is the repository-local handoff entry for any model or developer taking over this project.
-Read this file first, then follow the read order below.
+This is the repository-local handoff entry for AndroidAPM. Treat the current source tree and executable verification as the source of truth; documentation must be corrected when it disagrees with code.
 
 ## Read Order
 
@@ -12,82 +11,95 @@ Read this file first, then follow the read order below.
 3. `README.md`
 4. `CLAUDE.md`
 5. `docs/architecture/00_整体架构.md`
-6. The specific module doc under `docs/architecture/` you are about to change
+6. The matching module document under `docs/architecture/`
 
 ## Current Verified Baseline
 
-- Verification date: `2026-07-08`
+- Documentation synchronization date: `2026-07-10`
+- Branch: `develop`; use `git log --oneline -n 10` for the current tip
+- Latest runtime implementation commit before this documentation sync: `3c27ff9 Refactor: centralize SDK threads via ApmExecutors with two-tier priority policy`
 - Build units: `24`
-- Composition: `22` root Gradle subprojects (`4` core modules + `15` monitoring modules + `2` extension modules (apm-trace, apm-otel-exporter) + `apm-sample-app`) + `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `128` (123 Kotlin + 4 C + 1 proto)
+- Composition: `22` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app`) and `2` included builds (`apm-plugin`, `build-logic`)
+- Main source files: `128` (`123` Kotlin + `4` C + `1` proto)
 - Test files: `63`
-- Recent implementation commits: 2026-07-07 optimization series (see `git log --oneline -n 20`)
-- Current hardening (2026-07-07 series):
-  - build-logic convention plugin + POM metadata + optional signing
-  - JNI static-binding fixes (apm-io, apm-crash) with contract tests
-  - native SIGQUIT ANR detection shipped (`libapm-anr.so`, flag-poll design)
-  - protobuf priority field, HTTP stream draining + Retry-After hints
-  - dispatcher bounded-queue batch pipeline off the caller thread,
-    SQLite batch transactions + cached row counter, rate-limiter LRU,
-    non-blocking upload retry backoff, outbox TTL pruning, IPC file batching
-  - ApplicationExitInfo exit-reason collection (API 30+), true process-start
-    launch baseline, real clock-tick CPU math, ApmSQLiteDatabase wrapper
-  - WAL enabled via setWriteAheadLoggingEnabled (execSQL PRAGMA crashed)
-  - shared ApmExecutors, Robolectric-backed SQLiteEventStore tests,
-    CI triggers for main/master + lint report artifacts
-- Verified commands:
-  - `./gradlew assembleDebug`
-  - `./gradlew testDebugUnitTest`
-  - `./gradlew -p apm-plugin test`
-  - `./gradlew lintDebug`
-  - `./gradlew assembleRelease`
-  - `./gradlew publishToMavenLocal`
-  - `./gradlew -p smoke-tests/maven-consumer clean assembleDebug`
-- Result: all commands passed on `2026-07-04`
+- Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
+- Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
-## Important Reality Check
+Fresh checks executed on `2026-07-10` before this documentation sync:
 
-- `README.md` is the product intro, but volatile project status belongs in `docs/Android_APM_项目文档.md`.
-- `docs/PROJECT_HANDOFF.md` is the portable handoff snapshot for changing computers or agents.
-- `CLAUDE.md` contains coding and commit constraints that should be treated as project rules, not Claude-only suggestions.
-- The old Claude workflow referenced an external private memory file outside the repository. That is not a reliable cross-model source of truth.
-- The repository-local source of truth for current status is `docs/Android_APM_项目文档.md`.
+```powershell
+./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
+./gradlew.bat assembleDebug --no-daemon
+./gradlew.bat -p apm-plugin test --no-daemon
+```
+
+The current documentation task reruns the same checks before publishing. Older records for `lintDebug`, `assembleRelease`, `publishToMavenLocal`, and the Maven consumer smoke build remain historical evidence until those commands are rerun against the current tip.
+
+## Project Boundary
+
+AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
+
+The default runtime path is:
+
+```text
+monitor module
+  -> Apm.emit (caller captures timestamp/thread/context snapshot)
+  -> bounded dispatcher queue (2048; overflow drops instead of blocking)
+  -> optional aggregation, rate limiting, and PII sanitization
+  -> appendBatch (up to 32 drained events)
+  -> SQLite durable outbox (50,000 rows)
+  -> PersistentUploadWorker
+  -> BatchApmUploader / HttpApmUploader / custom uploader
+  -> integrator-owned collector
+```
+
+Crash-class events can use synchronous local persistence. Optional multi-process forwarding publishes complete `.tmp` files as `.ipc` files before the uploader process consumes them.
+
+Delivery is acknowledged and at least once: rows are deleted only after an uploader reports success, but ambiguous network completion can produce duplicates. There is no event-level idempotency key or concurrent batch claim/lease protocol.
+
+## Integration Reality
+
+Registration alone does not make every monitor automatic:
+
+- Network requires the OkHttp interceptor/listener or manual completion callbacks.
+- SQLite requires `ApmSQLiteDatabase` or `onSqlExecuted` callbacks.
+- IPC currently exposes `onBinderCallComplete`; `enableBinderHook` is not a delivered generic Binder hook.
+- WebView requires the host to forward page/JS/resource callbacks; `enableAutoRegister` is not a delivered automatic registration layer.
+- Battery WakeLock/GPS/Alarm signals are host callbacks.
+- IO uses stream wrappers and an optional xhook-backed native path.
+- Slow-method ASM requires the host module to apply `com.apm.slow-method`.
+- Render currently measures view count/depth; overdraw and draw-time config flags are not delivered detectors.
+- Thread monitoring inspects count/name/BLOCKED state; thread-pool backlog instrumentation is not delivered.
+- `apm-otel-exporter` maps data only; it does not depend on or send through the OTel SDK.
+
+Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
 
 ## Working Rules
 
-- Add KDoc for all `public` / `internal` / `private` properties and methods.
-- Create SDK threads/executors through `com.apm.core.ApmExecutors`; apm-uploader (which cannot see apm-core) keeps module-local executors and logs through the injected `UploaderLogger`.
-- Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)` instead of empty catch blocks.
-- Add inline comments at important branches, loops, exception handling, assignments with business meaning, and callbacks.
-- Extract magic numbers and strings into named constants unless the value is a trivial `0`, `1`, or `-1`.
-- Use English commit messages in the format `Type: Subject`.
-- Valid commit prefixes: `Feat`, `Fix`, `Refactor`, `Perf`, `Style`, `Docs`, `Revert`, `Build`.
+- Add KDoc for all `public`, `internal`, and `private` properties and methods.
+- Add inline comments at important branches, loops, exception handling, callbacks, and business-significant assignments.
+- Extract non-trivial magic numbers and strings into named constants.
+- Create SDK threads/executors through `com.apm.core.ApmExecutors`; `apm-uploader` retains module-local executors because it cannot depend on `apm-core`.
+- Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)`.
+- Preserve the durable SQLite outbox as the default storage path.
+- Before adding multiple upload workers or cross-process upload ownership, design batch claim/lease/expiry semantics.
+- Do not claim a config switch is an automatic hook unless a source-backed runtime path consumes it.
 
-## State Sync Rules
+## Git and Documentation Policy
 
-- After any meaningful code, architecture, build, test, or documentation change, update `docs/Android_APM_项目文档.md`.
-- At minimum, sync:
-  - verification date
-  - module/file/test counts if they changed
-  - build/test status
-  - recent commit hash after commit
-  - affected module status or architecture notes
-- If a user-facing capability summary changes, also sync `README.md`.
-- If a module design changes, also sync the corresponding file in `docs/architecture/`.
+- Commit messages are English `Type: Subject`.
+- Allowed prefixes: `Feat`, `Fix`, `Refactor`, `Perf`, `Style`, `Docs`, `Revert`, `Build`.
+- `docs/` is tracked and is part of the deliverable.
+- `.workbuddy/`, `.github/`, and `.claude/` are local-only and ignored.
+- After meaningful code, architecture, build, test, or documentation changes, update `AGENTS.md` and `docs/Android_APM_项目文档.md`.
+- Update `README.md` when user-facing capabilities or integration requirements change.
+- Update the corresponding `docs/architecture/*.md` whenever module behavior changes.
+- Keep volatile verification evidence in the project/handoff documents, not in `CLAUDE.md`.
 
-## Quick Orientation
+## Required Finish Checks
 
-- Project type: multi-module Android APM framework
-- Build stack: Kotlin `2.2.21`, AGP `8.13.2`, Gradle `8.13`, JDK `21`, JVM bytecode target `11`, compileSdk `34`
-- Current package namespace: `com.apm`
-- Sample app: `apm-sample-app`
-- Gradle plugin build: `apm-plugin` via `pluginManagement { includeBuild("apm-plugin") }`
-- Slow-method Gradle plugin uses AGP instrumentation API; no legacy Transform compatibility flag is required.
-
-## First Actions For A New Agent
-
-1. Read `docs/Android_APM_项目文档.md` for the latest verified state.
-2. Read `docs/PROJECT_HANDOFF.md` for the current handoff summary and future work list.
-3. Check `git status --short --branch` and `git log --oneline -n 10`.
-4. If task-specific, open the matching module and architecture doc before editing.
-5. Before finishing, sync the repository-local status docs.
+1. `git status --short --branch`
+2. Relevant Gradle tests/builds under JDK 21
+3. Documentation stale-claim and local-link checks
+4. `git diff --check`
+5. After push: exact equality among `HEAD`, `origin/develop`, and `git ls-remote origin refs/heads/develop`

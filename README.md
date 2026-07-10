@@ -1,144 +1,95 @@
-<p align="center">
-  <h1 align="center">Android APM Framework</h1>
-  <p align="center">
-    <b>高性能 Android 应用性能监控框架</b><br/>
-    对标微信 Matrix + 快手 KOOM + Google 最佳实践
-  </p>
-</p>
+# Android APM Framework
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Platform-Android-green.svg" alt="Platform"/>
-  <img src="https://img.shields.io/badge/API-24%2B-brightgreen.svg" alt="API"/>
-  <img src="https://img.shields.io/badge/Kotlin-2.2.21-blue.svg" alt="Kotlin"/>
-  <img src="https://img.shields.io/badge/AGP-8.13.2-orange.svg" alt="AGP"/>
-  <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"/>
-</p>
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、统一事件管线、SQLite 持久化出箱、批量 HTTP 上传、手动 Trace API 和 OpenTelemetry 语义映射。
 
----
+> 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
-## 简介
+## 当前基线
 
-Android APM Framework 是一个全维度 Android 性能监控框架，当前代码覆盖 **15 个监控维度**，从内存泄漏到 ANR，从启动耗时到网络链路，从帧率卡顿到 IO 异常——一站式解决应用性能监控需求。
+- 同步日期：2026-07-10
+- 24 个构建单元：22 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
+- 128 个主源码文件：123 Kotlin + 4 C + 1 proto
+- 63 个测试文件
+- Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
+- compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
-核心设计理念：
+详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)。
 
-- **模块化架构** — 每个 APM 维度独立模块，按需集成，零耦合
-- **低侵入接入** — `Apm.init(application, ApmConfig(...))` + 注册所需模块，无需修改业务代码
-- **高性能采集** — 令牌桶限流 + 灰度发布 + 动态配置，生产环境可用
-- **对标业界** — 借鉴微信 Matrix、快手 KOOM、Google 最佳实践
+## 第一性原理架构
 
-## 特性
+APM 客户端必须同时满足三件事：采集结果可信、监控开销受控、失败数据可恢复。因此运行时主链路是：
 
-### 全方位 15 维监控
-
-| # | 维度 | 模块 | 核心能力 |
-|---|------|------|---------|
-| 1 | [内存](docs/architecture/03_apm-memory.md) | apm-memory | Heap/PSS 采样、Activity/Fragment/ViewModel 泄漏检测、OOM 预警、Hprof Dump & Strip、NativeHeap 监控 |
-| 2 | [崩溃](docs/architecture/04_apm-crash.md) | apm-crash | Java UncaughtExceptionHandler、Native 信号解析(SIGSEGV/SIGABRT)、Tombstone 扫描、ApplicationExitInfo 退出原因采集(API 30+) |
-| 3 | [ANR](docs/architecture/05_apm-anr.md) | apm-anr | SIGQUIT 信号检测(libapm-anr.so 随模块交付、默认开启、失败自动降级)、Watchdog 兜底、traces.txt 解析、5 类原因分类、堆栈去重 |
-| 4 | [启动](docs/architecture/06_apm-launch.md) | apm-launch | 内核级进程启动基线(Process.getStartElapsedRealtime)、6 阶段冷启动追踪、热启动/温启动、Choreographer 首帧检测、瓶颈分析 |
-| 5 | [网络](docs/architecture/07_apm-network.md) | apm-network | OkHttp Interceptor + EventListener、DNS→TCP→TLS→Headers→Body 全链路耗时、聚合统计 |
-| 6 | [FPS](docs/architecture/08_apm-fps.md) | apm-fps | Choreographer VSync + FrameMetrics 双引擎、掉帧/卡顿/冻结三级分级 |
-| 7 | [慢方法](docs/architecture/09_apm-slow-method.md) | apm-slow-method | 反射 Hook Looper.mLogging + ASM 字节码插桩双引擎、栈采样、热点方法统计 |
-| 8 | [IO](docs/architecture/10_apm-io.md) | apm-io | Native PLT Hook 双层架构、FD 泄漏(/proc/self/fd)、吞吐量统计、Closeable 泄漏(PhantomReference) |
-| 9 | [电量](docs/architecture/11_apm-battery.md) | apm-battery | 电量下降、CPU Jiffies，以及宿主回调接入的 WakeLock/GPS/Alarm 泛洪监控 |
-| 10 | [SQLite](docs/architecture/12_apm-sqlite.md) | apm-sqlite | ApmSQLiteDatabase 自动计时包装器、慢查询检测、主线程 DB 操作、大数据量操作、QueryPlan 分析(全表扫描/临时BTree) |
-| 11 | [WebView](docs/architecture/13_apm-webview.md) | apm-webview | 页面加载、JS/白屏、并发安全的资源瀑布与显式页面隔离 |
-| 12 | [IPC](docs/architecture/14_apm-ipc.md) | apm-ipc | Binder 调用耗时监控、主线程阈值分级、聚合统计 |
-| 13 | [线程](docs/architecture/15_apm-thread-monitor.md) | apm-thread-monitor | 线程数膨胀、同名泄漏、BLOCKED 死锁检测 |
-| 14 | [GC](docs/architecture/16_apm-gc-monitor.md) | apm-gc-monitor | GC 频次飙升、GC 耗时占比、Heap 增长、分配频率、GC 回收率 |
-| 15 | [渲染](docs/architecture/17_apm-render.md) | apm-render | View 树数量检测、层级深度检测；过度绘制列入 Roadmap |
-
-### 核心能力
-
-- **令牌桶限流** — RateLimiter 支持 ERROR/FATAL 级别跳过限流，保护上报通道
-- **灰度发布** — GrayReleaseController 支持按比例开启新模块
-- **动态配置** — DynamicConfigProvider 运行时调整阈值，无需发版
-- **可靠出箱** — 默认 SQLite 持久化，上传成功后确认删除，进程重启自动回放
-- **批量上传** — 单请求批量 + 默认开启且可配置的 Gzip + 有界优先级队列 + 指数退避
-- **关键事件落盘** — Crash 等关键事件支持同步持久化，不等待网络请求
-- **SDK 自监控** — 上报 emit/drop/queue/latency 健康指标，并支持自动降级
-- **ASM 插桩** — AGP instrumentation API + ASM 字节码级方法耗时采集
-- **Native Hook** — CMake 构建 libapm-io.so（运行时解析 xhook 的 IO 拦截）、libapm_crash.so（信号处理器）、libapm-anr.so（SIGQUIT 检测），JNI 目标均按 16KB 页面链接对齐，缺失时自动降级
-- **退出原因采集** — ApplicationExitInfo (API 30+) 启动时读取 ANR/OOM 被杀/系统信号等退因，附 ANR trace 摘要
-- **Hprof 裁剪** — 二进制解析 + 原始数组剥离，大幅缩小 dump 文件
-
-## 架构
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│                     Application Layer                        │
-│                      (Your App)                              │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
-│   │ Memory   │ │ Crash    │ │ ANR      │ │ Launch   │       │
-│   └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │
-│   │ Network  │ │ FPS      │ │ SlowMethod│ │ IO       │       │
-│   └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐       │  Feature 层
-│   │ Battery  │ │ SQLite   │ │ WebView  │ │ IPC      │       │  (15 模块)
-│   └──────────┘ └──────────┘ └──────────┘ └──────────┘       │
-│   ┌──────────┐ ┌──────────┐ ┌──────────┐                    │
-│   │ Thread   │ │ GC       │ │ Render   │                    │
-│   └──────────┘ └──────────┘ └──────────┘                    │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│   ┌─────────────┐  ┌──────────────┐  ┌──────────────┐       │  Core 层
-│   │  apm-core   │  │  apm-model   │  │  apm-storage │       │  (4 基础模块)
-│   │  分发/限流   │  │  事件模型     │  │  本地存储     │       │
-│   │  灰度/日志   │  │  LineProtocol│  │ SQLite Outbox│       │
-│   └─────────────┘  └──────────────┘  └──────────────┘       │
-│   ┌──────────────┐                                           │
-│   │  apm-uploader│  重试/批量/退避                            │
-│   └──────────────┘                                           │
-│                                                              │
-├──────────────────────────────────────────────────────────────┤
-│   ┌──────────────────┐  ┌──────────────────┐                │  Tool 层
-│   │   apm-plugin     │  │  apm-sample-app  │                │
-│   │ included build + │  │   示例应用        │                │
-│   │  Gradle ASM 插桩 │  │                  │                │
-│   └──────────────────┘  └──────────────────┘                │
-└──────────────────────────────────────────────────────────────┘
+```text
+监控模块
+  -> Apm.emit（调用线程只捕获时间/线程/业务上下文快照）
+  -> 有界队列 2048（满时丢弃，绝不阻塞业务线程）
+  -> 可选聚合 -> 限流 -> 可选 PII 脱敏
+  -> appendBatch（单轮最多 32 条）
+  -> SQLite durable outbox（默认 50,000 行）
+  -> PersistentUploadWorker
+  -> BatchApmUploader / HttpApmUploader / 自定义 uploader
+  -> 接入方 Collector
 ```
 
-## 快速开始
+Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网络请求。非上传进程可选择通过 `.tmp` 写入、`.ipc` 发布的文件通道交给主进程。
 
-### 环境要求
+上传成功后才删除 outbox 行；失败保留并指数退避，达到 10 次重试或超过 7 天后清理。这是至少一次语义：网络响应丢失时可能重复上传，服务端应支持去重。
 
-- Android Studio（包含 JDK 21 的当前稳定版本）
-- JDK 21
-- Kotlin 2.2.21
-- AGP 8.13.2 / Gradle 8.13
-- compileSdk 34 / minSdk 24
+## 模块组成
 
-### 构建
+### 4 个基础模块
 
-```bash
-# Debug 构建
-./gradlew assembleDebug
+| 模块 | 职责 |
+|---|---|
+| `apm-model` | `ApmEvent`、priority/severity、Line Protocol、Protobuf、持久化 codec |
+| `apm-core` | 初始化、模块生命周期、分发、限流、聚合、脱敏、多进程、自监控 |
+| `apm-storage` | SQLite durable outbox；FileEventStore 兼容路径 |
+| `apm-uploader` | HTTP/Logcat/自定义上传、批量、Gzip、Retry-After、内存重试兼容路径 |
 
-# 运行单元测试
-./gradlew testDebugUnitTest
+### 15 个监控模块
 
-# 构建 + 测试
-./gradlew assembleDebug testDebugUnitTest
+| 模块 | 已实现能力 | 接入方式 |
+|---|---|---|
+| `apm-memory` | Heap/PSS/Native Heap、泄漏、OOM 预警、Hprof dump/裁剪 | 注册即采样；ViewModel 检查需调用 API；高风险 dump 默认关闭 |
+| `apm-crash` | Java crash、可选 Native signal、tombstone、ApplicationExitInfo | Java 默认开启；Native crash 默认关闭 |
+| `apm-anr` | `libapm-anr.so` SIGQUIT 标志 + Watchdog、堆栈采样、原因分类 | 注册后自动运行，Native 失败自动降级 Watchdog |
+| `apm-launch` | 进程真实启动基线、冷/热/温启动、首帧、阶段跟踪 | Activity 生命周期自动；ContentProvider/App 阶段需宿主调用 |
+| `apm-network` | OkHttp DNS→TCP→TLS→Body、慢请求和聚合 | 接入 Interceptor/EventListener，或手动回调 |
+| `apm-fps` | Choreographer + FrameMetrics、掉帧分级 | Activity 生命周期自动 |
+| `apm-slow-method` | Looper Hook、栈采样、ASM 方法插桩 | 运行时注册；ASM 需应用 `com.apm.slow-method` 插件 |
+| `apm-io` | 流代理、主线程/慢 IO、FD/Closeable 泄漏、可选 PLT Hook | 包装流；Native 路径依赖运行时可解析 xhook |
+| `apm-battery` | 电量下降、CPU Jiffies、WakeLock/GPS/Alarm 统计 | 电量/CPU 自动；其余需宿主转发生命周期 |
+| `apm-sqlite` | 慢 SQL、主线程 DB、大影响行数、QueryPlan | 使用 `ApmSQLiteDatabase` 或手动回调 |
+| `apm-webview` | 页面、JS、白屏、Bridge、Console、资源瀑布 | 宿主转发 WebView 回调；没有通用自动注册层 |
+| `apm-ipc` | Binder 调用耗时、主线程阈值、聚合 | 调用 `onBinderCallComplete`；没有通用 Binder 自动 Hook |
+| `apm-thread-monitor` | 线程数、同名线程、BLOCKED 状态 | 定时采样；没有线程池 backlog 自动插桩 |
+| `apm-gc-monitor` | GC 次数/耗时、Heap 增长、分配率、回收率 | 定时读取运行时统计 |
+| `apm-render` | View 数量和层级深度 | Activity 创建后遍历；过度绘制未实现 |
 
-# Lint、Release 和发布消费验证
-./gradlew lintDebug assembleRelease publishToMavenLocal
-./gradlew -p smoke-tests/maven-consumer clean assembleDebug
+### 扩展与构建工具
+
+| 模块 | 作用 |
+|---|---|
+| `apm-trace` | 手动 Span/Trace API，Span 结束后进入统一事件管线 |
+| `apm-otel-exporter` | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
+| `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
+| `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
+| `apm-sample-app` | 15 个监控模块的本地演示；默认输出到 Logcat，不代表生产后台闭环 |
+
+## 快速接入
+
+### 添加依赖
+
+本地开发：
+
+```kotlin
+dependencies {
+    implementation(project(":apm-memory"))
+    implementation(project(":apm-network"))
+}
 ```
 
-当前仓库通过 `pluginManagement { includeBuild("apm-plugin") }` 解析本地 slow-method 插件。
-插件已迁移到 AGP instrumentation API，不再依赖 legacy Transform 兼容开关。
-
-### 集成
-
-#### 1. 添加模块依赖
-
-发布到 Maven 仓库后，功能模块会传递暴露 `apm-core`：
+发布到制品库后：
 
 ```kotlin
 dependencies {
@@ -147,241 +98,111 @@ dependencies {
 }
 ```
 
-仓库内开发也可以继续使用 project 依赖：
+当前仓库只验证过 `publishToMavenLocal` 和独立 Maven consumer；尚未发布 Maven Central 或外部私有制品库。
+
+### 初始化并注册
 
 ```kotlin
-// settings.gradle.kts
-include(":apm-core")
-include(":apm-model")
-include(":apm-storage")
-include(":apm-uploader")
-include(":apm-memory")    // 按需添加
-include(":apm-crash")
-include(":apm-anr")
-include(":apm-launch")
-// ... 其他所需模块
-```
-
-#### 2. 初始化
-
-```kotlin
-class MyApplication : Application() {
+class App : Application() {
     override fun onCreate() {
         super.onCreate()
 
-        Apm.init(this, ApmConfig())            // 初始化框架
+        Apm.init(
+            this,
+            ApmConfig(
+                endpoint = "https://collector.example.com/v1/events",
+                enableHttpGzip = true,
+                enablePiiSanitization = true,
+                defaultContext = mapOf("appId" to packageName)
+            )
+        )
 
-        Apm.register(MemoryModule())            // 内存监控
-        Apm.register(CrashModule())             // 崩溃监控
-        Apm.register(AnrModule())               // ANR 监控
-        Apm.register(LaunchModule())            // 启动监控
-        Apm.register(NetworkModule())           // 网络监控
-        Apm.register(FpsModule())               // FPS 监控
-        Apm.register(SlowMethodModule())        // 慢方法检测
-        Apm.register(IoModule())                // IO 监控
-        // ... 按需注册其他模块
-
+        Apm.register(CrashModule())
+        Apm.register(AnrModule())
+        Apm.register(MemoryModule())
+        Apm.register(LaunchModule())
     }
 }
 ```
 
-#### 3. 自定义配置
+### 网络监控
 
 ```kotlin
-// 单模块自定义配置
-val memoryConfig = MemoryConfig(
-    sampleIntervalMs = 2000,
-    leakDetectEnabled = true,
-    oomMonitorEnabled = true
-)
-Apm.register(MemoryModule(memoryConfig))
+val networkModule = NetworkModule()
+Apm.register(networkModule)
 
-// 全局限流配置
-val apmConfig = ApmConfig(
-    endpoint = "https://apm.example.com/v1/events",
-    enableHttpGzip = true,
-    rateLimitEventsPerWindow = 10,
-    rateLimitWindowMs = 60_000L,
-    enableRetry = true,
-    maxRetries = 3
-)
-Apm.init(this, apmConfig)
-```
-
-#### 4. 自定义上报
-
-```kotlin
-// 实现 ApmUploader 接口
-class MyUploader : ApmUploader {
-    override fun upload(event: ApmEvent): Boolean {
-        // 上报至你的 APM 后台
-        return myApiClient.send(event)
-    }
-}
-
-// 通过 ApmConfig 注入
-Apm.init(
-    this,
-    ApmConfig(
-        uploader = MyUploader(),
-        enableRetry = false
-    )
-)
-```
-
-#### 5. 网络监控接入
-
-```kotlin
-// OkHttp 客户端添加监控
-val okHttpClient = OkHttpClient.Builder()
-    .addInterceptor(NetworkModule.interceptor)
-    .eventListenerFactory(NetworkModule.eventListenerFactory)
+val client = OkHttpClient.Builder()
+    .addInterceptor(ApmNetworkInterceptor(networkModule))
+    .eventListenerFactory(ApmEventListener.factory(networkModule))
     .build()
 ```
 
-## 模块一览
+### SQLite 监控
 
-| 模块 | 包名 | 说明 |
-|------|------|------|
-| apm-model | 事件模型 | ApmEvent + Line Protocol 序列化 |
-| apm-core | 核心框架 | 初始化/注册/分发/限流(令牌桶)/灰度/多进程原子 IPC/日志 |
-| apm-storage | 本地存储 | SQLite 持久化出箱与确认删除 + File RingBuffer 兼容路径 |
-| apm-uploader | 上传通道 | HTTP 单请求批量/可配置 Gzip + Logcat + 有界重试队列 |
-| apm-memory | 内存监控 | 水位采样 + 泄漏检测 + OOM 预警 + Hprof Dump + fork dump + 引用链分析 |
-| apm-crash | 崩溃监控 | Java + Native 信号处理器 + Tombstone + ApplicationExitInfo 退因 |
-| apm-anr | ANR 监控 | SIGQUIT 信号检测 + Watchdog 兜底 + traces.txt 解析 |
-| apm-launch | 启动监控 | 冷/热/温启动 + 6 阶段追踪 |
-| apm-network | 网络监控 | OkHttp 全链路 (DNS→TCP→TLS→Body) |
-| apm-fps | FPS 监控 | Choreographer VSync + FrameMetrics |
-| apm-slow-method | 慢方法 | Looper Hook + ASM 字节码插桩 |
-| apm-io | IO 监控 | Native PLT Hook(16KB 页面链接对齐) + FD 泄漏 + Closeable 泄漏 + 零拷贝检测 |
-| apm-battery | 电量监控 | 电量/CPU + WakeLock/GPS/Alarm 宿主回调 API |
-| apm-sqlite | SQLite 监控 | ApmSQLiteDatabase 自动计时 + 慢查询 + QueryPlan 分析 |
-| apm-webview | WebView 监控 | 页面加载 + JS 执行 + 白屏 + JS Bridge + 资源瀑布图 |
-| apm-ipc | IPC 监控 | Binder 调用耗时 |
-| apm-thread-monitor | 线程监控 | 膨胀/泄漏/死锁 |
-| apm-gc-monitor | GC 监控 | 频次/耗时/Heap/分配率/回收率 |
-| apm-render | 渲染监控 | View 树深度/数量 |
-| apm-plugin | Gradle 插件 | included build，基于 AGP instrumentation API 提供 ASM 字节码插桩 |
-| apm-sample-app | 示例应用 | 全模块集成 Demo |
+```kotlin
+val sqliteModule = SqliteModule()
+Apm.register(sqliteModule)
 
-## 与业界方案对比
-
-| 能力 | Android APM | 微信 Matrix | 快手 KOOM |
-|------|:-----------:|:-----------:|:---------:|
-| 内存泄漏 (Activity/Fragment/ViewModel) | ✅ | ✅ | ✅ |
-| OOM 预警 + Hprof Dump | ✅ | ✅ | ✅ |
-| Hprof 裁剪 | ✅ | ✅ | ✅ |
-| 引用链分析 (Hprof 解析 + BFS) | ✅ | ✅ | ✅ |
-| fork 子进程 Dump (显式开启) | ✅ | ❌ | ✅ |
-| NativeHeap 监控 | ✅ | ❌ | ✅ |
-| Java 崩溃 | ✅ | ✅ | ❌ |
-| ApplicationExitInfo 退出原因 (API 30+) | ✅ | ❌ | ❌ |
-| Native 崩溃信号处理器 + Tombstone | ✅ | ✅ | ❌ |
-| ANR 检测 (SIGQUIT + Watchdog) | ✅ | ✅ | ❌ |
-| ANR 原因分类 | ✅ (5 类) | ❌ | ❌ |
-| 冷启动 6 阶段 | ✅ | ✅ | ❌ |
-| 热启动/温启动 | ✅ | ✅ | ❌ |
-| 网络全链路 (DNS→Body) | ✅ | ❌ | ❌ |
-| FPS 双引擎 | ✅ | ✅ | ❌ |
-| 慢方法 Hook + ASM | ✅ | ✅ | ❌ |
-| IO Native PLT Hook | ✅ | ✅ | ❌ |
-| FD 泄漏检测 | ✅ | ✅ | ❌ |
-| Closeable 泄漏 | ✅ | ❌ | ❌ |
-| 零拷贝检测 | ✅ | ❌ | ❌ |
-| SQLite QueryPlan 分析 | ✅ | ❌ | ❌ |
-| Binder IPC 监控 | ✅ | ❌ | ❌ |
-| 线程死锁检测 | ✅ | ❌ | ❌ |
-| GC 监控 (5 维度) | ✅ | ❌ | ❌ |
-| View 树分析 | ✅ | ❌ | ❌ |
-| WakeLock + CPU Jiffies | ✅ | ❌ | ❌ |
-| WebView 性能 + JS Bridge + 资源瀑布图 | ✅ | ❌ | ❌ |
-| HTTP 上传通道 + Gzip 压缩 | ✅ | ❌ | ❌ |
-| 多进程支持 (ContentProvider 自动初始化) | ✅ | ❌ | ❌ |
-| 令牌桶限流 + 灰度发布 | ✅ | ❌ | ❌ |
-| Gradle ASM 字节码插桩 | ✅ | ❌ | ❌ |
-| 模块数量 | **15 监控 + 4 基础 + 2 扩展** | 6 插件 | 3 模块 |
-
-## 项目结构
-
-```
-Android-APM/
-├── apm-core/                  # 核心框架 (分发/限流/灰度)
-│   └── throttle/              # 令牌桶限流 + 动态配置 + 灰度发布
-├── apm-model/                 # 统一事件模型 + Line Protocol
-├── apm-storage/               # 本地存储 (SQLite 出箱 + File 兼容路径)
-├── apm-uploader/              # 上传通道 (重试/批量/退避)
-├── apm-memory/                # 内存监控
-│   ├── leak/                  # Activity/Fragment/ViewModel 泄漏
-│   ├── oom/                   # OOM 预警 + Hprof Dump/Strip
-│   └── nativeheap/            # NativeHeap 监控
-├── apm-crash/                 # 崩溃监控 (Java + Native)
-├── apm-anr/                   # ANR 监控 (SIGQUIT + Watchdog)
-├── apm-launch/                # 启动监控 (冷/热/温)
-├── apm-network/               # 网络监控 (OkHttp)
-├── apm-fps/                   # FPS 监控 (VSync + FrameMetrics)
-├── apm-slow-method/           # 慢方法 (Hook + ASM)
-├── apm-io/                    # IO 监控 (PLT Hook + FD)
-├── apm-battery/               # 电量监控 (WakeLock + CPU)
-├── apm-sqlite/                # SQLite 监控 (慢查询 + QueryPlan)
-├── apm-webview/               # WebView 监控
-├── apm-ipc/                   # IPC 监控 (Binder)
-├── apm-thread-monitor/        # 线程监控
-├── apm-gc-monitor/            # GC 监控
-├── apm-render/                # 渲染监控 (View 树)
-├── apm-plugin/                # Gradle 插件 (ASM)
-├── apm-sample-app/            # 示例应用
-├── docs/                      # 文档
-│   ├── Android_APM_项目文档.md # 完整项目文档
-│   └── architecture/          # 架构图 (18 个模块详细文档)
-├── CLAUDE.md                  # 编码规范
-├── build.gradle.kts           # 根构建文件
-└── settings.gradle.kts        # 模块配置
+val monitoredDb = ApmSQLiteDatabase(delegateDatabase, sqliteModule)
 ```
 
-## 文档
+### 慢方法 ASM 插桩
 
-| 文档 | 说明 |
-|------|------|
-| [项目文档](docs/Android_APM_项目文档.md) | 完整项目文档：功能对比矩阵、模块设计、测试覆盖 |
-| [交接快照](docs/PROJECT_HANDOFF.md) | 换电脑/换模型接手入口：当前进度、验证基线、未完成项、下一步 |
-| [整体架构](docs/architecture/00_整体架构.md) | 系统全景架构、模块依赖、事件流程、线程模型 |
-| [模块架构](docs/architecture/) | 18 个文件的逐模块架构文档（类图/流程图/检测维度） |
+```kotlin
+plugins {
+    id("com.apm.slow-method")
+}
 
-## 开源参考
+apmSlowMethod {
+    enabled = true
+    excludePackages = listOf("android.", "androidx.", "com.apm.slowmethod.")
+}
+```
 
-本项目借鉴了以下优秀开源项目的设计思路：
+## 重要默认值
 
-- [微信 Matrix](https://github.com/Tencent/matrix) — APM 插件化架构、IO/Hook 方案
-- [快手 KOOM](https://github.com/KwaiAppTeam/KOOM) — 内存监控、Hprof 裁剪、NativeHeap
-- [bytedance/bhook](https://github.com/nicepkg/bhook) — PLT Hook 实现
-- [square/leakcanary](https://github.com/square/leakcanary) — 内存泄漏检测
-- [android/perfetto](https://android.googlesource.com/platform/external/perfetto/) — 系统级性能分析
+| 配置 | 默认值 | 含义 |
+|---|---:|---|
+| `endpoint` | 空 | 使用 Logcat uploader |
+| `storageType` | `SQLITE` | 使用 durable outbox |
+| `enableAggregation` | `false` | 不聚合客户端指标 |
+| `enablePiiSanitization` | `false` | 不自动脱敏；生产接入应显式评审并开启 |
+| `enableMultiProcessCoordination` | `false` | 不转发子进程事件 |
+| `enableSelfMonitoring` | `true` | 周期上报 SDK 健康事件 |
+| `enableAutoThrottle` | `true` | 健康恶化时可停用低优先级模块 |
+| Native Crash | `false` | 避免默认启用高风险信号能力 |
+| Hprof/fork dump | `false` | 避免默认产生大文件或依赖设备兼容性 |
 
-## 贡献
+## 构建与验证
 
-欢迎提交 Issue 和 Pull Request。
+必须使用 JDK 21：
 
-1. Fork 本仓库
-2. 创建特性分支 (`git checkout -b feature/your-feature`)
-3. 提交更改 (`git commit -m 'Feat: your feature'`)
-4. 推送分支 (`git push origin feature/your-feature`)
-5. 创建 Pull Request
+```powershell
+./gradlew.bat testDebugUnitTest
+./gradlew.bat assembleDebug
+./gradlew.bat -p apm-plugin test
+```
+
+发布链验证：
+
+```powershell
+./gradlew.bat lintDebug assembleRelease publishToMavenLocal
+./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug
+```
+
+以 [AGENTS.md](AGENTS.md) 和 [项目文档](docs/Android_APM_项目文档.md) 中标注的日期判断哪些命令是当前 tip 的现场验证，不能把较早结果自动外推到新提交。
+
+## 当前未完成闭环
+
+- 生产 Collector、鉴权、租户、查询、聚合、告警和 Dashboard
+- eventId/idempotency 与服务端重复去除
+- 多 worker/cross-process upload 的 claim/lease/expiry
+- 真机长稳、功耗、磁盘和监控开销基准
+- Native 符号表上传和 tombstone 后台符号化
+- Maven Central/外部制品库发布
+- IPC/WebView/线程池/Render 等声明型开关对应的完整自动实现
+- 云端 CI；`.github/` 当前明确为本地忽略目录
 
 ## License
 
-```
-Copyright 2024 Android APM Contributors
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-```
+Apache License 2.0，详见 [LICENSE](LICENSE)。
