@@ -6,15 +6,25 @@ import com.apm.storage.PendingEventStore
 import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.RetryPolicy
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Verifies durable replay and acknowledgement behavior.
  */
 class PersistentUploadWorkerTest {
+
+    /** Hostile retry hints must not create negative waits or effectively permanent sleeps. */
+    @Test
+    fun `retry wait is bounded for hostile hints`() {
+        assertEquals(MIN_EXPECTED_WAIT_MS, boundedRetryWaitMs(-1L, -5L))
+        assertEquals(MAX_EXPECTED_WAIT_MS, boundedRetryWaitMs(1_000L, Long.MAX_VALUE))
+        assertEquals(NORMAL_HINT_MS, boundedRetryWaitMs(1_000L, NORMAL_HINT_MS))
+    }
 
     /** Successfully uploaded rows are acknowledged only after batch acceptance. */
     @Test
@@ -115,6 +125,70 @@ class PersistentUploadWorkerTest {
         assertTrue(store.releasedOwner.isNotBlank())
     }
 
+    /** Fatal VM errors from custom uploaders must not be converted into ordinary retry failures. */
+    @Test
+    fun `fatal uploader error reaches uncaught handler`() {
+        val fatal = OutOfMemoryError("fatal uploader")
+        val uncaught = AtomicReference<Throwable?>()
+        val observed = CountDownLatch(1)
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            if (thread.name.startsWith(PERSISTENT_WORKER_THREAD_PREFIX)) {
+                uncaught.set(error)
+                observed.countDown()
+            } else {
+                previousHandler?.uncaughtException(thread, error)
+            }
+        }
+        val worker = PersistentUploadWorker(
+            store = FakePendingStore(mutableListOf(PendingEvent(31L, event("fatal"), 0))),
+            uploader = FatalBatchUploader(fatal),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 1,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+        try {
+            assertTrue(observed.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            assertSame(fatal, uncaught.get())
+        } finally {
+            worker.shutdown()
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+    }
+
+    /** Fatal VM errors from durable claim code must not be converted into an idle poll. */
+    @Test
+    fun `fatal claim error reaches uncaught handler`() {
+        val fatal = OutOfMemoryError("fatal claim")
+        val uncaught = AtomicReference<Throwable?>()
+        val observed = CountDownLatch(1)
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            if (thread.name.startsWith(PERSISTENT_WORKER_THREAD_PREFIX)) {
+                uncaught.set(error)
+                observed.countDown()
+            } else {
+                previousHandler?.uncaughtException(thread, error)
+            }
+        }
+        val worker = PersistentUploadWorker(
+            store = FakePendingStore(mutableListOf(), claimFatal = fatal),
+            uploader = RecordingBatchUploader(CountDownLatch(0)),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 1,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+        try {
+            assertTrue(observed.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+            assertSame(fatal, uncaught.get())
+        } finally {
+            worker.shutdown()
+            Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+        }
+    }
+
     /**
      * Creates a test event.
      *
@@ -126,7 +200,9 @@ class PersistentUploadWorkerTest {
     /** Thread-safe in-memory durable store used by the worker test. */
     private class FakePendingStore(
         /** Mutable pending rows. */
-        val rows: MutableList<PendingEvent>
+        val rows: MutableList<PendingEvent>,
+        /** Optional fatal error thrown while claiming rows. */
+        private val claimFatal: Error? = null
     ) : PendingEventStore {
         /** Acknowledgement signal. */
         val deleted = CountDownLatch(1)
@@ -176,6 +252,7 @@ class PersistentUploadWorkerTest {
         /** Claims rows while recording the worker owner. */
         @Synchronized
         override fun claimPending(ownerId: String, limit: Int, nowMs: Long, leaseDurationMs: Long): List<PendingEvent> {
+            claimFatal?.let { throw it }
             claimedOwner = ownerId
             return rows.take(limit)
         }
@@ -247,6 +324,18 @@ class PersistentUploadWorkerTest {
         }
     }
 
+    /** Batch uploader that exposes whether fatal VM errors are swallowed by recovery code. */
+    private class FatalBatchUploader(
+        /** Fatal error emitted by the transport. */
+        private val fatal: Error
+    ) : BatchApmUploader {
+
+        /** Throws the configured fatal error. */
+        override fun uploadBatch(events: List<ApmEvent>): Boolean {
+            throw fatal
+        }
+    }
+
     /** Single-event uploader used to verify non-batch fallback behavior. */
     private class RecordingSingleUploader(private val uploaded: CountDownLatch) : com.apm.uploader.ApmUploader {
         /** Names accepted by the uploader. */
@@ -273,6 +362,17 @@ class PersistentUploadWorkerTest {
     }
 
     companion object {
+        /** Expected lower worker wait bound. */
+        private const val MIN_EXPECTED_WAIT_MS = 10L
+
+        /** Expected upper retry wait bound. */
+        private const val MAX_EXPECTED_WAIT_MS = 60_000L
+
+        /** Normal Retry-After hint that should win over local backoff. */
+        private const val NORMAL_HINT_MS = 5_000L
+
+        /** Thread-name prefix used to isolate the worker's uncaught fatal error. */
+        private const val PERSISTENT_WORKER_THREAD_PREFIX = "apm-persistent-upload"
         /** Minimal retry delay for the test worker. */
         private const val RETRY_DELAY_MS = 10L
 
