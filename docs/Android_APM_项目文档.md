@@ -206,7 +206,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛 20 个 Android library 的 compileSdk/minSdk/Java 版本。`apm-plugin` 作为 included build 独立测试。
 
-2026-07-10 在 JDK 21.0.11 执行的开发验证：
+2026-07-11 在 JDK 21.0.11 执行的开发验证：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -223,9 +223,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- 68 个 JUnit XML 测试套件、479 个测试，0 failures / 0 errors / 0 skipped；
+- 75 个 JUnit XML 测试套件、501 个测试，0 failures / 0 errors / 0 skipped；
 - 21 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,570,504 字节；
+- `apm-sample-app-release-unsigned.apk`，4,589,624 字节；
 - Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
 

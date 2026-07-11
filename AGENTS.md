@@ -25,7 +25,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
-Fresh checks executed on `2026-07-10` against the completed documentation-sync tip:
+Fresh checks executed on `2026-07-11` against the completed self-diagnostics tip:
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -35,7 +35,7 @@ Fresh checks executed on `2026-07-10` against the completed documentation-sync t
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.11`. The generated XML reports contain `68` suites and `479` tests with `0` failures/errors/skips; lint produced `21` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,570,504` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM), and the isolated consumer resolved them successfully.
+All commands passed under JDK `21.0.11`. The generated XML reports contain `75` suites and `501` tests with `0` failures/errors/skips; lint produced `21` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,589,624` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM), and the isolated consumer resolved them successfully.
 
 ## Project Boundary
 
