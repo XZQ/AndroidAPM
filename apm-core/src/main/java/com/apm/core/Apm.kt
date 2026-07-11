@@ -24,6 +24,50 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+/** Runs independent internal-error sinks without allowing one recoverable failure to block the other. */
+internal inline fun recordInternalErrorSafely(
+    selfMonitorSink: () -> Unit,
+    diagnosticsSink: () -> Unit
+) {
+    try {
+        selfMonitorSink()
+    } catch (_: Exception) {
+        // The diagnostics sink must still receive the original failure.
+    }
+    try {
+        diagnosticsSink()
+    } catch (_: Exception) {
+        // Diagnostics failures cannot recurse through the no-throw error boundary.
+    }
+}
+
+/** Captures an immutable host context while degrading every recoverable provider exception. */
+internal inline fun captureBizContextSafely(
+    provider: BizContextProvider,
+    onError: (Exception) -> Unit
+): Map<String, String> {
+    return try {
+        provider.currentContext().toMap()
+    } catch (error: Exception) {
+        onError(error)
+        emptyMap()
+    }
+}
+
+/** Runs one recoverable lifecycle phase and leaves fatal VM errors visible. */
+internal inline fun runRecoverableBoundary(
+    block: () -> Unit,
+    onFailure: (Exception) -> Unit
+): Boolean {
+    return try {
+        block()
+        true
+    } catch (error: Exception) {
+        onFailure(error)
+        false
+    }
+}
+
 /**
  * APM 框架统一入口。单例对象。
  *
@@ -368,24 +412,25 @@ object Apm {
      * @param error 捕获到的异常，可为 null
      */
     fun recordInternalError(tag: String, error: Throwable? = null) {
-        state?.context?.selfMonitor?.recordInternalError(tag)
-        // Structured ERROR diagnostics remain independent of debugLogging and the normal event pipeline.
-        ApmDiagnostics.record(
-            DiagnosticLevel.ERROR,
-            CORE_MODULE,
-            tag,
-            MESSAGE_INTERNAL_ERROR,
-            error
+        recordInternalErrorSafely(
+            selfMonitorSink = { state?.context?.selfMonitor?.recordInternalError(tag) },
+            diagnosticsSink = {
+                // Structured diagnostics remain independent of debugLogging and the normal event pipeline.
+                ApmDiagnostics.record(
+                    DiagnosticLevel.ERROR,
+                    CORE_MODULE,
+                    tag,
+                    MESSAGE_INTERNAL_ERROR,
+                    error
+                )
+            }
         )
     }
 
     /** Captures an immutable host context without allowing provider failures into business code. */
     private fun captureBizContext(currentState: State): Map<String, String> {
-        return try {
-            currentState.context.config.bizContextProvider.currentContext().toMap()
-        } catch (error: RuntimeException) {
+        return captureBizContextSafely(currentState.context.config.bizContextProvider) { error ->
             recordInternalError(ERROR_TAG_BIZ_CONTEXT, error)
-            emptyMap()
         }
     }
 
@@ -442,7 +487,8 @@ object Apm {
             currentState.context.logger.d("Skip module=${module.name}: excluded by gray release")
             return
         }
-        runCatching {
+        runRecoverableBoundary(
+            block = {
             val moduleContext = currentState.context.withLogger(
                 currentState.context.logger.withComponent(module.name)
             )
@@ -450,9 +496,9 @@ object Apm {
             module.onStart()
             currentState.startedModules += module
             currentState.context.logger.d("Started module=${module.name}")
-        }.onFailure {
-            currentState.context.logger.e("Failed to start module=${module.name}", it)
-        }
+            },
+            onFailure = { error -> currentState.context.logger.e("Failed to start module=${module.name}", error) }
+        )
     }
 
     /**
@@ -551,14 +597,16 @@ object Apm {
             if (module.name !in moduleNames) {
                 continue
             }
-            runCatching { module.onStop() }
-                .onSuccess {
-                    currentState.startedModules.remove(module)
-                    currentState.context.logger.w("Auto-throttled module=${module.name}")
+            val stopped = runRecoverableBoundary(
+                block = { module.onStop() },
+                onFailure = { error ->
+                    currentState.context.logger.e("Failed to auto-throttle module=${module.name}", error)
                 }
-                .onFailure {
-                    currentState.context.logger.e("Failed to auto-throttle module=${module.name}", it)
-                }
+            )
+            if (stopped) {
+                currentState.startedModules.remove(module)
+                currentState.context.logger.w("Auto-throttled module=${module.name}")
+            }
         }
     }
 
@@ -583,9 +631,7 @@ object Apm {
 
     /** Runs one cleanup phase without preventing later phases from executing. */
     private inline fun cleanupSafely(tag: String, block: () -> Unit) {
-        try {
-            block()
-        } catch (error: Throwable) {
+        runRecoverableBoundary(block) { error ->
             // Cleanup degradation is routed directly to the independent diagnostics path.
             recordInternalError(tag, error)
         }

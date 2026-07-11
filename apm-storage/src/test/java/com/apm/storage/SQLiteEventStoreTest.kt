@@ -7,6 +7,8 @@ import com.apm.model.toLineProtocol
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -314,6 +316,30 @@ class SQLiteEventStoreTest {
 
         store.append(event("after_clear"))
         assertEquals(1, store.pendingCount())
+    }
+
+    /** Fatal decoder failures must propagate without classifying a valid durable row as corrupt. */
+    @Test
+    fun `fatal decoder error preserves durable row`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "fatal-decode-${System.nanoTime()}.db"
+        val fatal = OutOfMemoryError("fatal decode")
+        val fatalStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            TEST_MAX_EVENTS
+        ) { throw fatal }
+        val verifyingStore = SQLiteEventStore(EventDbHelper(context, databaseName), TEST_MAX_EVENTS)
+        try {
+            fatalStore.append(event("durable"))
+
+            val actual = assertThrows(OutOfMemoryError::class.java) { fatalStore.readPending(1) }
+
+            assertSame(fatal, actual)
+            assertEquals(1, verifyingStore.pendingCount())
+        } finally {
+            fatalStore.close()
+            verifyingStore.close()
+        }
     }
 
     /** A stale process-local cache must not become negative after another store adds rows. */

@@ -143,6 +143,25 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
     }
 
+    /** A recoverable aggregation maintenance failure must allow the next scheduled invocation. */
+    @Test
+    fun `aggregation maintenance continues after recoverable failure`() {
+        var attempts = 0
+        val emitted = mutableListOf<ApmEvent>()
+        val errors = mutableListOf<Exception>()
+        val flush = {
+            attempts += 1
+            if (attempts == 1) throw IllegalStateException("flush")
+            listOf(createEvent("recovered"))
+        }
+
+        runAggregationMaintenance(flush, emitted::add, errors::add)
+        runAggregationMaintenance(flush, emitted::add, errors::add)
+
+        assertEquals(listOf("recovered"), emitted.map(ApmEvent::name))
+        assertEquals("flush", errors.single().message)
+    }
+
     /**
      * 构造测试事件。
      *

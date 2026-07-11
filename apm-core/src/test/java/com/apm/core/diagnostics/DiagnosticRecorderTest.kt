@@ -118,6 +118,20 @@ class DiagnosticRecorderTest {
         assertTrue(result.errorMessage.orEmpty().contains("export unavailable"))
     }
 
+    /** Recording after shutdown remains memory bounded and accounts for every rejected file write. */
+    @Test
+    fun `post shutdown records remain bounded and counted`() {
+        val recorder = recorder(memoryLimit = 2)
+        recorder.shutdown()
+
+        recorder.record(DiagnosticLevel.INFO, "core", null, "one", null)
+        recorder.record(DiagnosticLevel.INFO, "core", null, "two", null)
+        recorder.record(DiagnosticLevel.INFO, "core", null, "three", null)
+
+        assertEquals(listOf("three", "two"), recorder.memorySnapshot().map(DiagnosticEntry::message).asReversed())
+        assertEquals(3L, recorder.status().droppedRecords)
+    }
+
     /** Status must read cached disk usage rather than traversing the store on the caller thread. */
     @Test
     fun `status uses cached retained bytes`() {

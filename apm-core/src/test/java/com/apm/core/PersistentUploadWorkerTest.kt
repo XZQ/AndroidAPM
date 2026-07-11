@@ -5,6 +5,7 @@ import com.apm.storage.PendingEvent
 import com.apm.storage.PendingEventStore
 import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.RetryPolicy
+import java.io.IOException
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -77,6 +78,28 @@ class PersistentUploadWorkerTest {
         assertEquals(store.claimedOwner, store.failedOwner)
     }
 
+    /** A recoverable transport exception follows the same durable retry path as a false result. */
+    @Test
+    fun `throwing batch remains pending and is marked for retry`() {
+        val store = FakePendingStore(mutableListOf(PendingEvent(12L, event("throwing"), 0)))
+        val attempted = CountDownLatch(1)
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = ThrowingBatchUploader(attempted),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 1,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        assertTrue(attempted.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.markedRetry.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        worker.shutdown()
+
+        assertEquals(listOf(12L), store.rows.map(PendingEvent::id))
+        assertEquals(listOf(1), store.rows.map(PendingEvent::retryCount))
+    }
+
     /** Non-batch uploaders are invoked once per event and acknowledged as one durable batch. */
     @Test
     fun `single event uploader fallback deletes batch after all events succeed`() {
@@ -115,6 +138,25 @@ class PersistentUploadWorkerTest {
             uploader = RecordingBatchUploader(CountDownLatch(0)),
             retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
             batchSize = 10,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        worker.shutdown()
+
+        assertTrue(store.released.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.releasedOwner.isNotBlank())
+    }
+
+    /** A custom uploader shutdown failure must not skip executor stop or claim release. */
+    @Test
+    fun `shutdown continues after uploader failure`() {
+        val store = FakePendingStore(mutableListOf())
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = ShutdownThrowingUploader(),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 1,
             logger = NoOpLogger,
             selfMonitor = null
         )
@@ -324,6 +366,16 @@ class PersistentUploadWorkerTest {
         }
     }
 
+    /** Batch uploader that throws one recoverable transport exception. */
+    private class ThrowingBatchUploader(private val attempted: CountDownLatch) : BatchApmUploader {
+
+        /** Signals the attempt and throws a recoverable network-style exception. */
+        override fun uploadBatch(events: List<ApmEvent>): Boolean {
+            attempted.countDown()
+            throw IOException("transport")
+        }
+    }
+
     /** Batch uploader that exposes whether fatal VM errors are swallowed by recovery code. */
     private class FatalBatchUploader(
         /** Fatal error emitted by the transport. */
@@ -333,6 +385,18 @@ class PersistentUploadWorkerTest {
         /** Throws the configured fatal error. */
         override fun uploadBatch(events: List<ApmEvent>): Boolean {
             throw fatal
+        }
+    }
+
+    /** Uploader whose shutdown exposes cleanup ordering failures. */
+    private class ShutdownThrowingUploader : BatchApmUploader {
+
+        /** Accepts no events in this empty-store test. */
+        override fun uploadBatch(events: List<ApmEvent>): Boolean = true
+
+        /** Simulates an integration-owned shutdown failure. */
+        override fun shutdown() {
+            throw IllegalStateException("shutdown failure")
         }
     }
 

@@ -24,6 +24,18 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvents: Int = DEFAULT_MAX_EVENTS) : PendingEventStore {
 
+    /** Payload decoder seam used by deterministic fatal-error regression tests. */
+    private var eventDecoder: (ByteArray) -> ApmEvent = ApmEventCodec::decode
+
+    /** Creates a store with a caller-supplied internal payload decoder. */
+    internal constructor(
+        dbHelper: EventDbHelper,
+        maxEvents: Int,
+        eventDecoder: (ByteArray) -> ApmEvent
+    ) : this(dbHelper, maxEvents) {
+        this.eventDecoder = eventDecoder
+    }
+
     /**
      * 缓存的行数计数器。
      * 初始化时执行一次 COUNT(*)，之后随增删维护，
@@ -142,8 +154,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                 } else {
                     val payload = cursor.getBlob(1)
                     val storedEventId = cursor.getString(2)
-                    runCatching { decodeStoredEvent(payload, storedEventId).toLineProtocol() }
-                        .onSuccess(results::add)
+                    try {
+                        results += decodeStoredEvent(payload, storedEventId).toLineProtocol()
+                    } catch (_: Exception) {
+                        // A corrupt debug row is omitted; fatal VM errors remain visible.
+                    }
                 }
             }
         }
@@ -192,10 +207,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                 val payload = cursor.getBlob(1)
                 val retryCount = cursor.getInt(2)
                 val storedEventId = cursor.getString(3)
-                runCatching {
-                    PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
-                }.onSuccess(results::add)
-                    .onFailure { corruptedIds += id }
+                try {
+                    results += PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
+                } catch (_: Exception) {
+                    corruptedIds += id
+                }
             }
         }
         if (corruptedIds.isNotEmpty()) {
@@ -252,10 +268,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                     val payload = cursor.getBlob(1)
                     val retryCount = cursor.getInt(2)
                     val storedEventId = cursor.getString(3)
-                    runCatching {
-                        PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
-                    }.onSuccess(claimed::add)
-                        .onFailure { corruptedIds += id }
+                    try {
+                        claimed += PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
+                    } catch (_: Exception) {
+                        corruptedIds += id
+                    }
                 }
             }
             if (corruptedIds.isNotEmpty()) {
@@ -498,7 +515,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
 
     /** Restores a migrated event ID when the payload predates codec version 2. */
     private fun decodeStoredEvent(payload: ByteArray, storedEventId: String): ApmEvent {
-        val event = ApmEventCodec.decode(payload)
+        val event = eventDecoder(payload)
         return if (event.eventId.isBlank()) event.copy(eventId = storedEventId) else event
     }
 

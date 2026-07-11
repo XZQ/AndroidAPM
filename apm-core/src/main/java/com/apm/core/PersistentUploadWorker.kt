@@ -77,7 +77,13 @@ internal class PersistentUploadWorker(
         signal()
         // Ask the transport to cancel or stop before making owned rows
         // available to another worker.
-        uploader.shutdown()
+        try {
+            uploader.shutdown()
+        } catch (error: Exception) {
+            // A custom transport failure must not skip executor interruption or lease release.
+            logger.e("Failed to shutdown persistent upload transport", error)
+            Apm.recordInternalError(ERROR_SHUTDOWN_UPLOADER, error)
+        }
         executor.shutdownNow()
         try {
             executor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
@@ -263,5 +269,7 @@ internal class PersistentUploadWorker(
         private const val ERROR_PRUNE = "persistent_upload_prune"
         /** Self-monitor tag for shutdown release failures. */
         private const val ERROR_RELEASE_CLAIMS = "persistent_upload_release"
+        /** Self-monitor tag for custom transport shutdown failures. */
+        private const val ERROR_SHUTDOWN_UPLOADER = "persistent_upload_shutdown_transport"
     }
 }

@@ -14,6 +14,21 @@ import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
+/** Runs one aggregation-maintenance tick without cancelling future ticks after recoverable failure. */
+internal inline fun runAggregationMaintenance(
+    flush: () -> List<ApmEvent>,
+    enqueueEvent: (ApmEvent) -> Unit,
+    onFailure: (Exception) -> Unit
+) {
+    try {
+        for (event in flush()) {
+            enqueueEvent(event)
+        }
+    } catch (error: Exception) {
+        onFailure(error)
+    }
+}
+
 /**
  * APM 事件分发器。
  * 负责聚合 → 限流检查 → PII 脱敏 → 本地存储 → 上传的五阶段流水线。
@@ -110,10 +125,15 @@ internal class ApmDispatcher(
                 .coerceAtLeast(MIN_AGGREGATION_POLL_MS)
             scheduleWithFixedDelay(
                 {
-                    // 聚合结果重新入队（打 preAggregated 标记避免二次聚合）
-                    for (event in eventAggregator.flushExpired()) {
-                        enqueue(QueuedEvent(event, preAggregated = true))
-                    }
+                    runAggregationMaintenance(
+                        flush = eventAggregator::flushExpired,
+                        // 聚合结果重新入队（打 preAggregated 标记避免二次聚合）
+                        enqueueEvent = { event -> enqueue(QueuedEvent(event, preAggregated = true)) },
+                        onFailure = { error ->
+                            logger.e("Failed to flush expired aggregation windows", error)
+                            Apm.recordInternalError(ERROR_AGGREGATION_MAINTENANCE, error)
+                        }
+                    )
                 },
                 interval,
                 interval,
@@ -412,6 +432,9 @@ internal class ApmDispatcher(
 
         /** Internal-error tag for a failed aggregation shutdown flush. */
         private const val ERROR_AGGREGATION_FLUSH = "dispatcher_aggregation_flush"
+
+        /** Internal-error tag for a failed periodic aggregation maintenance tick. */
+        private const val ERROR_AGGREGATION_MAINTENANCE = "dispatcher_aggregation_maintenance"
 
         /** worker 单轮最多批量取出的事件数。 */
         private const val MAX_BATCH_DRAIN = 32
