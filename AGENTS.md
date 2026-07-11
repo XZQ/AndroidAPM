@@ -76,7 +76,7 @@ Registration alone does not make every monitor automatic:
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
 
-SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated and aggregate export merges them. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
+SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated; aggregate export selects up to 16 recent process directories and is bounded to 10,000 records / 16 MiB of uncompressed JSONL. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
 
 ## Working Rules
 

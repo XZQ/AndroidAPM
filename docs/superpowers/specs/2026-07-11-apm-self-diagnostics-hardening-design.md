@@ -19,7 +19,7 @@ Make SDK self-diagnostics reliable when the SDK itself is degraded: bounded in m
 
 The root remains `<filesDir>/android-apm/diagnostics`. Each process writes below a deterministic directory named from a sanitized process-name prefix plus a SHA-256 prefix. The hash prevents collisions between process names that sanitize to the same value.
 
-Each process owns its `diagnostics.jsonl` rotation set. The public export scans all process directories under the root and merges readable records into one bounded ZIP. The current process's in-memory ring is merged and deduplicated by process, session, and sequence. `clear()` remains current-process scoped; `clearAllProcesses()` is explicit.
+Each process owns its `diagnostics.jsonl` rotation set. The public export selects the most recent 16 process directories under the root and merges readable records into a ZIP bounded to 10,000 records and 16 MiB of uncompressed JSONL. The current process's in-memory ring is merged and deduplicated by process, session, and sequence. The manifest reports truncation and omitted-process counts. `clear()` remains current-process scoped; `clearAllProcesses()` is explicit.
 
 ## Resource Bounds and Backpressure
 
