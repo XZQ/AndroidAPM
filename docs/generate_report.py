@@ -14,8 +14,8 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-10"
-RUNTIME_COMMIT = "3c27ff9"
+REPORT_DATE = "2026-07-11"
+RUNTIME_COMMIT = "e593aaa"
 
 
 def set_cell_shading(cell, fill: str) -> None:
@@ -79,12 +79,12 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
 def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
-        ("构建单元", "24", "22 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "128", "123 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "63", "JVM、Robolectric、插件和 native 契约测试"),
+        ("构建单元", "25", "23 个根子项目 + apm-plugin + build-logic"),
+        ("主源码", "141", "136 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "76", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "JDK 21 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21"),
-        ("运行时代码基线", RUNTIME_COMMIT, "线程治理优化后的当前实现"),
+        ("运行时代码基线", RUNTIME_COMMIT, "客户端收口后的当前实现"),
     ]
     table = document.add_table(rows=1, cols=3)
     table.style = "Table Grid"
@@ -107,12 +107,12 @@ def add_bullets(document: Document, items: list[str]) -> None:
 def add_capability_table(document: Document) -> None:
     """Describe capabilities without presenting configured flags as implementations."""
     rows = [
-        ("自动生命周期接入", "Memory、Crash、ANR、Launch、CPU、FPS、Jank、ExitReason", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
-        ("显式 API 接入", "Network、SQLite、IPC、WebView、Battery、IO", "由宿主在真实调用点传入耗时、大小或错误"),
+        ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
+        ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
-        ("事件管线", "Dispatcher → SQLite outbox → Uploader", "确认成功后删除，语义为至少一次"),
+        ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
         ("扩展", "Trace、OTel exporter", "Trace 为进程内 span；OTel exporter 仅做事件映射"),
-        ("未实现的预留项", "通用 Binder Hook、WebView 自动注册、线程泄漏、overdraw", "配置字段存在不代表运行时能力存在"),
+        ("不支持的全局 Hook", "Binder hidden Hook、WebView 全局接管、通用线程泄漏、GPU overdraw", "兼容字段已 deprecated/false；不伪装成自动能力"),
     ]
     table = document.add_table(rows=1, cols=3)
     table.style = "Table Grid"
@@ -181,8 +181,8 @@ def build_status_report() -> Document:
         [
             "内存队列有界，批处理在专用工作循环完成，避免调用方同步执行数据库写入。",
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
-            "当前语义是 acknowledged at-least-once；没有稳定事件 ID、服务端幂等键或 exactly-once 保证。",
-            "当前没有多消费者 claim/lease；若未来允许多个上传执行者，必须先补并发所有权协议。",
+            "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
+            "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
             "持久化 codec 会把任意字段字符串化，强类型跨重启保真不是当前契约。",
         ],
     )
@@ -191,9 +191,9 @@ def build_status_report() -> Document:
     document.add_heading("走向生产的优先级", level=1)
     priorities = [
         ("P0", "接入生产 collector，并定义鉴权、限流、协议版本和隐私治理"),
-        ("P0", "补事件 ID、服务端幂等和 outbox claim/lease，明确重放与死信"),
+        ("P0", "在 Collector 按客户端 eventId 幂等，明确整批 ACK、重放与死信"),
         ("P1", "建立真机/OEM/API 设备矩阵，覆盖 native、ANR、多进程和长期离线"),
-        ("P1", "让配置项、文档和真实运行时能力持续一一对应"),
+        ("P1", "建设 Native 符号上传/后台符号化与外部制品发布"),
         ("P2", "建设查询、聚合、告警、版本对比与 SDK 自身健康观测"),
     ]
     table = document.add_table(rows=1, cols=2)
@@ -224,7 +224,7 @@ def build_architecture_report() -> Document:
     document.add_paragraph(
         "架构以 apm-core 为编排中心，以 apm-model、apm-storage、apm-uploader 形成数据底座；"
         "15 个监控模块负责采集或接收宿主埋点，apm-trace 与 apm-otel-exporter 提供扩展能力，"
-        "apm-plugin 在构建期完成慢方法插桩。"
+        "apm-plugin 在构建期完成慢方法插桩，apm-benchmark 提供非发布真机开销入口。"
     )
     add_diagram(document, "android-apm-overview.png", "图 1：客户端 SDK 总体结构")
 
@@ -236,6 +236,7 @@ def build_architecture_report() -> Document:
             "apm-uploader 不反向依赖 apm-core；因此保留模块内执行器和注入式 UploaderLogger。",
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
+            "apm-benchmark 只生成设备测量入口，不进入 Maven publication。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")
@@ -258,6 +259,7 @@ def build_architecture_report() -> Document:
         "./gradlew assembleDebug",
         "./gradlew testDebugUnitTest",
         "./gradlew -p apm-plugin test",
+        "./gradlew :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin",
         "./gradlew lintDebug",
         "./gradlew assembleRelease",
         "./gradlew publishToMavenLocal",
@@ -275,6 +277,7 @@ def build_architecture_report() -> Document:
             "当前状态唯一主入口：docs/Android_APM_项目文档.md。",
             "便携交接入口：docs/PROJECT_HANDOFF.md。",
             "架构细节：docs/architecture/00_整体架构.md 与对应模块文档。",
+            "云端、发布和真机设备实验室清单：docs/云端待建设清单.md。",
             "DOCX、SVG 和 PNG 是派生产物；出现冲突时以源码和 Markdown 为准。",
             "记录.zip 与 绘制.jpeg 仅作为历史原始资料保留，不作为当前事实来源。",
         ],
@@ -303,4 +306,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -12,16 +12,17 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 4. `CLAUDE.md`
 5. `docs/architecture/00_整体架构.md`
 6. The matching module document under `docs/architecture/`
+7. `docs/云端待建设清单.md` for every external/cloud dependency
 
 ## Current Verified Baseline
 
 - Documentation synchronization date: `2026-07-11`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `b423ad7 Refactor: Make APM lifecycle failure-safe`
-- Build units: `24`
-- Composition: `22` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `136` (`131` Kotlin + `4` C + `1` proto)
-- Test files: `70`
+- Latest runtime implementation commit before this documentation sync: `e593aaa Feat: Add client benchmark harness`
+- Build units: `25`
+- Composition: `23` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
+- Main source files: `141` (`136` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `76`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
@@ -31,6 +32,7 @@ Fresh checks executed on `2026-07-11` against the completed self-diagnostics har
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
 ./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
+./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
 ./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
@@ -49,15 +51,15 @@ monitor module
   -> bounded dispatcher queue (2048; overflow drops instead of blocking)
   -> optional aggregation, rate limiting, and PII sanitization
   -> appendBatch (up to 32 drained events)
-  -> SQLite durable outbox (50,000 rows)
-  -> PersistentUploadWorker
+  -> SQLite durable outbox v3 (50,000 rows; unique eventId)
+  -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> BatchApmUploader / HttpApmUploader / custom uploader
   -> integrator-owned collector
 ```
 
 Crash-class events can use synchronous local persistence. Optional multi-process forwarding publishes complete `.tmp` files as `.ipc` files before the uploader process consumes them.
 
-Delivery is acknowledged and at least once: rows are deleted only after an uploader reports success, but ambiguous network completion can produce duplicates. There is no event-level idempotency key or concurrent batch claim/lease protocol.
+Delivery is acknowledged and at least once. Stable `eventId` survives Line Protocol, Protobuf field 14, durable codec, SQLite, and IPC. SQLite write transactions atomically claim rows with owner/expiry; only the owner may acknowledge or fail them, shutdown releases claims, and expired claims are reclaimable. Ambiguous network completion can still retransmit, so the collector must deduplicate by `eventId`.
 
 ## Integration Reality
 
@@ -65,13 +67,13 @@ Registration alone does not make every monitor automatic:
 
 - Network requires the OkHttp interceptor/listener or manual completion callbacks.
 - SQLite requires `ApmSQLiteDatabase` or `onSqlExecuted` callbacks.
-- IPC currently exposes `onBinderCallComplete`; `enableBinderHook` is not a delivered generic Binder hook.
-- WebView requires the host to forward page/JS/resource callbacks; `enableAutoRegister` is not a delivered automatic registration layer.
+- IPC uses `traceBinderCall` or `onBinderCallComplete`; deprecated `enableBinderHook=false` does not use hidden APIs.
+- WebView uses explicit per-instance `install/uninstall`, delegate wrappers, `evaluateJavascript`, or callbacks; deprecated global `enableAutoRegister=false` does not take over arbitrary instances.
 - Battery WakeLock/GPS/Alarm signals are host callbacks.
 - IO uses stream wrappers and an optional xhook-backed native path.
 - Slow-method ASM requires the host module to apply `com.apm.slow-method`.
-- Render currently measures view count/depth; overdraw and draw-time config flags are not delivered detectors.
-- Thread monitoring inspects count/name/BLOCKED state; thread-pool backlog instrumentation is not delivered.
+- Render measures view count/depth and API 24+ FrameMetrics. Deprecated `detectOverdraw=false` is truthful because no supported GPU overdraw counter exists.
+- Thread monitoring inspects count/name/BLOCKED state; real ThreadPoolExecutor backlog requires explicit registration. Generic leak fields are deprecated/false.
 - `apm-otel-exporter` maps data only; it does not depend on or send through the OTel SDK.
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
@@ -87,7 +89,7 @@ SDK self-diagnostics are separate from event delivery. They are enabled by defau
 - Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)`.
 - Do not route diagnostics file-sink failures back through `ApmLogger` or `Apm.recordInternalError`; that path must remain non-recursive.
 - Preserve the durable SQLite outbox as the default storage path.
-- Before adding multiple upload workers or cross-process upload ownership, design batch claim/lease/expiry semantics.
+- Preserve SQLite transaction-scoped claim selection, owner-aware ACK/failure, expiry reclaim, and active-lease prune/trim protection.
 - Do not claim a config switch is an automatic hook unless a source-backed runtime path consumes it.
 
 ## Git and Documentation Policy

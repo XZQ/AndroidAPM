@@ -1,6 +1,6 @@
 # apm-thread-monitor 模块
 
-> 同步日期：2026-07-10｜模块名：`thread_monitor`
+> 同步日期：2026-07-11｜模块名：`thread_monitor`
 
 ## 目的
 
@@ -12,6 +12,7 @@
 - same thread name count > 5 -> `duplicate_thread`
 - BLOCKED thread list non-empty -> `blocked_thread`
 - 报告名称、状态和截断 stack
+- `registerThreadPool(name, ThreadPoolExecutor)` 后读取真实 pool/active/max/queue/completed；queue ≥ threshold -> `thread_pool_backlog`
 
 ## 默认配置
 
@@ -22,10 +23,10 @@
 | duplicate name | 5 |
 | interval | 30s |
 | stack max | 4000 chars |
-| `enableThreadPoolMonitor` | true（无 runtime 实现） |
-| `queueBacklogThreshold` | 100（未消费） |
-| `enableThreadLeakDetect` | true（无基于 300s 的 runtime tracker） |
-| `threadLeakThresholdMs` | 300s（未消费） |
+| `enableThreadPoolMonitor` | true；只扫描显式注册池 |
+| `queueBacklogThreshold` | 100 |
+| `enableThreadLeakDetect` | false / deprecated |
+| `threadLeakThresholdMs` | 300s / deprecated compatibility |
 
 ## 线程与资源
 
@@ -35,9 +36,9 @@
 
 - BLOCKED 不等于已经证明的死锁；代码没有构建 wait-for graph/cycle。
 - 同名线程只是泄漏候选，不证明资源泄漏。
-- 当前没有 ThreadPoolExecutor queue hook/backlog tracker。
-- `enableThreadLeakDetect` 与 `threadLeakThresholdMs` 目前没有对应生命周期状态机。
+- 不 Hook 任意 Executor；宿主显式注册，unregister/onStop 释放强引用。
+- 线程存活时长不能证明 leak，因此通用 leak 字段弃用并默认关闭。
 
 ## 测试
 
-Config 和 module 的数量/同名/BLOCKED 分类有测试；真实大规模线程开销和死锁根因需设备/系统 trace。
+Config、数量/同名/BLOCKED 分类及真实 ThreadPoolExecutor queue snapshot 有测试；大规模线程开销和死锁根因仍需设备/系统 trace。

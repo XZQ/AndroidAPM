@@ -1,6 +1,6 @@
 # AndroidAPM 架构文档索引
 
-> 同步日期：2026-07-10。当前源码与测试优先于历史文档。
+> 同步日期：2026-07-11。当前源码与测试优先于历史文档。
 
 ## 推荐阅读顺序
 
@@ -31,11 +31,11 @@
 | 8 | [IO](10_apm-io.md) | 流、FD、Closeable、PLT Hook | wrapper + optional native |
 | 9 | [Battery](11_apm-battery.md) | 电量、CPU、WakeLock/GPS/Alarm | 自动 + host callback |
 | 10 | [SQLite](12_apm-sqlite.md) | 慢 SQL、主线程、QueryPlan | wrapper/手动 |
-| 11 | [WebView](13_apm-webview.md) | 页面、JS、白屏、资源 | host callback |
-| 12 | [IPC](14_apm-ipc.md) | Binder 调用耗时 | host callback |
-| 13 | [Thread](15_apm-thread-monitor.md) | 数量、同名、BLOCKED | 定时采样 |
+| 11 | [WebView](13_apm-webview.md) | 页面、JS、白屏、资源 | explicit install/wrapper/callback |
+| 12 | [IPC](14_apm-ipc.md) | Binder 调用耗时与聚合 | explicit trace/callback |
+| 13 | [Thread](15_apm-thread-monitor.md) | 数量、同名、BLOCKED、pool backlog | 定时采样 + pool registration |
 | 14 | [GC](16_apm-gc-monitor.md) | 次数、耗时、Heap、分配 | 定时采样 |
-| 15 | [Render](17_apm-render.md) | View 数量/层级 | Lifecycle 自动 |
+| 15 | [Render](17_apm-render.md) | View 数量/层级、FrameMetrics | Lifecycle 自动 |
 
 ## 扩展模块
 

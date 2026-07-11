@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-11｜24 个构建单元｜136 个主源码文件（131 Kotlin + 4 C + 1 proto）｜70 个测试文件
+> 文档同步：2026-07-11｜25 个构建单元｜141 个主源码文件（136 Kotlin + 4 C + 1 proto）｜76 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -14,13 +14,13 @@ monitor module
   -> bounded queue (2048)
   -> optional aggregation / rate limit / PII sanitization
   -> appendBatch (up to 32)
-  -> SQLite durable outbox (50,000)
-  -> PersistentUploadWorker
+  -> SQLite durable outbox v3 (50,000, unique eventId)
+  -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> batch/custom uploader
   -> integrator-owned collector
 ```
 
-关键事件可同步到 durable hand-off point。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定时可能产生重复事件。
+关键事件可同步到 durable hand-off point。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定时服务端仍须按 `eventId` 去重。
 
 ## 二、事实源与接手顺序
 
@@ -49,11 +49,11 @@ monitor module
 |---|---|
 | 分支 | `develop` |
 | 最新 runtime 实现提交（文档同步前） | `b423ad7 Refactor: Make APM lifecycle failure-safe` |
-| root Gradle subproject | 22 |
+| root Gradle subproject | 23 |
 | included build | 2：`apm-plugin`、`build-logic` |
-| 总构建单元 | 24 |
-| 主源码 | 136：131 Kotlin + 4 C + 1 proto |
-| 测试文件 | 70 |
+| 总构建单元 | 25 |
+| 主源码 | 141：136 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 76 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -88,11 +88,11 @@ monitor module
 | IO | 流代理、慢/主线程 IO、FD/Closeable、PLT Hook | 包装流；Native 依赖运行时 xhook |
 | Battery | 电量、CPU、WakeLock/GPS/Alarm | 后三类为宿主回调 |
 | SQLite | 慢 SQL、主线程 DB、大影响行、QueryPlan | wrapper 或手动回调 |
-| WebView | 页面/JS/白屏/Bridge/Console/资源瀑布 | 宿主转发回调，无通用自动注册 |
-| IPC | Binder 耗时、主线程阈值、聚合 | `onBinderCallComplete`，无通用自动 Hook |
-| Thread | 数量、同名线程、BLOCKED 状态 | 无线程池 backlog 自动监控 |
+| WebView | 页面/JS/白屏/Bridge/Console/资源瀑布 | 对指定实例 install/uninstall、delegate wrapper 或手动回调 |
+| IPC | Binder 耗时、主线程阈值、固定窗口聚合 | `traceBinderCall` / `onBinderCallComplete`，不使用隐藏 API |
+| Thread | 数量、同名线程、BLOCKED、真实线程池 backlog | `ThreadPoolExecutor` 由宿主显式注册 |
 | GC | GC 次数/耗时、Heap、分配和回收率 | 定时运行时采样 |
-| Render | View 数量/层级 | overdraw 与 draw-time 检测未交付 |
+| Render | View 数量/层级、API 24+ FrameMetrics | Activity 自动；公共 API 不支持 GPU overdraw 计数 |
 
 ### 4.3 扩展与工具
 
@@ -103,12 +103,13 @@ monitor module
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
 | `build-logic` | Android library convention plugin |
 | `apm-sample-app` | 集成 15 个监控模块的演示应用，默认 Logcat 输出 |
+| `apm-benchmark` | 非发布 AndroidX Microbenchmark，覆盖 codec 与 SQLite outbox 热路径 |
 
 ## 五、统一事件模型
 
 `ApmEvent` 的主要维度：
 
-- identity：`module`, `name`, `kind`
+- identity：`eventId`, `module`, `name`, `kind`
 - urgency：`severity`, `priority`
 - occurrence：`timestamp`, `processName`, `threadName`
 - context：`scene`, `foreground`, `globalContext`, `extras`
@@ -118,13 +119,13 @@ monitor module
 
 持久化 `ApmEventCodec`：
 
-- format version 1
+- 当前写 format version 2，兼容读取 version 1
 - 最大 payload 2 MiB
 - 单字符串最大 1 MiB
 - 单 Map 最大 4096 项
 - 可逆保存事件结构，但 `fields` 中任意值会通过 `toString()` 归一为字符串
 
-传输支持 Line Protocol 和零外部 runtime 依赖的 Protobuf writer。当前事件模型没有稳定的 eventId/idempotency key。
+传输支持 Line Protocol 和零外部 runtime 依赖的 Protobuf writer；`eventId` 在 Line Protocol、Protobuf field 14、durable codec、SQLite 与多进程交接中保持稳定。服务端协议仍必须以该值实现幂等。
 
 ## 六、分发与宿主开销
 
@@ -145,21 +146,23 @@ worker 单轮 drain 最多 32 条：
 
 默认 `SQLiteEventStore`：
 
-- schema v2，WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
+- schema v3，v2 通过 additive migration 保留所有 pending 行并补 `legacy-<rowId>`；WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 - 默认容量 50,000
 - 批量事务写入
 - 缓存行数，每 512 次写入重同步
-- 高优先级先上传；超容量时低优先级、旧事件先淘汰
+- `event_id` 唯一约束，本地重复追加幂等
+- `lease_owner` + `lease_expires_at`；SQLite 写事务保证跨 store/进程 read-and-claim 原子性
+- 高优先级先上传；超容量时低优先级、旧事件先淘汰，活动租约不被 prune/trim
 - 坏 payload 行隔离删除
 
 `PersistentUploadWorker`：
 
-- 单 worker 顺序读取 outbox
+- 每个实例生成唯一 owner，按 `uploadLeaseDurationMs` 原子 claim
 - `BatchApmUploader` 一批一次请求；普通 uploader 逐条 fallback
-- 成功后 delete；失败 markRetry
+- 成功后 owner-aware ACK；失败递增 retry 并释放；shutdown 主动释放 owner 全部 claim
 - 指数退避与 `Retry-After` 取较大值
 - retry ≥ 10 或事件超过 7 天后 prune
-- 没有并发 claim/lease，因此不能直接扩展为多 worker 或跨进程共同上传
+- owner 不匹配不能 ACK/失败修改；租约过期后其他 Worker 可重领
 
 `StorageType.FILE` 是 500 行 ring buffer 兼容路径，不提供成功确认、重启重放等 durable 语义，初始化会输出降级警告。
 
@@ -196,15 +199,20 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `enablePiiSanitization` | false | 生产需要显式隐私评审 |
 | `enableRetry` | true | durable 路径由 persistent worker 负责 |
 | `uploadBatchSize` | 20 | 单次 durable batch 上限 |
+| `uploadLeaseDurationMs` | 120000 ms | 一次上传 owner 租约 |
 | `enableSelfMonitoring` | true | 60s 健康报告 |
 | `enableAutoThrottle` | true | 丢弃率/延迟异常时停模块 |
 | `diagnostics.enabled` | true | 独立本地诊断 journal |
 | `enableMultiProcessCoordination` | false | 子进程 hand-off 关闭 |
 | `enableHttpGzip` | true | 默认 endpoint HTTP 压缩 |
+| `IpcConfig.enableBinderHook` | false / deprecated | 无公共全局 Hook；使用显式 tracing |
+| `WebviewConfig.enableAutoRegister` | false / deprecated | 无全局 WebView 注册；按实例 install |
+| `ThreadMonitorConfig.enableThreadLeakDetect` | false / deprecated | 通用 leak 判断不可靠；显式注册线程池 |
+| `RenderConfig.detectOverdraw` | false / deprecated | 公共 API 无 GPU overdraw 计数 |
 
 ## 十一、构建与发布
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛 20 个 Android library 的 compileSdk/minSdk/Java 版本。`apm-plugin` 作为 included build 独立测试。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
 
 2026-07-11 在 JDK 21.0.11 执行的开发验证：
 
@@ -212,6 +220,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
 ./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
+./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
 ```
 
 同日执行的完整发布验证链：
@@ -233,7 +242,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-70 个测试文件覆盖配置默认值、事件 codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox、SQLite/Robolectric、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、各模块核心计算和手动入口。
+76 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency、SQLite/Robolectric、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 
@@ -243,26 +252,13 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 - 多 OEM/Android 版本兼容
 - 真实 Collector 协议与服务端幂等
 
-## 十三、当前未完成项
+## 十三、客户端完成边界与外部工作
 
-### P0：产品闭环
+仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、显式 Binder/WebView/线程池公共 API、FrameMetrics、自诊断和 benchmark harness 均已实现。
 
-- 生产 Collector、鉴权、租户、数据模型、查询、聚合、告警、Dashboard
-- eventId/idempotency 与重复事件处理协议
+一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 
-### P1：交付与正确性
-
-- 多 worker/cross-process upload claim/lease/expiry
-- 明确 typed field schema，避免 durable round-trip 后数值只保留字符串
-- 完成或删除 `enableBinderHook`、`enableAutoRegister`、`detectOverdraw`、线程池 backlog 等未落地开关
-- Native crash/ANR/IO 的真机矩阵和符号化链路
-
-### P2：工程发布
-
-- 真机 soak、功耗、磁盘与主线程开销报告
-- Maven Central/外部私服发布
-- 云端 CI；`.github/` 当前为本地忽略目录
-- Release/lint/publish/smoke 对当前 tip 的周期性全量验证
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 CI，以及真机 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件见 [`docs/云端待建设清单.md`](云端待建设清单.md)。
 
 ## 十四、设计原则
 

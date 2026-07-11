@@ -107,20 +107,20 @@ resolve lazy event
 worker 随 `PendingEventStore` 创建并立即开始循环：
 
 ```text
-readPending(batchSize)
+claimPending(ownerId, batchSize, now, leaseDuration)
   empty -> pruneExpired -> wait signal or 30s
   non-empty -> upload once
       BatchApmUploader: one batch call
       ordinary uploader: all(event.upload)
-    success -> delete ids + record latency
-    failure -> markRetry ids
+    success -> acknowledgeClaim(ownerId, ids) + record latency
+    failure -> failClaim(ownerId, ids) and release ownership
             -> max(local backoff, Retry-After)
             -> wait and reselect
 ```
 
 单一重试权威位于 outbox worker；durable store 下 `UploaderFactory` 不再套 `RetryingApmUploader`，避免双队列/双重试。
 
-限制：没有 claim/lease。多 worker 同时 `readPending` 会选择相同行，不能在未设计领取语义前并发化。
+每个 Worker 使用 `ProcessSessionId + process-local sequence` 作为 owner。SQLite 在写事务中选择并持久化 claim，另一个 store/进程看不到活动租约；只有 owner 可 ACK 或失败释放，shutdown 释放其全部 claim，expiry 后其他 Worker 可重领。默认 `uploadLeaseDurationMs=120000`。
 
 ## 7. UploaderFactory
 
@@ -226,9 +226,8 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 
 ## 15. 已知限制
 
-- 无 eventId/idempotency
-- 无 concurrent outbox lease
+- 客户端具备 eventId 和 concurrent outbox lease，但 exactly-once 仍依赖服务端按 eventId 幂等
 - self-monitor health event 不是独立控制平面；详细错误由独立本地 journal 补足
 - diagnostics 默认不自动上传，分享流程由宿主显式控制
-- 部分模块配置声明没有完整 runtime consumer
+- 公共 API 无法实现的通用隐藏 Hook 配置保留为 deprecated/false；真实能力使用显式 API
 - PII/aggregation/multi-process 默认关闭，需要生产配置明确开启

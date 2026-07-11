@@ -111,7 +111,7 @@ def document(title: str, subtitle: str, elements: list[str]) -> str:
   <text x="70" y="70" class="title">{escape(title)}</text>
   <text x="70" y="108" class="subtitle">{escape(subtitle)}</text>
   <g filter="url(#shadow)">{''.join(elements)}</g>
-  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-10</text>
+  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-11</text>
 </svg>'''
 
 
@@ -141,10 +141,10 @@ def overview() -> str:
 def module_dependencies() -> str:
     """Build the main module dependency diagram."""
     elements = [
-        box_svg(Box(70, 185, 260, 140, "apm-sample-app", ("集成示例", "Debug 冒烟入口"), "#6D4AA5", "#F8F4FC")),
+        box_svg(Box(70, 185, 260, 140, "Sample / Benchmark", ("apm-sample-app", "apm-benchmark (不发布)"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(395, 165, 330, 180, "监控模块 × 15", ("自动生命周期采集", "显式 API 采集", "构建期慢方法"), "#157A6E", "#F0FAF7")),
         box_svg(Box(790, 165, 300, 180, "apm-core", ("Apm / Dispatcher", "配置 / 执行器", "内部健康"), "#1F5A94")),
-        box_svg(Box(1155, 145, 375, 220, "数据底座", ("apm-model", "apm-storage", "apm-uploader", "apm-transport-proto"), "#B25D16", "#FFF8F1")),
+        box_svg(Box(1155, 145, 375, 220, "数据底座", ("apm-model", "apm-storage", "apm-uploader", "eventId + claim lease"), "#B25D16", "#FFF8F1")),
         arrow(330, 255, 395, 255, "依赖/演示"),
         arrow(725, 255, 790, 255, "上报"),
         arrow(1090, 255, 1155, 255, "存储/上传"),
@@ -157,7 +157,7 @@ def module_dependencies() -> str:
         pill(70, 765, "箭头指向被调用/依赖侧"),
         pill(430, 765, "uploader 不反向依赖 core", "#B25D16"),
     ]
-    return document("AndroidAPM 模块依赖", "22 个根子项目 + 2 个 included builds", elements)
+    return document("AndroidAPM 模块依赖", "23 个根子项目 + 2 个 included builds", elements)
 
 
 def event_pipeline() -> str:
@@ -165,8 +165,8 @@ def event_pipeline() -> str:
     elements = [
         box_svg(Box(60, 220, 250, 170, "事件来源", ("监控回调", "显式 API", "插桩计时"), "#157A6E", "#F0FAF7")),
         box_svg(Box(365, 220, 250, 170, "Dispatcher", ("有界队列", "批量出队", "调用方非阻塞"), "#1F5A94")),
-        box_svg(Box(670, 220, 250, 170, "SQLite outbox", ("批量事务", "TTL pruning", "进程重启恢复"), "#B25D16", "#FFF8F1")),
-        box_svg(Box(975, 220, 250, 170, "Upload worker", ("读取批次", "Retry-After", "非阻塞退避"), "#6D4AA5", "#F8F4FC")),
+        box_svg(Box(670, 220, 250, 170, "SQLite outbox", ("unique eventId", "claim / lease / expiry", "进程重启恢复"), "#B25D16", "#FFF8F1")),
+        box_svg(Box(975, 220, 250, 170, "Upload worker", ("owner-aware ACK", "Retry-After", "非阻塞退避"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(1280, 220, 260, 170, "Transport", ("可注入实现", "外部 collector", "仓库外系统"), "#9B5C17", "#FFF8E8")),
         arrow(310, 305, 365, 305),
         arrow(615, 305, 670, 305),
@@ -178,7 +178,7 @@ def event_pipeline() -> str:
         box_svg(Box(975, 610, 250, 120, "保留并重试", ("至少一次交付",), "#B25D16", "#FFF8F1")),
         pill(60, 770, "已实现：持久化恢复", "#157A6E"),
         pill(360, 770, "未保证：exactly-once", "#B25D16"),
-        pill(700, 770, "未实现：claim / lease", "#9B5C17"),
+        pill(700, 770, "已实现：claim / lease", "#157A6E"),
     ]
     return document("AndroidAPM 事件管线", "acknowledged at-least-once；成功确认后删除", elements)
 
@@ -187,10 +187,10 @@ def monitoring_modules() -> str:
     """Group modules by their real integration model."""
     elements = [
         box_svg(Box(70, 170, 450, 480, "自动生命周期 / 系统采集", (
-            "apm-memory · apm-crash", "apm-anr · apm-launch", "apm-cpu · apm-fps", "apm-jank · apm-exit-reason", "", "初始化后可运行", "仍受 API / 权限 / OEM 限制"
+            "apm-memory · apm-crash", "apm-anr · apm-launch", "apm-fps · apm-gc-monitor", "apm-render · apm-thread-monitor", "", "初始化后可运行", "仍受 API / 权限 / OEM 限制"
         ), "#157A6E", "#F0FAF7")),
         box_svg(Box(575, 170, 450, 480, "宿主显式 API 接入", (
-            "apm-network · apm-database", "apm-ipc · apm-webview", "apm-battery · apm-io", "", "宿主传入真实调用点数据", "不等于全局自动 Hook", "不等于零侵入"
+            "apm-network · apm-sqlite", "apm-ipc · apm-webview", "apm-battery · apm-io", "thread pool registration", "", "宿主传入真实调用点数据", "不等于全局自动 Hook"
         ), "#1F5A94", "#F4F8FC")),
         box_svg(Box(1080, 170, 450, 230, "构建期插桩", (
             "apm-slow-method", "apm-plugin", "", "需显式应用 Gradle 插件"

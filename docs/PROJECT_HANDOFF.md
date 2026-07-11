@@ -4,9 +4,9 @@
 
 ## 结论
 
-当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、4 个基础模块、2 个扩展模块、一个示例应用、一个 ASM 插件 included build 和一个 convention-plugin included build。
+当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、4 个基础模块、2 个扩展模块、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、SQLite durable outbox、批量上传和主要模块已有测试与本地构建证明；生产 Collector、查询/告警后台、事件幂等、并发 upload lease、外部 Maven 发布和真机长稳报告仍未完成。
+端上事件管线、稳定 eventId、SQLite durable outbox、并发 upload lease、批量上传、显式监控接入和 benchmark harness 已有测试与本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布和真机长稳数值属于外部建设，统一见 `docs/云端待建设清单.md`。
 
 ## 事实源
 
@@ -23,14 +23,14 @@
 
 | 项目 | 数量/版本 |
 |---|---|
-| root subproject | 22 |
+| root subproject | 23 |
 | included build | 2：`apm-plugin`, `build-logic` |
-| 构建单元 | 24 |
+| 构建单元 | 25 |
 | 基础模块 | 4 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
-| 主源码 | 136：131 Kotlin + 4 C + 1 proto |
-| 测试文件 | 70 |
+| 主源码 | 141：136 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 76 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
@@ -65,28 +65,29 @@ Apm.emit
 关键语义：
 
 - Crash 可同步落盘，不同步做网络。
-- 成功上传才 delete；失败 markRetry。
+- 每个事件的稳定 `eventId` 贯穿所有 wire/storage/IPC 格式。
+- Worker 先原子 claim；只有 owner 可 ACK/失败释放，租约过期可重领。
 - retry ≥ 10 或 age > 7 天清理。
-- 网络完成不确定时可能重复，当前无 eventId/idempotency。
-- 当前 durable worker 是单 worker 所有者模型，无多 worker claim/lease。
+- 网络完成不确定时仍可能重传；服务端必须按 `eventId` 幂等。
 - FileEventStore 是非 durable 兼容路径。
 - SDK 自诊断使用条数 + 字节双预算内存环/队列和按进程隔离的 app-private 滚动文件，不经过 dispatcher/outbox/uploader；支持全进程聚合导出和 executor 异步读取。
 
 ## 接入现实
 
-注册即可工作的能力：Java Crash、ANR 双通道、Memory 周期采样、Launch 生命周期、FPS、Thread/GC 周期采样、Render View 树。
+注册即可工作的能力：Java Crash、ANR 双通道、Memory 周期采样、Launch 生命周期、FPS、Thread/GC 周期采样、Render View 树与 FrameMetrics。
 
 需要宿主接线：
 
 - Network：OkHttp Interceptor/EventListener 或手动 callback
 - SQLite：`ApmSQLiteDatabase` 或 `onSqlExecuted`
-- IPC：`onBinderCallComplete`
-- WebView：页面/JS/资源 callback
+- IPC：`traceBinderCall` 或 `onBinderCallComplete`
+- WebView：对指定实例 `install/uninstall`、delegate wrapper 或页面/JS/资源 callback
+- Thread Pool：显式 `registerThreadPool(name, ThreadPoolExecutor)`
 - Battery：WakeLock/GPS/Alarm callback
 - IO：stream wrapper；Native path 还依赖 xhook
 - Slow Method：宿主应用 Gradle ASM 插件
 
-当前没有完整实现的声明型能力：通用 Binder hook、WebView 自动注册、线程池 backlog、Render overdraw/draw-time detector。
+不宣称无法由公共 API 支撑的能力：通用 Binder hidden hook、进程级 WebView 自动接管、通用线程 leak 判断和 GPU overdraw 计数。对应旧字段已弃用并默认关闭，真实能力使用显式 API；FrameMetrics 和注册线程池 backlog 已实现。
 
 ## 默认配置注意
 
@@ -110,6 +111,7 @@ Apm.emit
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
 ./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
+./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
 ./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
@@ -130,6 +132,7 @@ git log --oneline -n 10
 ./gradlew.bat testDebugUnitTest
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
+./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
 ```
 
 6. 发布相关变更再执行：
@@ -141,23 +144,7 @@ git log --oneline -n 10
 
 ## 后续优先级
 
-### P0
-
-- 生产 Collector、鉴权、租户、查询聚合、告警与 Dashboard
-- eventId/idempotency 与重复处理协议
-
-### P1
-
-- 并发 upload claim/lease/expiry
-- 真机 Native/ANR/Crash/IO 验证和符号化链
-- 清理或补全没有运行时消费者的配置开关
-- typed fields/schema 演进
-
-### P2
-
-- 真机 soak、功耗、磁盘、主线程开销基准
-- Maven Central/外部私服发布
-- 当前 tip 的 Release/lint/publish/smoke 周期验证
+客户端代码可独立完成的既定缺口已经收口。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [`云端待建设清单.md`](云端待建设清单.md) 的 P0/P1/P2、协议和验收条件推进。typed fields 也必须与 Collector 做版本化 schema 演进，不能在客户端静默改变 wire 类型。
 
 ## Git 与文档策略
 

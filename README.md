@@ -1,19 +1,19 @@
 # Android APM Framework
 
-模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、统一事件管线、SQLite 持久化出箱、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API 和 OpenTelemetry 语义映射。
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、稳定事件身份、SQLite 持久化出箱、并发上传租约、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
 ## 当前基线
 
 - 同步日期：2026-07-11
-- 24 个构建单元：22 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 136 个主源码文件：131 Kotlin + 4 C + 1 proto
-- 70 个测试文件
+- 25 个构建单元：23 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
+- 141 个主源码文件：136 Kotlin + 4 C + 1 proto
+- 76 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
-详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)。
+详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，所有云端事项统一见 [云端待建设清单](docs/云端待建设清单.md)。
 
 ## 第一性原理架构
 
@@ -25,15 +25,15 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
   -> 有界队列 2048（满时丢弃，绝不阻塞业务线程）
   -> 可选聚合 -> 限流 -> 可选 PII 脱敏
   -> appendBatch（单轮最多 32 条）
-  -> SQLite durable outbox（默认 50,000 行）
-  -> PersistentUploadWorker
+  -> SQLite durable outbox v3（默认 50,000 行，eventId 唯一）
+  -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> BatchApmUploader / HttpApmUploader / 自定义 uploader
   -> 接入方 Collector
 ```
 
 Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网络请求。非上传进程可选择通过 `.tmp` 写入、`.ipc` 发布的文件通道交给主进程。
 
-上传成功后才删除 outbox 行；失败保留并指数退避，达到 10 次重试或超过 7 天后清理。这是至少一次语义：网络响应丢失时可能重复上传，服务端应支持去重。
+每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避，达到 10 次重试或超过 7 天后清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
 ## 模块组成
 
@@ -60,11 +60,11 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-io` | 流代理、主线程/慢 IO、FD/Closeable 泄漏、可选 PLT Hook | 包装流；Native 路径依赖运行时可解析 xhook |
 | `apm-battery` | 电量下降、CPU Jiffies、WakeLock/GPS/Alarm 统计 | 电量/CPU 自动；其余需宿主转发生命周期 |
 | `apm-sqlite` | 慢 SQL、主线程 DB、大影响行数、QueryPlan | 使用 `ApmSQLiteDatabase` 或手动回调 |
-| `apm-webview` | 页面、JS、白屏、Bridge、Console、资源瀑布 | 宿主转发 WebView 回调；没有通用自动注册层 |
-| `apm-ipc` | Binder 调用耗时、主线程阈值、聚合 | 调用 `onBinderCallComplete`；没有通用 Binder 自动 Hook |
-| `apm-thread-monitor` | 线程数、同名线程、BLOCKED 状态 | 定时采样；没有线程池 backlog 自动插桩 |
+| `apm-webview` | 页面、JS、白屏、Bridge、Console、资源瀑布 | 对指定 WebView `install/uninstall`，或使用 delegate wrapper/手动回调 |
+| `apm-ipc` | Binder 调用耗时、主线程阈值、固定窗口聚合 | `traceBinderCall` 或 `onBinderCallComplete`；不使用隐藏 API |
+| `apm-thread-monitor` | 线程数、同名线程、BLOCKED、线程池 backlog | 定时采样；线程池需显式注册真实 `ThreadPoolExecutor` |
 | `apm-gc-monitor` | GC 次数/耗时、Heap 增长、分配率、回收率 | 定时读取运行时统计 |
-| `apm-render` | View 数量和层级深度 | Activity 创建后遍历；过度绘制未实现 |
+| `apm-render` | View 数量/层级 + API 24 `FrameMetrics` 帧耗时窗口 | Activity 生命周期自动；公共 API 不支持 GPU overdraw 计数 |
 
 ### 扩展与构建工具
 
@@ -75,6 +75,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
 | `apm-sample-app` | 15 个监控模块的本地演示；默认输出到 Logcat，不代表生产后台闭环 |
+| `apm-benchmark` | 非发布 AndroidX Microbenchmark；event codec 与 SQLite outbox 真机开销 harness |
 
 ## 快速接入
 
@@ -146,6 +147,28 @@ Apm.register(sqliteModule)
 val monitoredDb = ApmSQLiteDatabase(delegateDatabase, sqliteModule)
 ```
 
+### IPC、WebView 与线程池显式接入
+
+Android 没有受支持的进程级 Binder/WebView 全局 Hook。SDK 保留旧配置字段但已弃用且默认关闭，生产接入使用可验证的公共 API：
+
+```kotlin
+val ipc = IpcModule()
+val result = ipc.traceBinderCall("com.example.IUser", "load") {
+    userService.load()
+}
+
+val webview = WebviewModule()
+webview.install(webView, hostWebViewClient, hostWebChromeClient)
+webview.evaluateJavascript(webView, "window.performance.timing") { result ->
+    // 原宿主 callback 保持不变
+}
+
+val threads = ThreadMonitorModule()
+threads.registerThreadPool("image-loader", imageExecutor)
+```
+
+`WebviewModule.uninstall` 会恢复原 delegate；Render 在 Activity 可见期使用 API 24+ `FrameMetrics`。GPU overdraw 没有稳定公共计数 API，因此 `detectOverdraw` 仅为弃用兼容字段并默认 `false`。
+
 ### 慢方法 ASM 插桩
 
 ```kotlin
@@ -173,6 +196,29 @@ apmSlowMethod {
 | `diagnostics.enabled` | `true` | 独立本地诊断日志，不依赖事件上传管线 |
 | Native Crash | `false` | 避免默认启用高风险信号能力 |
 | Hprof/fork dump | `false` | 避免默认产生大文件或依赖设备兼容性 |
+| `uploadLeaseDurationMs` | `120000` | durable batch owner 租约；超时后可被其他 Worker 重领 |
+
+## 与微信 Matrix、快手 KOOM 的定位对比
+
+比较日期：2026-07-11。依据当前仓库代码，以及 [Tencent/Matrix 官方 README](https://github.com/Tencent/matrix) 与 [KwaiAppTeam/KOOM 官方 README](https://github.com/KwaiAppTeam/KOOM)。`✅` 表示该项目官方资料中有对应客户端能力，`◐` 表示范围较窄、依赖显式接入或只覆盖其中一部分，`—` 表示官方资料未声明；这不是性能排名。
+
+| 客户端能力 | AndroidAPM | 微信 Matrix | 快手 KOOM |
+|---|:---:|:---:|:---:|
+| 模块化综合 APM（多个性能域） | ✅ | ✅ | ◐（聚焦 OOM/内存） |
+| Activity/Fragment/ViewModel Java 泄漏 | ✅ | ✅ | ✅（Java Heap） |
+| Native Heap 泄漏定位 | ◐（统计/预警，非全堆泄漏追踪） | ✅（Memory Hook） | ✅ |
+| Java/Native Crash 与历史退出原因 | ✅ | — | — |
+| ANR、卡顿、FPS、启动、慢方法 | ✅ | ✅（Trace Canary） | — |
+| 文件 IO / Closeable / FD | ✅ | ✅（IO Canary） | — |
+| SQLite 慢查询与 QueryPlan/Lint | ✅ | ✅（SQLite Lint） | — |
+| 电量、线程活动与系统资源信号 | ◐（部分信号需宿主回调） | ✅（Battery Canary） | ◐（线程泄漏） |
+| 网络请求阶段追踪 | ✅（OkHttp/手动接入） | — | — |
+| WebView、Binder、GC、View/FrameMetrics | ◐（显式公共 API 接入） | ◐（部分相关能力） | — |
+| APK 静态体积分析 | — | ✅（APK Checker） | — |
+| 稳定 eventId + SQLite outbox + claim lease | ✅ | — | — |
+| 独立 SDK 自诊断日志与导出 | ✅ | — | — |
+
+Matrix 的强项是成熟的 Trace/IO/SQLite/Battery 与 Native Hook 体系；KOOM 专注 Java Heap、Native Heap 和线程泄漏；AndroidAPM 选择更宽的端上模块覆盖和可恢复传输链路。三者都不能仅凭客户端仓库等同于完整托管 APM 后台。
 
 ## SDK 自诊断
 
@@ -203,6 +249,7 @@ ApmDiagnostics.clearAllProcesses()
 ./gradlew.bat testDebugUnitTest
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
+./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
 ```
 
 发布链验证：
@@ -214,16 +261,11 @@ ApmDiagnostics.clearAllProcesses()
 
 以 [AGENTS.md](AGENTS.md) 和 [项目文档](docs/Android_APM_项目文档.md) 中标注的日期判断哪些命令是当前 tip 的现场验证，不能把较早结果自动外推到新提交。
 
-## 当前未完成闭环
+## 客户端完成边界
 
-- 生产 Collector、鉴权、租户、查询、聚合、告警和 Dashboard
-- eventId/idempotency 与服务端重复去除
-- 多 worker/cross-process upload 的 claim/lease/expiry
-- 真机长稳、功耗、磁盘和监控开销基准
-- Native 符号表上传和 tombstone 后台符号化
-- Maven Central/外部制品库发布
-- IPC/WebView/线程池/Render 等声明型开关对应的完整自动实现
-- 云端 CI；`.github/` 当前明确为本地忽略目录
+仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。
+
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在 [云端待建设清单](docs/云端待建设清单.md)。
 
 ## License
 

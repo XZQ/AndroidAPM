@@ -20,7 +20,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 
 | 字段组 | 字段 |
 |---|---|
-| identity | `module`, `name`, `kind` |
+| identity | `eventId`, `module`, `name`, `kind` |
 | urgency | `severity`, `priority` |
 | occurrence | `timestamp`, `processName`, `threadName` |
 | context | `scene`, `foreground`, `globalContext`, `extras` |
@@ -38,6 +38,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 
 - 人可读、Logcat/HTTP text payload
 - 单行 `key=value|...`
+- `eventId` 为独立字段
 - 对 `|`, `,`, newline 做替换
 - Map 按 key 排序
 - 不是完整可逆 parser 协议
@@ -47,17 +48,19 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - 零 protobuf runtime 依赖的 writer
 - 单事件/批量序列化
 - field 13 保存 priority enum name
+- field 14 保存稳定 eventId
 - 适合 HTTP binary payload
 
 ### ApmEventCodec durable payload
 
-- format version：1
+- 当前写 format version：2；兼容读 version 1
 - 用于 SQLite/IPC 的完整事件恢复
 - payload 最大 2 MiB
 - string 最大 1 MiB
 - 每个 Map 最大 4096 项
 - enum 未知值回退默认
 - `fields` 通过 `Any?.toString()` 保存，重放后值类型为 String
+- version 2 保存 eventId；version 1 迁移行由 SQLite `event_id` 回填
 
 因此 durable codec 保留事件结构，但不保留 arbitrary field 的原始数值/布尔类型。
 
@@ -80,6 +83,10 @@ interface EventStore {
 - `readPending(limit)`
 - `deletePending(ids)`
 - `markRetry(ids)`
+- `claimPending(ownerId, limit, nowMs, leaseDurationMs)`
+- `acknowledgeClaim(ownerId, ids)`
+- `failClaim(ownerId, ids)`
+- `releaseClaims(ownerId)`
 - `pendingCount()`
 - `pruneExpired(maxRetryCount, maxAgeMs)`
 
@@ -89,7 +96,7 @@ interface EventStore {
 
 ### Schema
 
-`EventDbHelper` 数据库版本 2：
+`EventDbHelper` 数据库版本 3：
 
 ```text
 events(
@@ -100,17 +107,21 @@ events(
   severity TEXT,
   data TEXT,
   payload BLOB,
+  event_id TEXT UNIQUE,
   timestamp INTEGER,
-  retry_count INTEGER
+  retry_count INTEGER,
+  lease_owner TEXT,
+  lease_expires_at INTEGER
 )
 ```
 
-v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全参加 acknowledged replay。
+v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全参加 acknowledged replay。v2 到 v3 使用 additive migration，保留 pending payload 并补 `legacy-<rowId>` eventId、空 owner 和 0 expiry。
 
 ### 写入
 
 - `append` 委托 batch path
 - 一批在单个 SQLite transaction 中 insert
+- `event_id` UNIQUE + conflict-ignore 使重复追加幂等，缓存计数只增加真实 insert
 - `data` 对新行写空串，避免与 payload 双序列化
 - cached row count 随增删维护
 - 每 512 条 append 执行 COUNT(*) 重同步
@@ -123,6 +134,8 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - overflow eviction：priority ASC, timestamp ASC
 - recent debug view：timestamp DESC，从 payload decode 后渲染 Line Protocol
 - corrupted payload：记录 id 后隔离删除
+- claim order：priority DESC, timestamp ASC；写事务覆盖 select + owner/expiry update
+- prune/容量淘汰跳过尚未过期的活动 claim
 
 ### 清理
 
@@ -173,15 +186,15 @@ interface BatchApmUploader : ApmUploader {
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-当前接口没有 request event id、batch id 或服务端 ack token，HTTP 2xx 是唯一确认信号。
+每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。
 
 ## 9. Durable retry
 
 ```text
-readPending
+claimPending(owner, lease)
   -> uploadOnce
-  -> success: deletePending
-  -> failure: markRetry
+  -> success: acknowledgeClaim(owner)
+  -> failure: failClaim(owner)
             -> delayForAttempt(max row retry + 1)
             -> max with retryAfterHint
             -> reselect later
@@ -208,17 +221,17 @@ readPending
 当前：
 
 - local durable hand-off
+- stable eventId and local deduplication
+- concurrent claim/lease/expiry and owner-aware ACK
 - priority ordering/eviction
 - success acknowledgment by uploader boolean
 - restart replay
 - retry/TTL pruning
 - batch/Gzip/Retry-After
 
-缺口：
+外部/协议缺口：
 
-- eventId/idempotency key
-- exactly-once server protocol
-- concurrent claim/lease/expiry
+- exactly-once server protocol and server-side eventId deduplication
 - typed durable field schema
 - authentication/tenant protocol
 - collector compatibility/version negotiation
@@ -227,7 +240,7 @@ readPending
 
 `apm-model`：Line Protocol、codec 边界/回放、priority、Protobuf。
 
-`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent。
+`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim 与双 store 并发 claim。
 
 `apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After。
 
