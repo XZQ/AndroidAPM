@@ -12,6 +12,13 @@
     <string name="test_network_ok">Simulate OK Request</string>
     <string name="test_network_slow">Simulate Slow Request</string>
     <string name="test_network_error">Simulate Error Request</string>
+    <!-- SDK self-diagnostics -->
+    <string name="diagnostics_title">SDK Self-Diagnostics</string>
+    <string name="diagnostics_status">Show Status</string>
+    <string name="diagnostics_export">Export Support ZIP</string>
+    <string name="diagnostics_status_result">healthy=%1$b dropped=%2$d writeFailures=%3$d</string>
+    <string name="diagnostics_export_success">Exported %1$d diagnostic records</string>
+    <string name="diagnostics_export_failure">Diagnostics export failed</string>
     <!-- Events -->
     <string name="recent_events">Recent Events</string>
     <string name="finish_activity">Finish (Leak)</string>

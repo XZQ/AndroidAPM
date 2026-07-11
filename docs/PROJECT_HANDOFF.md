@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-10｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-07-11｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -29,8 +29,8 @@
 | 基础模块 | 4 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
-| 主源码 | 128：123 Kotlin + 4 C + 1 proto |
-| 测试文件 | 63 |
+| 主源码 | 135：130 Kotlin + 4 C + 1 proto |
+| 测试文件 | 70 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
@@ -39,7 +39,7 @@
 最新 runtime 实现提交（文档同步前）为：
 
 ```text
-3c27ff9 Refactor: centralize SDK threads via ApmExecutors with two-tier priority policy
+7922c99 Feat: Integrate SDK self-diagnostics
 ```
 
 之后的提交可能是样式、文档或仓库跟踪调整；使用 Git 历史判断实际 tip。
@@ -70,6 +70,7 @@ Apm.emit
 - 网络完成不确定时可能重复，当前无 eventId/idempotency。
 - 当前 durable worker 是单 worker 所有者模型，无多 worker claim/lease。
 - FileEventStore 是非 durable 兼容路径。
+- SDK 自诊断使用独立内存环和 app-private 滚动文件，不经过 dispatcher/outbox/uploader。
 
 ## 接入现实
 
@@ -95,6 +96,7 @@ Apm.emit
 - aggregation：关闭
 - multi-process coordination：关闭
 - self-monitor/auto-throttle：开启
+- self-diagnostics：开启；200 条内存、256 队列、3 × 512 KiB 文件；不自动上传
 - native crash：关闭
 - Hprof/fork dump：关闭
 

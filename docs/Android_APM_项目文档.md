@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-10｜24 个构建单元｜128 个主源码文件（123 Kotlin + 4 C + 1 proto）｜63 个测试文件
+> 文档同步：2026-07-11｜24 个构建单元｜135 个主源码文件（130 Kotlin + 4 C + 1 proto）｜70 个测试文件
 
 ## 一、项目结论
 
@@ -48,12 +48,12 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `3c27ff9 Refactor: centralize SDK threads via ApmExecutors with two-tier priority policy` |
+| 最新 runtime 实现提交（文档同步前） | `7922c99 Feat: Integrate SDK self-diagnostics` |
 | root Gradle subproject | 22 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 24 |
-| 主源码 | 128：123 Kotlin + 4 C + 1 proto |
-| 测试文件 | 63 |
+| 主源码 | 135：130 Kotlin + 4 C + 1 proto |
+| 测试文件 | 70 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -70,7 +70,7 @@ monitor module
 | 模块 | 核心职责 | 关键类 |
 |---|---|---|
 | `apm-model` | 统一事件、优先级、Line Protocol、Protobuf、持久化 codec | `ApmEvent`, `ApmEventCodec`, `ProtobufSerializer` |
-| `apm-core` | 初始化、生命周期、分发、限流、聚合、脱敏、多进程、自监控 | `Apm`, `ApmDispatcher`, `PersistentUploadWorker` |
+| `apm-core` | 初始化、生命周期、分发、限流、聚合、脱敏、多进程、自监控、独立诊断日志 | `Apm`, `ApmDispatcher`, `ApmDiagnostics`, `PersistentUploadWorker` |
 | `apm-storage` | SQLite outbox 与 File 兼容存储 | `SQLiteEventStore`, `FileEventStore`, `PendingEventStore` |
 | `apm-uploader` | HTTP/Logcat/自定义传输和非 durable 重试兼容路径 | `HttpApmUploader`, `RetryingApmUploader` |
 
@@ -177,7 +177,15 @@ worker 单轮 drain 最多 32 条：
 
 该通道是本机文件 hand-off，不是跨设备传输；rename 失败时存在 copy fallback，仍应将其视为尽力保持完整性的本地协调机制。
 
-## 九、配置默认值
+## 九、SDK 自诊断
+
+SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 Logcat，同时把受控记录写入 200 条内存环和 app-private 滚动 JSONL；文件写入通过容量 256 的非阻塞队列和 `apm-diagnostics-writer` 后台线程完成。默认保留 3 个 512 KiB 分片，总预算约 1.5 MiB。
+
+`ApmDiagnostics.status/snapshot/exportTo/clear` 支持现场状态、最近记录、ZIP 导出和清理。导出与 snapshot 可以读取本地文件；普通日志写入调用线程不做文件 IO。文件异常只更新本地 sink 状态并降级到内存 + 原始 Logcat，不重新进入 logger，避免递归。
+
+结构化记录包含时间、级别、组件、错误码、进程、线程、异常类型、有限堆栈与栈指纹。消息最大 4 KiB，异常栈最大 16 KiB/64 帧，并脱敏常见 token/password/Authorization。事件 payload、业务上下文、请求正文、SQL 不进入诊断 journal。SDK 不自动上传诊断包。
+
+## 十、配置默认值
 
 | 配置 | 默认 | 说明 |
 |---|---:|---|
@@ -190,10 +198,11 @@ worker 单轮 drain 最多 32 条：
 | `uploadBatchSize` | 20 | 单次 durable batch 上限 |
 | `enableSelfMonitoring` | true | 60s 健康报告 |
 | `enableAutoThrottle` | true | 丢弃率/延迟异常时停模块 |
+| `diagnostics.enabled` | true | 独立本地诊断 journal |
 | `enableMultiProcessCoordination` | false | 子进程 hand-off 关闭 |
 | `enableHttpGzip` | true | 默认 endpoint HTTP 压缩 |
 
-## 十、构建与发布
+## 十一、构建与发布
 
 根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛 20 个 Android library 的 compileSdk/minSdk/Java 版本。`apm-plugin` 作为 included build 独立测试。
 
@@ -222,9 +231,9 @@ worker 单轮 drain 最多 32 条：
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
-## 十一、测试策略
+## 十二、测试策略
 
-63 个测试文件覆盖配置默认值、事件 codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox、SQLite/Robolectric、HTTP socket/Gzip/Retry-After、IPC 文件、JNI 静态绑定契约、ASM 正常/异常出口、各模块核心计算和手动入口。
+70 个测试文件覆盖配置默认值、事件 codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox、SQLite/Robolectric、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、各模块核心计算和手动入口。
 
 测试通过不能代替以下验证：
 
@@ -234,7 +243,7 @@ worker 单轮 drain 最多 32 条：
 - 多 OEM/Android 版本兼容
 - 真实 Collector 协议与服务端幂等
 
-## 十二、当前未完成项
+## 十三、当前未完成项
 
 ### P0：产品闭环
 
@@ -255,7 +264,7 @@ worker 单轮 drain 最多 32 条：
 - 云端 CI；`.github/` 当前为本地忽略目录
 - Release/lint/publish/smoke 对当前 tip 的周期性全量验证
 
-## 十三、设计原则
+## 十四、设计原则
 
 1. SDK 不能为了观测而阻塞宿主主流程。
 2. 关键事件先到 durable hand-off point，再考虑网络。
@@ -264,8 +273,9 @@ worker 单轮 drain 最多 32 条：
 5. 自动能力与宿主手动接线必须在 API 和文档中明确区分。
 6. 当前代码事实优先于历史文档与宣传性比较表。
 7. 没有服务端查询和告警闭环时，不宣称完整 APM 产品完成。
+8. APM 自身诊断不依赖被诊断的事件 dispatcher、outbox 或 uploader。
 
-## 十四、文档与历史资料
+## 十五、文档与历史资料
 
 - `docs/architecture/`：当前模块架构事实源
 - `docs/APM_Review_2026-07-08.md`：历史评审与当前处置状态

@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-07-10
+> 同步日期：2026-07-11
 
 ## 1. 职责
 
@@ -14,6 +14,7 @@
 - `UploaderFactory`：选择 custom/HTTP/Logcat 与 durable/non-durable 重试所有权
 - throttle/aggregation/privacy/selfmonitor：横切保护能力
 - `ApmExecutors`：SDK 线程工厂和优先级策略
+- `ApmDiagnostics`：独立本地诊断状态、快照、ZIP 导出和清理
 
 ## 2. 初始化
 
@@ -22,6 +23,7 @@ Apm.init(application, config)
   synchronized(initLock)
   -> ignore duplicate init
   -> resolve processName
+  -> create independent diagnostics recorder/logger
   -> MAIN_PROCESS_ONLY child process: skip
   -> create EventStore
        SQLITE -> SQLiteEventStore(EventDbHelper)
@@ -37,7 +39,7 @@ Apm.init(application, config)
   -> start registered modules
 ```
 
-`state` 只有基础设施组装完成后才发布。重复 `init` 为 no-op；`stop` 后可以重新初始化。
+`state` 只有基础设施组装完成后才发布。diagnostics 在 event store/uploader 之前创建，因此部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；`stop` 后可以重新初始化。
 
 ## 3. 模块生命周期与过滤
 
@@ -178,9 +180,11 @@ PII sanitization 默认关闭。内置规则覆盖手机号、邮箱、身份证
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数。`SdkHealthReport` 包含该计数，但当前 `Apm.createSelfMonitoringExecutor` 构造的 `sdk_health` 事件字段尚未带出 `internalErrorCount`。`AutoThrottle` 根据 drop rate/upload latency 停止低优先级，再在严重时停止 normal 模块。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。`AutoThrottle` 根据 drop rate/upload latency 停止低优先级，再在严重时停止 normal 模块。
 
 当前限制：停用是本进程内单向动作，没有自动恢复；健康事件本身也经过同一 dispatcher。
+
+独立诊断默认使用 200 条内存环、256 条非阻塞写队列和 3 × 512 KiB app-private JSONL。普通日志调用线程不做文件 IO；ERROR 可挤出一条较旧的排队记录并计入 drop。文件失败进入冷却并保留内存/Logcat，不通过 `ApmLogger` 递归报告。`ApmDiagnostics.status/snapshot/exportTo/clear` 是宿主支持入口，导出同步执行且应由宿主工作线程调用。
 
 ## 12. ApmExecutors
 
@@ -214,11 +218,13 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 - Aggregator/StackFingerprinter
 - PII sanitizer
 - SDK self-monitor
+- diagnostics config/sanitizer/JSONL/rotation/export/queue/failure isolation/lifecycle integration
 
 ## 15. 已知限制
 
 - 无 eventId/idempotency
 - 无 concurrent outbox lease
-- self-monitor health event 未形成独立控制平面
+- self-monitor health event 不是独立控制平面；详细错误由独立本地 journal 补足
+- diagnostics 默认不自动上传，分享流程由宿主显式控制
 - 部分模块配置声明没有完整 runtime consumer
 - PII/aggregation/multi-process 默认关闭，需要生产配置明确开启

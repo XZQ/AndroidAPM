@@ -102,6 +102,34 @@
             android:text="@string/test_network_error" />
     </LinearLayout>
 
+    <!-- SDK Self-Diagnostics Section -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="@string/diagnostics_title"
+        android:textStyle="bold" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/diagnosticsStatusButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/diagnostics_status" />
+
+        <Button
+            android:id="@+id/diagnosticsExportButton"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/diagnostics_export" />
+    </LinearLayout>
+
     <!-- Events Section -->
     <TextView
         android:id="@+id/eventsLabel"

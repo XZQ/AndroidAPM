@@ -9,6 +9,10 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.apm.core.Apm
+import com.apm.core.diagnostics.ApmDiagnostics
+import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 class MainActivity : AppCompatActivity() {
 
@@ -16,6 +20,8 @@ class MainActivity : AppCompatActivity() {
     private val leakBucket = ArrayList<ByteArray>()
     /** 主线程 Handler，用于定时刷新事件面板。 */
     private val mainHandler = Handler(Looper.getMainLooper())
+    /** Sample-only worker for the explicitly blocking diagnostics export API. */
+    private val diagnosticsExecutor: ExecutorService = Executors.newSingleThreadExecutor()
 
     /** 事件展示 TextView。 */
     private lateinit var eventsView: TextView
@@ -101,6 +107,14 @@ class MainActivity : AppCompatActivity() {
             )
             showToast("Simulated error request logged")
         }
+
+        // --- SDK self-diagnostics support flow ---
+        findViewById<Button>(R.id.diagnosticsStatusButton).setOnClickListener {
+            showDiagnosticStatus()
+        }
+        findViewById<Button>(R.id.diagnosticsExportButton).setOnClickListener {
+            exportDiagnostics()
+        }
     }
 
     override fun onStart() {
@@ -113,6 +127,12 @@ class MainActivity : AppCompatActivity() {
         super.onStop()
     }
 
+    override fun onDestroy() {
+        // The sample owns this host-side executor and closes it with the Activity.
+        diagnosticsExecutor.shutdownNow()
+        super.onDestroy()
+    }
+
     /** 获取 SampleApplication 实例。 */
     private val sampleApplication: SampleApplication
         get() = application as SampleApplication
@@ -122,6 +142,36 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
     }
 
+    /** Shows current local diagnostics health without reading APM event storage. */
+    private fun showDiagnosticStatus() {
+        val status = ApmDiagnostics.status()
+        showToast(
+            getString(
+                R.string.diagnostics_status_result,
+                status.fileSinkHealthy,
+                status.droppedRecords,
+                status.writeFailures
+            )
+        )
+    }
+
+    /** Exports an app-private support ZIP on a host-owned worker thread. */
+    private fun exportDiagnostics() {
+        diagnosticsExecutor.execute {
+            val target = File(cacheDir, DIAGNOSTICS_EXPORT_FILE_NAME)
+            val result = ApmDiagnostics.exportTo(target)
+            // UI feedback is posted back after the synchronous export completes.
+            runOnUiThread {
+                val message = if (result.success) {
+                    getString(R.string.diagnostics_export_success, result.exportedRecords)
+                } else {
+                    getString(R.string.diagnostics_export_failure)
+                }
+                showToast(message)
+            }
+        }
+    }
+
     companion object {
         /** 事件面板刷新间隔（毫秒）。 */
         private const val REFRESH_INTERVAL_MS = 2_000L
@@ -129,5 +179,7 @@ class MainActivity : AppCompatActivity() {
         private const val ALLOC_REPEAT_COUNT = 6
         /** 每次分配的块大小（字节）：2MB。 */
         private const val ALLOC_BLOCK_BYTES = 2 * 1024 * 1024
+        /** App-private sample diagnostics export file. */
+        private const val DIAGNOSTICS_EXPORT_FILE_NAME = "android-apm-diagnostics.zip"
     }
 }

@@ -1,15 +1,15 @@
 # Android APM Framework
 
-模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、统一事件管线、SQLite 持久化出箱、批量 HTTP 上传、手动 Trace API 和 OpenTelemetry 语义映射。
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、统一事件管线、SQLite 持久化出箱、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API 和 OpenTelemetry 语义映射。
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
 ## 当前基线
 
-- 同步日期：2026-07-10
+- 同步日期：2026-07-11
 - 24 个构建单元：22 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 128 个主源码文件：123 Kotlin + 4 C + 1 proto
-- 63 个测试文件
+- 135 个主源码文件：130 Kotlin + 4 C + 1 proto
+- 70 个测试文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
@@ -42,7 +42,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | 模块 | 职责 |
 |---|---|
 | `apm-model` | `ApmEvent`、priority/severity、Line Protocol、Protobuf、持久化 codec |
-| `apm-core` | 初始化、模块生命周期、分发、限流、聚合、脱敏、多进程、自监控 |
+| `apm-core` | 初始化、模块生命周期、分发、限流、聚合、脱敏、多进程、自监控、独立本地诊断日志 |
 | `apm-storage` | SQLite durable outbox；FileEventStore 兼容路径 |
 | `apm-uploader` | HTTP/Logcat/自定义上传、批量、Gzip、Retry-After、内存重试兼容路径 |
 
@@ -170,8 +170,26 @@ apmSlowMethod {
 | `enableMultiProcessCoordination` | `false` | 不转发子进程事件 |
 | `enableSelfMonitoring` | `true` | 周期上报 SDK 健康事件 |
 | `enableAutoThrottle` | `true` | 健康恶化时可停用低优先级模块 |
+| `diagnostics.enabled` | `true` | 独立本地诊断日志，不依赖事件上传管线 |
 | Native Crash | `false` | 避免默认启用高风险信号能力 |
 | Hprof/fork dump | `false` | 避免默认产生大文件或依赖设备兼容性 |
+
+## SDK 自诊断
+
+APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同时进入 Logcat 与独立本地诊断 journal。该 journal 不依赖 `ApmDispatcher`、事件 SQLite outbox 或 uploader，因此这些组件异常时仍可保留本地证据。
+
+默认资源上限为：200 条内存记录、256 条非阻塞写队列、3 个 512 KiB app-private JSONL 文件。队列满时丢弃而不阻塞宿主；文件失败时降级为内存 + Logcat，且不会递归进入 APM logger。
+
+```kotlin
+val status = ApmDiagnostics.status()
+val recent = ApmDiagnostics.snapshot(limit = 100)
+
+// 同步文件操作，请在宿主工作线程调用。
+val result = ApmDiagnostics.exportTo(File(cacheDir, "android-apm-diagnostics.zip"))
+ApmDiagnostics.clear()
+```
+
+导出 ZIP 仅包含受控 SDK 字段和已脱敏、截断的异常信息，不复制事件 payload、业务上下文、请求正文或 SQL。SDK 默认不自动上传诊断包，分享与客服工单流程由接入方显式控制。
 
 ## 构建与验证
 

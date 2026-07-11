@@ -15,13 +15,13 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
-- Documentation synchronization date: `2026-07-10`
+- Documentation synchronization date: `2026-07-11`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `3c27ff9 Refactor: centralize SDK threads via ApmExecutors with two-tier priority policy`
+- Latest runtime implementation commit before this documentation sync: `7922c99 Feat: Integrate SDK self-diagnostics`
 - Build units: `24`
 - Composition: `22` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `128` (`123` Kotlin + `4` C + `1` proto)
-- Test files: `63`
+- Main source files: `135` (`130` Kotlin + `4` C + `1` proto)
+- Test files: `70`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
@@ -76,6 +76,8 @@ Registration alone does not make every monitor automatic:
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
 
+SDK self-diagnostics are separate from event delivery. They are enabled by default and retain a 200-record memory ring plus up to three 512 KiB app-private JSONL segments through a bounded 256-record writer queue. `ApmDiagnostics` exposes status, snapshot, ZIP export, and clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
+
 ## Working Rules
 
 - Add KDoc for all `public`, `internal`, and `private` properties and methods.
@@ -83,6 +85,7 @@ Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, 
 - Extract non-trivial magic numbers and strings into named constants.
 - Create SDK threads/executors through `com.apm.core.ApmExecutors`; `apm-uploader` retains module-local executors because it cannot depend on `apm-core`.
 - Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)`.
+- Do not route diagnostics file-sink failures back through `ApmLogger` or `Apm.recordInternalError`; that path must remain non-recursive.
 - Preserve the durable SQLite outbox as the default storage path.
 - Before adding multiple upload workers or cross-process upload ownership, design batch claim/lease/expiry semantics.
 - Do not claim a config switch is an automatic hook unless a source-backed runtime path consumes it.
