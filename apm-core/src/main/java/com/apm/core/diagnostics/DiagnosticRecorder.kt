@@ -186,7 +186,18 @@ internal class DiagnosticRecorder(
     /** Flushes accepted records and exports a controlled ZIP package. */
     fun exportTo(target: File): DiagnosticExportResult {
         flush(EXPLICIT_OPERATION_FLUSH_TIMEOUT_MS)
-        return store.exportTo(target, status())
+        return try {
+            store.exportTo(target, status())
+        } catch (error: Exception) {
+            // Custom stores must follow the same failure-as-data contract as DiagnosticFileStore.
+            noteWriteFailure(error)
+            DiagnosticExportResult(
+                success = false,
+                file = null,
+                exportedRecords = 0,
+                errorMessage = DiagnosticSanitizer.sanitizeMessage(error.message ?: error.javaClass.name)
+            )
+        }
     }
 
     /** Clears persisted and in-memory records after a bounded writer flush. */

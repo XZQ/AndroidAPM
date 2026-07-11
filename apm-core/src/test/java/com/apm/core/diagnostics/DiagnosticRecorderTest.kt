@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.AtomicLong
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -101,6 +102,20 @@ class DiagnosticRecorderTest {
         assertTrue(recorder.snapshot(1).isEmpty())
         assertEquals(1L, recorder.status().readFailures)
         assertEquals(0L, recorder.status().writeFailures)
+    }
+
+    /** Explicit export failures are returned as data even for a custom diagnostic store. */
+    @Test
+    fun `export failure never escapes diagnostic recorder`() {
+        val recorder = recorder(store = ExportThrowingStore())
+        val target = File(System.getProperty("java.io.tmpdir"), "diagnostics-${System.nanoTime()}.zip")
+
+        val result = recorder.exportTo(target)
+
+        assertFalse(result.success)
+        assertNull(result.file)
+        assertEquals(0, result.exportedRecords)
+        assertTrue(result.errorMessage.orEmpty().contains("export unavailable"))
     }
 
     /** Status must read cached disk usage rather than traversing the store on the caller thread. */
@@ -253,6 +268,14 @@ class DiagnosticRecorderTest {
         /** Always fails the read boundary. */
         override fun readAll(): DiagnosticReadResult {
             throw IOException("read unavailable")
+        }
+    }
+
+    /** Store whose explicit support-package export fails before creating a file. */
+    private class ExportThrowingStore : RecordingStore() {
+        /** Always fails the explicit export boundary. */
+        override fun exportTo(target: File, status: DiagnosticStatus): DiagnosticExportResult {
+            throw IOException("export unavailable")
         }
     }
 
