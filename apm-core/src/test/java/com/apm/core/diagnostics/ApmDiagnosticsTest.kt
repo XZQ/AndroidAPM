@@ -10,6 +10,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
 /**
  * Public facade tests using the real rolling file store.
@@ -29,6 +30,7 @@ class ApmDiagnosticsTest {
     /** Stops the facade writer and removes test files. */
     @After
     fun tearDown() {
+        ApmDiagnostics.clear()
         ApmDiagnostics.shutdown()
         tempDir.deleteRecursively()
     }
@@ -68,5 +70,22 @@ class ApmDiagnosticsTest {
         assertTrue(target.exists())
         assertTrue(ApmDiagnostics.clear())
         assertTrue(ApmDiagnostics.snapshot().isEmpty())
+    }
+
+    /** Reinitialization in one process must create a distinct diagnostic session identity. */
+    @Test
+    fun `application initialization creates a new diagnostic session`() {
+        val application = RuntimeEnvironment.getApplication()
+        ApmDiagnostics.initialize(application, DiagnosticsConfig(), "com.example")
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", "first", "first", null)
+        assertTrue(ApmDiagnostics.flush(1_000L))
+        val firstSession = ApmDiagnostics.snapshot(1).single().sessionId
+
+        ApmDiagnostics.initialize(application, DiagnosticsConfig(), "com.example")
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", "second", "second", null)
+        assertTrue(ApmDiagnostics.flush(1_000L))
+        val secondSession = ApmDiagnostics.snapshot(1).single().sessionId
+
+        assertFalse(firstSession == secondSession)
     }
 }

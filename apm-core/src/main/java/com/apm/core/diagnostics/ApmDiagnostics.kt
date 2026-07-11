@@ -3,6 +3,7 @@ package com.apm.core.diagnostics
 import android.app.Application
 import com.apm.core.ProcessSessionId
 import java.io.File
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -12,6 +13,8 @@ object ApmDiagnostics {
 
     /** Active or most recently stopped diagnostics recorder. */
     private val recorder = AtomicReference<DiagnosticRecorder?>(null)
+    /** Monotonic diagnostics initialization sequence within the process. */
+    private val sessionSequence = AtomicLong(0L)
 
     /** Returns current diagnostics health and resource usage. */
     fun status(): DiagnosticStatus = recorder.get()?.status() ?: DiagnosticStatus.INACTIVE
@@ -49,7 +52,9 @@ object ApmDiagnostics {
         processName: String
     ): DiagnosticRecorder? {
         val directory = File(application.filesDir, DIAGNOSTICS_DIRECTORY)
-        return initialize(directory, config, processName, ProcessSessionId.get())
+        // Keep the process identity prefix while distinguishing stop/init cycles in the same process.
+        val sessionId = "${ProcessSessionId.get()}_${sessionSequence.incrementAndGet()}"
+        return initialize(directory, config, processName, sessionId)
     }
 
     /** Initializes diagnostics with an explicit storage directory and identity. */
