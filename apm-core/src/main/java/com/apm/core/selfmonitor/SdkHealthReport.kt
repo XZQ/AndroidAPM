@@ -28,6 +28,10 @@ data class SdkHealthReport(
     val maxUploadLatencyMs: Long,
     /** 采集周期内 SDK 内部错误数（监控模块降级处理的异常）。 */
     val internalErrorCount: Long = 0L,
+    /** Diagnostics records dropped by bounded queue pressure. */
+    val diagnosticDroppedCount: Long = 0L,
+    /** Diagnostics file-sink failures. */
+    val diagnosticWriteFailureCount: Long = 0L,
     /** 报告生成时间戳（毫秒）。 */
     val reportTimestamp: Long = System.currentTimeMillis()
 ) {
@@ -59,10 +63,25 @@ data class SdkHealthReport(
                 FIELD_DROP_RATE to String.format(Locale.ROOT, "%.4f", dropRate),
                 FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
                 FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
-                FIELD_INTERNAL_ERROR_COUNT to internalErrorCount
+                FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
+                FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
+                FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
             )
         )
     }
+
+    /** Returns the complete field map used by the runtime `core/sdk_health` event. */
+    internal fun toCoreHealthFields(): Map<String, Any> = mapOf(
+        FIELD_EMIT_COUNT to emitCount,
+        FIELD_DROP_COUNT to dropCount,
+        FIELD_DROP_RATE to dropRate,
+        FIELD_QUEUE_SIZE to queueSize,
+        FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
+        FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
+        FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
+        FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
+        FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
+    )
 
     companion object {
         /** 模块名。 */
@@ -83,5 +102,9 @@ data class SdkHealthReport(
         private const val FIELD_MAX_UPLOAD_LATENCY_MS = "maxUploadLatencyMs"
         /** 字段：内部错误数。 */
         private const val FIELD_INTERNAL_ERROR_COUNT = "internalErrorCount"
+        /** Field: diagnostics records dropped before file persistence. */
+        private const val FIELD_DIAGNOSTIC_DROPPED_COUNT = "diagnosticDroppedCount"
+        /** Field: diagnostics file-sink failures. */
+        private const val FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT = "diagnosticWriteFailureCount"
     }
 }

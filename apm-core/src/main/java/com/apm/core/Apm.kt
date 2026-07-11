@@ -15,6 +15,8 @@ import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.throttle.RateLimiter
 import com.apm.core.selfmonitor.AutoThrottle
 import com.apm.core.selfmonitor.SdkSelfMonitor
+import com.apm.core.diagnostics.ApmDiagnostics
+import com.apm.core.diagnostics.DiagnosticLevel
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
@@ -64,7 +66,21 @@ object Apm {
             if (state != null) {
                 return
             }
-            doInit(application, config)
+            try {
+                doInit(application, config)
+            } catch (error: Exception) {
+                // Preserve partial-init evidence locally, then close only the diagnostics writer thread.
+                ApmDiagnostics.record(
+                    DiagnosticLevel.ERROR,
+                    CORE_MODULE,
+                    ERROR_CODE_INIT,
+                    MESSAGE_INIT_FAILED,
+                    error
+                )
+                ApmDiagnostics.flush(DIAGNOSTICS_FLUSH_TIMEOUT_MS)
+                ApmDiagnostics.shutdown()
+                throw error
+            }
         }
     }
 
@@ -72,14 +88,24 @@ object Apm {
      * 实际初始化逻辑。已由外部 synchronized 保证线程安全。
      */
     private fun doInit(application: Application, config: ApmConfig) {
-        val logger = AndroidApmLogger(config.debugLogging)
         val processName = application.currentProcessNameCompat()
+        // Diagnostics starts before event storage and upload so their initialization failures remain inspectable.
+        val diagnostics = ApmDiagnostics.initialize(application, config.diagnostics, processName)
+        val logger = AndroidApmLogger(config.debugLogging, diagnostics)
+        diagnostics?.record(
+            DiagnosticLevel.INFO,
+            CORE_MODULE,
+            EVENT_DIAGNOSTIC_SESSION_START,
+            MESSAGE_INIT_STARTED,
+            null
+        )
 
         // 根据进程策略决定是否跳过非主进程
         if (config.processStrategy == ProcessStrategy.MAIN_PROCESS_ONLY &&
             !application.isMainProcessCompat()
         ) {
             logger.d("Skip init in non-main process: $processName")
+            ApmDiagnostics.shutdown()
             return
         }
 
@@ -223,6 +249,15 @@ object Apm {
         }
         currentState.startedModules.clear()
         currentState.dispatcher.shutdown()
+        ApmDiagnostics.record(
+            DiagnosticLevel.INFO,
+            CORE_MODULE,
+            EVENT_DIAGNOSTIC_SESSION_STOP,
+            MESSAGE_STOPPED,
+            null
+        )
+        ApmDiagnostics.flush(DIAGNOSTICS_FLUSH_TIMEOUT_MS)
+        ApmDiagnostics.shutdown()
     }
 
     /**
@@ -295,18 +330,23 @@ object Apm {
      * 记录一次 SDK 内部错误。
      *
      * 供各监控模块在捕获并降级处理异常时调用，把原本"静默吞掉"的
-     * 失败变为自监控计数与调试日志，便于发现监控能力自身的退化。
-     * 未初始化时安静忽略；本方法自身绝不抛出异常。
+     * 失败变为自监控计数与独立本地诊断记录，便于发现监控能力自身的退化。
+     * 正常运行时同时累计健康指标；普通运行状态尚未发布但诊断运行时已建立时，
+     * 仍保留结构化错误。本方法自身绝不抛出异常。
      *
      * @param tag 错误来源标签（如 "ipc_write"、"fps_frame_metrics_register"）
      * @param error 捕获到的异常，可为 null
      */
     fun recordInternalError(tag: String, error: Throwable? = null) {
-        // 未初始化（如纯 JVM 单测直接构造组件）时为无害 no-op
-        val currentState = state ?: return
-        currentState.context.selfMonitor?.recordInternalError(tag)
-        // 调试日志受 debugLogging 开关门控，线上默认静默
-        currentState.context.logger.d("Internal error [$tag]: $error")
+        state?.context?.selfMonitor?.recordInternalError(tag)
+        // Structured ERROR diagnostics remain independent of debugLogging and the normal event pipeline.
+        ApmDiagnostics.record(
+            DiagnosticLevel.ERROR,
+            CORE_MODULE,
+            tag,
+            MESSAGE_INTERNAL_ERROR,
+            error
+        )
     }
 
     /**
@@ -428,20 +468,17 @@ object Apm {
         return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
-                    val report = monitor.generateReport()
+                    val diagnosticsStatus = ApmDiagnostics.status()
+                    val report = monitor.generateReport().copy(
+                        diagnosticDroppedCount = diagnosticsStatus.droppedRecords,
+                        diagnosticWriteFailureCount = diagnosticsStatus.writeFailures
+                    )
                     emit(
                         module = CORE_MODULE,
                         name = EVENT_SDK_HEALTH,
                         severity = ApmSeverity.INFO,
                         priority = ApmPriority.LOW,
-                        fields = mapOf(
-                            FIELD_EMIT_COUNT to report.emitCount,
-                            FIELD_DROP_COUNT to report.dropCount,
-                            FIELD_DROP_RATE to report.dropRate,
-                            FIELD_QUEUE_SIZE to report.queueSize,
-                            FIELD_AVG_UPLOAD_LATENCY to report.avgUploadLatencyMs,
-                            FIELD_MAX_UPLOAD_LATENCY to report.maxUploadLatencyMs
-                        )
+                        fields = report.toCoreHealthFields()
                     )
                     if (config.enableAutoThrottle) {
                         applyAutoThrottle(AutoThrottle.computeModulesToDisable(report))
@@ -501,23 +538,29 @@ object Apm {
     /** SDK health event name. */
     private const val EVENT_SDK_HEALTH = "sdk_health"
 
-    /** Health field: emitted events. */
-    private const val FIELD_EMIT_COUNT = "emitCount"
+    /** Diagnostic code for SDK session start. */
+    private const val EVENT_DIAGNOSTIC_SESSION_START = "session_start"
 
-    /** Health field: dropped events. */
-    private const val FIELD_DROP_COUNT = "dropCount"
+    /** Diagnostic code for SDK session stop. */
+    private const val EVENT_DIAGNOSTIC_SESSION_STOP = "session_stop"
 
-    /** Health field: drop ratio. */
-    private const val FIELD_DROP_RATE = "dropRate"
+    /** Diagnostic code for initialization failure. */
+    private const val ERROR_CODE_INIT = "init_failed"
 
-    /** Health field: durable or in-memory queue size. */
-    private const val FIELD_QUEUE_SIZE = "queueSize"
+    /** Safe initialization-start message. */
+    private const val MESSAGE_INIT_STARTED = "APM initialization started"
 
-    /** Health field: average upload latency. */
-    private const val FIELD_AVG_UPLOAD_LATENCY = "avgUploadLatencyMs"
+    /** Safe initialization-failure message. */
+    private const val MESSAGE_INIT_FAILED = "APM initialization failed"
 
-    /** Health field: maximum upload latency. */
-    private const val FIELD_MAX_UPLOAD_LATENCY = "maxUploadLatencyMs"
+    /** Safe internal-error message. */
+    private const val MESSAGE_INTERNAL_ERROR = "Internal SDK error"
+
+    /** Safe shutdown message. */
+    private const val MESSAGE_STOPPED = "APM stopped"
+
+    /** Bounded diagnostics flush during init failure and normal shutdown. */
+    private const val DIAGNOSTICS_FLUSH_TIMEOUT_MS = 1_000L
 
     /** Conventional context key used for stable gray-release assignment. */
     private const val CONTEXT_USER_ID = "userId"

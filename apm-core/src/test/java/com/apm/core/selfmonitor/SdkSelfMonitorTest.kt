@@ -137,6 +137,27 @@ class SdkSelfMonitorTest {
         assertNotNull(event.fields["queueSize"])
     }
 
+    /** Runtime health fields must include internal and diagnostics-sink failures. */
+    @Test
+    fun `health fields include internal and diagnostic failures`() {
+        val report = SdkHealthReport(
+            emitCount = 1L,
+            dropCount = 0L,
+            queueSize = 0,
+            avgUploadLatencyMs = 2L,
+            maxUploadLatencyMs = 3L,
+            internalErrorCount = 4L,
+            diagnosticDroppedCount = 5L,
+            diagnosticWriteFailureCount = 6L
+        )
+
+        val fields = report.toCoreHealthFields()
+
+        assertEquals(4L, fields["internalErrorCount"])
+        assertEquals(5L, fields["diagnosticDroppedCount"])
+        assertEquals(6L, fields["diagnosticWriteFailureCount"])
+    }
+
     /** AutoThrottle 在正常状态下不应建议禁用模块。 */
     @Test
     fun `autoThrottle no action when healthy`() {
