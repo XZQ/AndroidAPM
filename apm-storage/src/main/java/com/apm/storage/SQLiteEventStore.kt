@@ -364,9 +364,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
             ids.map { it.toString() }.toTypedArray()
         )
         // 删除后同步扣减缓存计数
-        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
-            cachedRowCount.addAndGet(-deleted.toLong())
-        }
+        decrementCachedCount(deleted)
         return deleted
     }
 
@@ -421,9 +419,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
             arrayOf(maxRetryCount.toString(), oldestAllowedTimestamp.toString(), nowMs.toString())
         )
         // 清理后同步扣减缓存计数
-        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
-            cachedRowCount.addAndGet(-deleted.toLong())
-        }
+        decrementCachedCount(deleted)
         return deleted
     }
 
@@ -480,7 +476,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                 "$COLUMN_ID IN ($placeholders)",
                 idsToDelete.map { it.toString() }.toTypedArray()
             )
-            cachedRowCount.addAndGet(-deleted.toLong())
+            decrementCachedCount(deleted)
         }
     }
 
@@ -521,8 +517,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
 
     /** Applies one deletion delta without mutating an uninitialized cache. */
     private fun decrementCachedCount(deleted: Int) {
-        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
-            cachedRowCount.addAndGet(-deleted.toLong())
+        if (deleted <= 0) {
+            return
+        }
+        cachedRowCount.updateAndGet { current ->
+            if (current == UNINITIALIZED_COUNT) current else (current - deleted.toLong()).coerceAtLeast(0L)
         }
     }
 

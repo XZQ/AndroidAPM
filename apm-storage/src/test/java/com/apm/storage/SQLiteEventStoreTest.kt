@@ -163,6 +163,22 @@ class SQLiteEventStoreTest {
         assertEquals(first.single().id, reclaimed.single().id)
     }
 
+    /** Lease expiry arithmetic saturates instead of wrapping into an already-expired value. */
+    @Test
+    fun `lease expiry saturates at long max`() {
+        store.append(event("overflow"))
+        val claimed = store.claimPending(
+            "worker-a",
+            1,
+            Long.MAX_VALUE - LEASE_OVERFLOW_DELTA_MS,
+            LEASE_DURATION_MS
+        )
+
+        val reclaimed = store.claimPending("worker-b", 1, Long.MAX_VALUE, LEASE_DURATION_MS)
+
+        assertEquals(claimed.single().id, reclaimed.single().id)
+    }
+
     /** An owner cannot acknowledge rows leased by another worker. */
     @Test
     fun `owner mismatch cannot acknowledge claim`() {
@@ -300,9 +316,42 @@ class SQLiteEventStoreTest {
         assertEquals(1, store.pendingCount())
     }
 
+    /** A stale process-local cache must not become negative after another store adds rows. */
+    @Test
+    fun `cross store deletion cannot drive cached count negative`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "count-race-${System.nanoTime()}.db"
+        val firstStore = SQLiteEventStore(EventDbHelper(context, databaseName), maxEvents = COUNT_TEST_MAX_EVENTS)
+        val secondStore = SQLiteEventStore(EventDbHelper(context, databaseName), maxEvents = COUNT_TEST_MAX_EVENTS)
+        try {
+            firstStore.append(event("seed"))
+            secondStore.appendBatch(listOf(event("external-1"), event("external-2")))
+            firstStore.deletePending(firstStore.readPending(10).map(PendingEvent::id))
+
+            firstStore.appendBatch((0 until COUNT_TEST_APPEND_SIZE).map { event("replacement-$it") })
+
+            assertEquals(COUNT_TEST_MAX_EVENTS, firstStore.pendingCount())
+        } finally {
+            firstStore.close()
+            secondStore.close()
+        }
+    }
+
     companion object {
         /** 测试用容量上限。 */
         private const val TEST_MAX_EVENTS = 20
+
+        /** Capacity used to expose stale negative cached counts. */
+        private const val COUNT_TEST_MAX_EVENTS = 10
+
+        /** Replacement rows that must trigger one capacity eviction. */
+        private const val COUNT_TEST_APPEND_SIZE = 11
+
+        /** Distance from Long.MAX_VALUE used to force saturated lease addition. */
+        private const val LEASE_OVERFLOW_DELTA_MS = 5L
+
+        /** Positive lease duration shared by overflow assertions. */
+        private const val LEASE_DURATION_MS = 10L
 
         /** 批量写入条数。 */
         private const val BATCH_SIZE = 5
