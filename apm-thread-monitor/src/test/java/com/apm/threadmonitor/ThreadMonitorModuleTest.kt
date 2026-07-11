@@ -53,11 +53,11 @@ class ThreadMonitorModuleTest {
         assertTrue(config.enableThreadPoolMonitor)
     }
 
-    /** 默认开启线程泄漏检测。 */
+    /** 不存在可靠通用线程泄漏判断，因此兼容字段默认关闭。 */
     @Test
-    fun `default enable thread leak detect is true`() {
+    fun `default enable thread leak detect is false`() {
         val config = ThreadMonitorConfig()
-        assertTrue(config.enableThreadLeakDetect)
+        assertFalse(config.enableThreadLeakDetect)
     }
 
     /** 默认队列积压阈值 100。 */

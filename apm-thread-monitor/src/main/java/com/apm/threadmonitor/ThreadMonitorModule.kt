@@ -8,6 +8,7 @@ import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 
 /**
@@ -34,6 +35,9 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
     @Volatile
     private var monitoring = false
 
+    /** Host-registered executors that expose real queue backlog metrics. */
+    private val threadPools = ThreadPoolRegistry()
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
@@ -59,7 +63,27 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         monitoring = false
         scheduler?.shutdownNow()
         scheduler = null
+        threadPools.clear()
     }
+
+    /**
+     * Registers one host-owned executor for queue and saturation monitoring.
+     * Registration does not change executor behavior or ownership.
+     *
+     * @param name stable name included in telemetry
+     * @param executor host-owned executor
+     */
+    fun registerThreadPool(name: String, executor: ThreadPoolExecutor) {
+        threadPools.register(name, executor)
+    }
+
+    /**
+     * Stops monitoring one previously registered executor.
+     *
+     * @param name registration name
+     * @return true when a registration was removed
+     */
+    fun unregisterThreadPool(name: String): Boolean = threadPools.unregister(name)
 
     /**
      * 执行线程快照检测。
@@ -88,6 +112,34 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         val blockedThreads = threads.filter { it.state == Thread.State.BLOCKED }
         if (blockedThreads.isNotEmpty()) {
             reportBlockedThreads(blockedThreads)
+        }
+
+        if (config.enableThreadPoolMonitor) {
+            inspectRegisteredThreadPools()
+        }
+    }
+
+    /** Reports real queue backlog for explicitly registered executors. */
+    private fun inspectRegisteredThreadPools() {
+        for (snapshot in threadPools.snapshots()) {
+            if (snapshot.queuedTasks >= config.queueBacklogThreshold) {
+                Apm.emit(
+                    module = MODULE_NAME,
+                    name = EVENT_THREAD_POOL_BACKLOG,
+                    kind = ApmEventKind.ALERT,
+                    severity = ApmSeverity.WARN,
+                    priority = ApmPriority.LOW,
+                    fields = mapOf(
+                        FIELD_POOL_NAME to snapshot.name,
+                        FIELD_QUEUE_SIZE to snapshot.queuedTasks,
+                        FIELD_POOL_SIZE to snapshot.poolSize,
+                        FIELD_ACTIVE_COUNT to snapshot.activeCount,
+                        FIELD_MAX_POOL_SIZE to snapshot.maxPoolSize,
+                        FIELD_COMPLETED_TASKS to snapshot.completedTaskCount,
+                        FIELD_THRESHOLD to config.queueBacklogThreshold
+                    )
+                )
+            }
         }
     }
 
@@ -152,6 +204,8 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
         /** BLOCKED 线程事件。 */
         private const val EVENT_BLOCKED_THREAD = "blocked_thread"
+        /** Registered executor queue backlog event. */
+        private const val EVENT_THREAD_POOL_BACKLOG = "thread_pool_backlog"
 
         /** 字段：线程数。 */
         private const val FIELD_THREAD_COUNT = "threadCount"
@@ -167,6 +221,18 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
         /** 字段：线程信息。 */
         private const val FIELD_THREAD_INFO = "threadInfo"
+        /** Field: registered pool name. */
+        private const val FIELD_POOL_NAME = "poolName"
+        /** Field: queued task count. */
+        private const val FIELD_QUEUE_SIZE = "queueSize"
+        /** Field: current worker count. */
+        private const val FIELD_POOL_SIZE = "poolSize"
+        /** Field: active worker count. */
+        private const val FIELD_ACTIVE_COUNT = "activeCount"
+        /** Field: configured maximum worker count. */
+        private const val FIELD_MAX_POOL_SIZE = "maxPoolSize"
+        /** Field: completed task count. */
+        private const val FIELD_COMPLETED_TASKS = "completedTaskCount"
 
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"

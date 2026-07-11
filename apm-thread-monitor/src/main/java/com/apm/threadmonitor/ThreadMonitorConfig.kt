@@ -17,11 +17,19 @@ data class ThreadMonitorConfig(
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** 是否启用线程池监控。 */
     val enableThreadPoolMonitor: Boolean = true,
-    /** 是否启用线程泄漏检测。 */
-    val enableThreadLeakDetect: Boolean = true,
+    /**
+     * Compatibility-only generic thread leak switch. Thread liveness alone
+     * cannot establish a leak; use explicit pool registration and backlog data.
+     */
+    @Deprecated(
+        message = "Generic thread leak detection is not reliable; register ThreadPoolExecutor instances explicitly",
+        replaceWith = ReplaceWith("false")
+    )
+    val enableThreadLeakDetect: Boolean = false,
     /** 线程池队列积压告警阈值。 */
     val queueBacklogThreshold: Int = DEFAULT_QUEUE_BACKLOG_THRESHOLD,
-    /** 线程疑似泄漏阈值（毫秒），线程存活超过此时间且无活动视为泄漏。 */
+    /** Compatibility-only threshold retained for source compatibility. */
+    @Deprecated(message = "Generic thread leak detection is not supported")
     val threadLeakThresholdMs: Long = DEFAULT_THREAD_LEAK_THRESHOLD_MS
 ) {
     companion object {
