@@ -23,6 +23,12 @@ class ApmConfigTest {
         assertTrue(config.debugLogging)
     }
 
+    /** 默认开启独立的 SDK 自诊断日志。 */
+    @Test
+    fun `default diagnostics config is enabled`() {
+        assertTrue(ApmConfig().diagnostics.enabled)
+    }
+
     /** 默认进程策略为主进程。 */
     @Test
     fun `default processStrategy is main only`() {

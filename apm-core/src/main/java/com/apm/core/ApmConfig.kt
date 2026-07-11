@@ -2,6 +2,7 @@ package com.apm.core
 
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
+import com.apm.core.diagnostics.DiagnosticsConfig
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 
@@ -48,6 +49,8 @@ data class ApmConfig(
     val uploader: ApmUploader? = null,
     /** 是否开启调试日志（Log.d 级别）。 */
     val debugLogging: Boolean = true,
+    /** 独立 SDK 自诊断日志配置。 */
+    val diagnostics: DiagnosticsConfig = DiagnosticsConfig(),
     /** 进程策略：控制 APM 在哪些进程中初始化。 */
     val processStrategy: ProcessStrategy = ProcessStrategy.MAIN_PROCESS_ONLY,
     /** 自定义进程模块映射：进程名 → 允许运行的模块名列表。仅 [ProcessStrategy.CUSTOM] 时生效。 */
