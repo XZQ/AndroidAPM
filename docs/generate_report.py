@@ -15,7 +15,7 @@ from docx.shared import Inches, Pt, RGBColor
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
 REPORT_DATE = "2026-07-11"
-RUNTIME_COMMIT = "e593aaa"
+RUNTIME_COMMIT = "210236f"
 
 
 def set_cell_shading(cell, fill: str) -> None:

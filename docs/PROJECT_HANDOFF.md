@@ -39,7 +39,7 @@
 最新 runtime 实现提交（文档同步前）为：
 
 ```text
-b423ad7 Refactor: Make APM lifecycle failure-safe
+210236f Fix: Warn on ignored legacy switches
 ```
 
 之后的提交可能是样式、文档或仓库跟踪调整；使用 Git 历史判断实际 tip。
@@ -105,7 +105,7 @@ Apm.emit
 
 ## 验证
 
-2026-07-11 已在 JDK 21.0.11 对完成 SDK 自诊断加固的当前 tip 执行：
+2026-07-11 已在 JDK 21.0.11 对客户端收口后的当前 tip 执行：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -116,7 +116,7 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。XML 报告合计 75 个套件、514 个测试，0 failures / 0 errors / 0 skipped；生成 21 份 lint HTML、4,606,048 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机多进程矩阵仍属于外部验证项，未计入本地完成证明。
+全部通过。XML 报告合计 76 个套件、507 个测试，0 failures / 0 errors / 0 skipped；生成 22 份 lint HTML、4,622,432 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
 
 ## 新电脑接手
 

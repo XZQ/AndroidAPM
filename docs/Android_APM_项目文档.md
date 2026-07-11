@@ -48,7 +48,7 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `b423ad7 Refactor: Make APM lifecycle failure-safe` |
+| 最新 runtime 实现提交（文档同步前） | `210236f Fix: Warn on ignored legacy switches` |
 | root Gradle subproject | 23 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 25 |
@@ -232,10 +232,11 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- 75 个 JUnit XML 测试套件、514 个测试，0 failures / 0 errors / 0 skipped；
-- 21 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,606,048 字节；
+- 76 个 JUnit XML 测试套件、507 个测试，0 failures / 0 errors / 0 skipped；
+- 22 份 `lint-results-debug.html`；
+- `apm-sample-app-release-unsigned.apk`，4,622,432 字节；
 - Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
+- `apm-benchmark` 未进入 Maven Local publication，Release 与 AndroidTest Kotlin 均编译成功；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
