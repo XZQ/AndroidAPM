@@ -123,7 +123,7 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - 一批在单个 SQLite transaction 中 insert
 - `event_id` UNIQUE + conflict-ignore 使重复追加幂等，缓存计数只增加真实 insert
 - `data` 对新行写空串，避免与 payload 双序列化
-- cached row count 随增删维护
+- cached row count 随增删维护；跨 store 删除造成的 stale delta 下限为 0，不能变成负数并绕过水位淘汰
 - 每 512 条 append 执行 COUNT(*) 重同步
 - WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 
@@ -196,7 +196,7 @@ claimPending(owner, lease)
   -> success: acknowledgeClaim(owner)
   -> failure: failClaim(owner)
             -> delayForAttempt(max row retry + 1)
-            -> max with retryAfterHint
+            -> clamp(max with retryAfterHint, 10 ms, 60 s)
             -> reselect later
 ```
 
@@ -240,7 +240,7 @@ claimPending(owner, lease)
 
 `apm-model`：Line Protocol、codec 边界/回放、priority、Protobuf。
 
-`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim 与双 store 并发 claim。
+`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
 `apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After。
 

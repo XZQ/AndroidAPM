@@ -8,6 +8,8 @@
 
 端上事件管线、稳定 eventId、SQLite durable outbox、并发 upload lease、批量上传、显式监控接入和 benchmark harness 已有测试与本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布和真机长稳数值属于外部建设，统一见 `docs/云端待建设清单.md`。
 
+生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
+
 ## 事实源
 
 1. 当前源码/构建文件
@@ -30,7 +32,7 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 主源码 | 143：138 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 78 |
+| 测试/benchmark 文件 | 80 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
@@ -116,7 +118,7 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。Root Gradle XML 报告合计 80 个套件、535 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 22 份 lint HTML、4,687,968 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
+全部通过。Root Gradle XML 报告合计 82 个套件、553 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 22 份 lint HTML、4,687,968 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
 
 ## 新电脑接手
 

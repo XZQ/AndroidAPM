@@ -81,7 +81,7 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "25", "23 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "143", "138 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "78", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
+        ("测试文件", "80", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "JDK 21 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_COMMIT, "客户端收口后的当前实现"),

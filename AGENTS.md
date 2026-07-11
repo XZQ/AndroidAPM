@@ -18,11 +18,11 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 - Documentation synchronization date: `2026-07-11`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `210236f Fix: Warn on ignored legacy switches`
+- Latest runtime implementation commit before this documentation sync: `70a879d Fix: Close reliability review findings`
 - Build units: `25`
 - Composition: `23` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
 - Main source files: `143` (`138` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `78`
+- Test/benchmark files: `80`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
@@ -37,7 +37,7 @@ Fresh checks executed on `2026-07-11` against the completed client-closure tip:
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.11`. Root Gradle XML reports contain `80` suites and `535` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,687,968` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. The Android SDK was present but `adb devices` reported no connected target, so physical-device measurements remain external validation rather than fabricated local results.
+All commands passed under JDK `21.0.11`. Root Gradle XML reports contain `82` suites and `553` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,687,968` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. The Android SDK was present but `adb devices` reported no connected target, so physical-device measurements remain external validation rather than fabricated local results.
 
 ## Project Boundary
 
@@ -75,6 +75,7 @@ Registration alone does not make every monitor automatic:
 - Render measures view count/depth and API 24+ FrameMetrics. Deprecated `detectOverdraw=false` is truthful because no supported GPU overdraw counter exists.
 - Thread monitoring inspects count/name/BLOCKED state; real ThreadPoolExecutor backlog requires explicit registration. Generic leak fields are deprecated/false.
 - GC count/time/allocation/reclaim analysis consumes monotonic ART cumulative counters on an `ApmExecutors` background sampler; missing/reset counters invalidate only that dimension/window, invalid intervals clamp to one second, and available heap dimensions continue.
+- Reliability priority is host safety, then telemetry durability, then diagnostic completeness. Recoverable `Exception` failures are isolated at dispatcher/store/uploader/diagnostics boundaries; fatal VM errors are not converted into drops or retries. Retry hints are bounded to 60 seconds, cached outbox deletion counts cannot become negative, and diagnostics export failures return failure data.
 - `apm-otel-exporter` maps data only; it does not depend on or send through the OTel SDK.
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.

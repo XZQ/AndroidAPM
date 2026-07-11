@@ -9,7 +9,7 @@
 - 同步日期：2026-07-11
 - 25 个构建单元：23 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 143 个主源码文件：138 Kotlin + 4 C + 1 proto
-- 78 个测试/benchmark 文件
+- 80 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
@@ -34,6 +34,8 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
 Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网络请求。非上传进程可选择通过 `.tmp` 写入、`.ipc` 发布的文件通道交给主进程。
 
 每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避，达到 10 次重试或超过 7 天后清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
+
+生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。单个 lazy event/聚合/脱敏异常不会杀死共享 dispatcher worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
 
 ## 模块组成
 
@@ -228,6 +230,8 @@ Matrix 的强项是成熟的 Trace/IO/SQLite/Battery 与 Native Hook 体系；KO
 APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同时进入 Logcat 与独立本地诊断 journal。该 journal 不依赖 `ApmDispatcher`、事件 SQLite outbox 或 uploader，因此这些组件异常时仍可保留本地证据。
 
 默认资源上限为：200 条 / 4 MiB 内存记录、256 条 / 4 MiB 非阻塞写队列、每个 Android 进程 3 个 512 KiB app-private JSONL 文件。进程目录由进程名和稳定哈希隔离；队列满时丢弃而不阻塞宿主，文件失败时先保留排队记录等待冷却重试，并降级为内存 + Logcat，且不会递归进入 APM logger。
+
+显式 ZIP 导出同样采用 failure-as-data：即使自定义 diagnostic store 抛出文件异常，也返回 `DiagnosticExportResult(success=false)`，不会把诊断故障抛回宿主支持流程。
 
 ```kotlin
 val status = ApmDiagnostics.status()

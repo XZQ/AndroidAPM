@@ -96,7 +96,7 @@ resolve lazy event
      non-durable store: uploader.upload each event
 ```
 
-存储异常会把整批计入 drop，但不会让 worker 退出。
+单个 queued event 的 lazy factory、聚合、限流或脱敏出现 recoverable `Exception` 时只丢弃该事件并记录 internal error，后续事件继续；批量存储的 recoverable 异常会把整批计入 drop，但不会让 worker 退出。`VirtualMachineError` 等 fatal VM error 不转换为 drop。
 
 ### 聚合维护
 
@@ -114,13 +114,15 @@ claimPending(ownerId, batchSize, now, leaseDuration)
       ordinary uploader: all(event.upload)
     success -> acknowledgeClaim(ownerId, ids) + record latency
     failure -> failClaim(ownerId, ids) and release ownership
-            -> max(local backoff, Retry-After)
+            -> clamp(max(local backoff, Retry-After), 10 ms, 60 s)
             -> wait and reselect
 ```
 
 单一重试权威位于 outbox worker；durable store 下 `UploaderFactory` 不再套 `RetryingApmUploader`，避免双队列/双重试。
 
 每个 Worker 使用 `ProcessSessionId + process-local sequence` 作为 owner。SQLite 在写事务中选择并持久化 claim，另一个 store/进程看不到活动租约；只有 owner 可 ACK 或失败释放，shutdown 释放其全部 claim，expiry 后其他 Worker 可重领。默认 `uploadLeaseDurationMs=120000`。
+
+claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降级；fatal VM error 不被 `runCatching` 吞掉。自定义同步 uploader 若忽略 interrupt，SDK 只能在 3 秒后结束等待并依赖 lease expiry 让其他 Worker 恢复，无法安全终止任意宿主代码。
 
 ## 7. UploaderFactory
 
@@ -186,7 +188,7 @@ PII sanitization 默认关闭。内置规则覆盖手机号、邮箱、身份证
 
 独立诊断默认使用 200 条 / 4 MiB 内存环、256 条 / 4 MiB 非阻塞写队列，以及每进程 3 × 512 KiB app-private JSONL。普通日志调用线程不做文件 IO；ERROR 只可挤出较旧的非 ERROR 排队记录并计入 drop。文件失败进入冷却时 writer 在出队前等待，已接受记录不会被静默结算；读/写失败独立计数，`status()` 使用缓存磁盘字节且不遍历文件。文件异常不通过 `ApmLogger` 递归报告。
 
-进程名安全前缀 + SHA-256 前缀形成稳定独立目录，避免子进程与主进程轮转同一文件。`exportTo` 聚合最近最多 16 个进程 journal、合并当前内存证据，并以 10,000 条 / 16 MiB 双上限约束未压缩 JSONL；目标不能覆盖任一源 segment，manifest 包含格式/SDK/session/process 及截断元数据。`snapshot/exportTo` 同步兼容接口要求工作线程，宿主应优先使用 `snapshotAsync/exportToAsync`；`clear` 仅清当前进程，`clearAllProcesses` 为显式跨进程清理。
+进程名安全前缀 + SHA-256 前缀形成稳定独立目录，避免子进程与主进程轮转同一文件。`exportTo` 聚合最近最多 16 个进程 journal、合并当前内存证据，并以 10,000 条 / 16 MiB 双上限约束未压缩 JSONL；目标不能覆盖任一源 segment，manifest 包含格式/SDK/session/process 及截断元数据。自定义 diagnostic store 导出异常也转换为 `DiagnosticExportResult(success=false)`，不逃逸到宿主。`snapshot/exportTo` 同步兼容接口要求工作线程，宿主应优先使用 `snapshotAsync/exportToAsync`；`clear` 仅清当前进程，`clearAllProcesses` 为显式跨进程清理。
 
 初始化资源先保存在局部 staged 状态，全部成功后才发布；失败时按 scheduler → coordinator → dispatcher（或 uploader/store）逆序回滚。停止阶段隔离各模块与基础设施异常，独立诊断最后关闭。`ApmLogger.withComponent` 为 uploader、dispatcher、aggregation、privacy 和具体监控模块保留真实归属。`sdk_health` 中诊断 drop/write failure 使用区间增量而非累计值。
 
