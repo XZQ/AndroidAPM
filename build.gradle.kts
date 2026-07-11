@@ -13,6 +13,7 @@ plugins {
     alias(libs.plugins.android.library) apply false
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.jvm) apply false
+    alias(libs.plugins.androidx.benchmark) apply false
 }
 
 group = "com.apm"
@@ -91,7 +92,7 @@ subprojects {
         }
     }
 
-    pluginManager.withPlugin("com.android.library") {
+    if (name != "apm-benchmark") pluginManager.withPlugin("com.android.library") {
         extensions.configure<LibraryExtension>("android") {
             defaultConfig {
                 consumerProguardFiles(rootProject.file("consumer-rules.pro"))

@@ -41,5 +41,6 @@ include(
     ":apm-render",
     ":apm-trace",
     ":apm-otel-exporter",
+    ":apm-benchmark",
     ":apm-sample-app"
 )
