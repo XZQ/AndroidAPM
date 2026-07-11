@@ -22,6 +22,7 @@ import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * APM 框架统一入口。单例对象。
@@ -109,6 +110,12 @@ object Apm {
             return
         }
 
+        var stagedStore: EventStore? = null
+        var stagedUploader: ApmUploader? = null
+        var stagedDispatcher: ApmDispatcher? = null
+        var stagedCoordinator: ProcessEventCoordinator? = null
+        var stagedMonitoringExecutor: ScheduledExecutorService? = null
+        try {
         // 创建本地存储：根据配置选择文件存储或 SQLite 持久化存储
         val store: EventStore = when (config.storageType) {
             StorageType.SQLITE -> {
@@ -126,13 +133,15 @@ object Apm {
                 FileEventStore(application)
             }
         }
+        stagedStore = store
 
         // 上传通道：优先使用显式自定义 uploader，其次按 endpoint 自动推导。
         val uploader: ApmUploader = UploaderFactory.create(
             config = config,
             durableStore = store is com.apm.storage.PendingEventStore,
-            logger = logger
+            logger = logger.withComponent(UPLOADER_MODULE)
         )
+        stagedUploader = uploader
 
         // 限流器：按 module/name 分桶，超出配额的事件被丢弃
         val rateLimiter = if (config.rateLimitEventsPerWindow > 0) {
@@ -144,7 +153,7 @@ object Apm {
             EventAggregator(
                 windowMs = config.aggregationWindowMs,
                 enabled = true,
-                logger = logger
+                logger = logger.withComponent(AGGREGATION_MODULE)
             )
         } else null
 
@@ -152,7 +161,7 @@ object Apm {
         val piiSanitizer = if (config.enablePiiSanitization) {
             PiiSanitizer(
                 rules = DefaultSanitizationRules.all() + config.customSanitizationRules,
-                logger = logger
+                logger = logger.withComponent(PRIVACY_MODULE)
             )
         } else null
 
@@ -164,7 +173,7 @@ object Apm {
         val dispatcher = ApmDispatcher(
             store = store,
             uploader = uploader,
-            logger = logger,
+            logger = logger.withComponent(DISPATCHER_MODULE),
             rateLimiter = rateLimiter,
             aggregator = aggregator,
             piiSanitizer = piiSanitizer,
@@ -175,15 +184,18 @@ object Apm {
             ),
             uploadBatchSize = config.uploadBatchSize
         )
+        stagedDispatcher = dispatcher
         val isUploaderProcess = application.isMainProcessCompat()
         val processCoordinator = if (config.enableMultiProcessCoordination) {
-            ProcessEventCoordinator(application, isUploaderProcess).apply {
-                onRemoteEvent = dispatcher::dispatch
-                start()
-            }
+            val coordinator = ProcessEventCoordinator(application, isUploaderProcess)
+            stagedCoordinator = coordinator
+            coordinator.onRemoteEvent = dispatcher::dispatch
+            coordinator.start()
+            coordinator
         } else {
             null
         }
+        stagedCoordinator = processCoordinator
         val context = ApmContext(
             application = application,
             config = config,
@@ -195,6 +207,7 @@ object Apm {
         )
         context.selfMonitor = selfMonitor
         val monitoringExecutor = createSelfMonitoringExecutor(config, selfMonitor)
+        stagedMonitoringExecutor = monitoringExecutor
         val newState = State(
             context = context,
             store = store,
@@ -207,6 +220,18 @@ object Apm {
         // 启动所有已注册的模块
         modules.forEach(::startModule)
         logger.d("APM initialized in process=$processName modules=${modules.size}")
+        } catch (error: Exception) {
+            // Publish nothing after failure and release completed stages in reverse ownership order.
+            state = null
+            cleanupInitializationFailure(
+                monitoringExecutor = stagedMonitoringExecutor,
+                coordinator = stagedCoordinator,
+                dispatcher = stagedDispatcher,
+                uploader = stagedUploader,
+                store = stagedStore
+            )
+            throw error
+        }
     }
 
     /**
@@ -242,22 +267,26 @@ object Apm {
             state = null
             active
         }
-        currentState.selfMonitorExecutor?.shutdownNow()
-        currentState.processCoordinator?.stop()
-        currentState.startedModules.forEach {
-            runCatching { it.onStop() }
+        cleanupSafely(ERROR_TAG_STOP_MONITOR) { currentState.selfMonitorExecutor?.shutdownNow() }
+        cleanupSafely(ERROR_TAG_STOP_COORDINATOR) { currentState.processCoordinator?.stop() }
+        currentState.startedModules.forEach { module ->
+            cleanupSafely("$ERROR_TAG_STOP_MODULE_PREFIX${module.name}") { module.onStop() }
         }
         currentState.startedModules.clear()
-        currentState.dispatcher.shutdown()
-        ApmDiagnostics.record(
-            DiagnosticLevel.INFO,
-            CORE_MODULE,
-            EVENT_DIAGNOSTIC_SESSION_STOP,
-            MESSAGE_STOPPED,
-            null
-        )
-        ApmDiagnostics.flush(DIAGNOSTICS_FLUSH_TIMEOUT_MS)
-        ApmDiagnostics.shutdown()
+        cleanupSafely(ERROR_TAG_STOP_DISPATCHER) { currentState.dispatcher.shutdown() }
+        try {
+            ApmDiagnostics.record(
+                DiagnosticLevel.INFO,
+                CORE_MODULE,
+                EVENT_DIAGNOSTIC_SESSION_STOP,
+                MESSAGE_STOPPED,
+                null
+            )
+            ApmDiagnostics.flush(DIAGNOSTICS_FLUSH_TIMEOUT_MS)
+        } finally {
+            // Diagnostics closes last so cleanup degradation remains inspectable.
+            ApmDiagnostics.shutdown()
+        }
     }
 
     /**
@@ -403,7 +432,10 @@ object Apm {
             return
         }
         runCatching {
-            module.onInitialize(currentState.context)
+            val moduleContext = currentState.context.withLogger(
+                currentState.context.logger.withComponent(module.name)
+            )
+            module.onInitialize(moduleContext)
             module.onStart()
             currentState.startedModules += module
             currentState.context.logger.d("Started module=${module.name}")
@@ -465,13 +497,19 @@ object Apm {
         if (monitor == null || config.selfMonitorIntervalMs <= 0L) {
             return null
         }
+        val previousDiagnosticDrops = AtomicLong(0L)
+        val previousDiagnosticWriteFailures = AtomicLong(0L)
         return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
                     val diagnosticsStatus = ApmDiagnostics.status()
+                    val droppedDelta = (diagnosticsStatus.droppedRecords -
+                        previousDiagnosticDrops.getAndSet(diagnosticsStatus.droppedRecords)).coerceAtLeast(0L)
+                    val writeFailureDelta = (diagnosticsStatus.writeFailures -
+                        previousDiagnosticWriteFailures.getAndSet(diagnosticsStatus.writeFailures)).coerceAtLeast(0L)
                     val report = monitor.generateReport().copy(
-                        diagnosticDroppedCount = diagnosticsStatus.droppedRecords,
-                        diagnosticWriteFailureCount = diagnosticsStatus.writeFailures
+                        diagnosticDroppedCount = droppedDelta,
+                        diagnosticWriteFailureCount = writeFailureDelta
                     )
                     emit(
                         module = CORE_MODULE,
@@ -513,6 +551,35 @@ object Apm {
         }
     }
 
+    /** Releases partially initialized resources in reverse ownership order. */
+    private fun cleanupInitializationFailure(
+        monitoringExecutor: ScheduledExecutorService?,
+        coordinator: ProcessEventCoordinator?,
+        dispatcher: ApmDispatcher?,
+        uploader: ApmUploader?,
+        store: EventStore?
+    ) {
+        cleanupSafely(ERROR_TAG_INIT_MONITOR) { monitoringExecutor?.shutdownNow() }
+        cleanupSafely(ERROR_TAG_INIT_COORDINATOR) { coordinator?.stop() }
+        if (dispatcher != null) {
+            cleanupSafely(ERROR_TAG_INIT_DISPATCHER) { dispatcher.shutdown() }
+        } else {
+            // Before dispatcher ownership transfers, uploader and store remain independent stages.
+            cleanupSafely(ERROR_TAG_INIT_UPLOADER) { uploader?.shutdown() }
+            cleanupSafely(ERROR_TAG_INIT_STORE) { store?.close() }
+        }
+    }
+
+    /** Runs one cleanup phase without preventing later phases from executing. */
+    private inline fun cleanupSafely(tag: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (error: Throwable) {
+            // Cleanup degradation is routed directly to the independent diagnostics path.
+            recordInternalError(tag, error)
+        }
+    }
+
     /** 框架运行时状态。 */
     private data class State(
         /** APM 上下文。 */
@@ -534,6 +601,18 @@ object Apm {
 
     /** Core module name used by health events. */
     private const val CORE_MODULE = "core"
+
+    /** Uploader logger component. */
+    private const val UPLOADER_MODULE = "uploader"
+
+    /** Aggregation logger component. */
+    private const val AGGREGATION_MODULE = "aggregation"
+
+    /** Privacy logger component. */
+    private const val PRIVACY_MODULE = "privacy"
+
+    /** Dispatcher logger component. */
+    private const val DISPATCHER_MODULE = "dispatcher"
 
     /** SDK health event name. */
     private const val EVENT_SDK_HEALTH = "sdk_health"
@@ -564,4 +643,23 @@ object Apm {
 
     /** Conventional context key used for stable gray-release assignment. */
     private const val CONTEXT_USER_ID = "userId"
+
+    /** Init rollback tag for the self-monitor executor. */
+    private const val ERROR_TAG_INIT_MONITOR = "init_cleanup_monitor"
+    /** Init rollback tag for the process coordinator. */
+    private const val ERROR_TAG_INIT_COORDINATOR = "init_cleanup_coordinator"
+    /** Init rollback tag for the dispatcher. */
+    private const val ERROR_TAG_INIT_DISPATCHER = "init_cleanup_dispatcher"
+    /** Init rollback tag for the uploader. */
+    private const val ERROR_TAG_INIT_UPLOADER = "init_cleanup_uploader"
+    /** Init rollback tag for the event store. */
+    private const val ERROR_TAG_INIT_STORE = "init_cleanup_store"
+    /** Shutdown tag for the self-monitor executor. */
+    private const val ERROR_TAG_STOP_MONITOR = "stop_monitor"
+    /** Shutdown tag for the process coordinator. */
+    private const val ERROR_TAG_STOP_COORDINATOR = "stop_coordinator"
+    /** Shutdown tag prefix for monitoring modules. */
+    private const val ERROR_TAG_STOP_MODULE_PREFIX = "stop_module_"
+    /** Shutdown tag for the dispatcher. */
+    private const val ERROR_TAG_STOP_DISPATCHER = "stop_dispatcher"
 }

@@ -15,6 +15,8 @@ interface ApmLogger {
     fun w(message: String)
     /** 错误级别日志，附带可选异常堆栈。 */
     fun e(message: String, throwable: Throwable? = null)
+    /** Returns a component-attributed view; custom legacy implementations remain compatible. */
+    fun withComponent(component: String): ApmLogger = this
 }
 
 /**
@@ -25,27 +27,34 @@ internal class AndroidApmLogger(
     /** Whether debug-level output is enabled. */
     private val enabled: Boolean,
     /** Independent local diagnostics recorder. */
-    private val diagnostics: DiagnosticRecorder? = null
+    private val diagnostics: DiagnosticRecorder? = null,
+    /** SDK component attributed to structured diagnostic records. */
+    private val component: String = CORE_COMPONENT
 ) : ApmLogger {
 
     override fun d(message: String) {
         // 仅在开启调试模式时输出，避免线上性能开销
         if (enabled) {
             Log.d(TAG, message)
-            diagnostics?.record(DiagnosticLevel.DEBUG, CORE_COMPONENT, null, message, null)
+            diagnostics?.record(DiagnosticLevel.DEBUG, component, null, message, null)
         }
     }
 
     override fun w(message: String) {
         // 警告始终输出，不丢弃
         Log.w(TAG, message)
-        diagnostics?.record(DiagnosticLevel.WARN, CORE_COMPONENT, null, message, null)
+        diagnostics?.record(DiagnosticLevel.WARN, component, null, message, null)
     }
 
     override fun e(message: String, throwable: Throwable?) {
         // 错误始终输出，附带异常堆栈便于排查
         Log.e(TAG, message, throwable)
-        diagnostics?.record(DiagnosticLevel.ERROR, CORE_COMPONENT, null, message, throwable)
+        diagnostics?.record(DiagnosticLevel.ERROR, component, null, message, throwable)
+    }
+
+    /** Creates a cheap immutable logger view for one SDK component. */
+    override fun withComponent(component: String): ApmLogger {
+        return if (component == this.component) this else AndroidApmLogger(enabled, diagnostics, component)
     }
 
     companion object {

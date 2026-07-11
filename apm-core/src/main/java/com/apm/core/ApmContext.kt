@@ -71,4 +71,17 @@ class ApmContext internal constructor(
             dispatcher.dispatchCriticalSync(event)
         }
     }
+
+    /** Creates a module-specific view while sharing all runtime infrastructure. */
+    internal fun withLogger(scopedLogger: ApmLogger): ApmContext {
+        return ApmContext(
+            application = application,
+            config = config,
+            processName = processName,
+            logger = scopedLogger,
+            dispatcher = dispatcher,
+            processCoordinator = processCoordinator,
+            isUploaderProcess = isUploaderProcess
+        ).also { scopedContext -> scopedContext.selfMonitor = selfMonitor }
+    }
 }

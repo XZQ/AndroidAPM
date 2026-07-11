@@ -11,6 +11,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -79,5 +80,63 @@ class ApmDiagnosticsIntegrationTest {
         assertEquals(DiagnosticLevel.ERROR, internalError?.level)
         assertEquals("core", internalError?.component)
         assertEquals("java.io.IOException", internalError?.exceptionClass)
+    }
+
+    /** Scoped loggers must preserve the real subsystem attribution. */
+    @Test
+    fun `scoped logger attributes diagnostics`() {
+        val recorder = ApmDiagnostics.initialize(
+            directory = resetDirectory,
+            config = DiagnosticsConfig(),
+            processName = "com.example",
+            sessionId = "scoped"
+        )
+        val logger = AndroidApmLogger(enabled = false, diagnostics = recorder).withComponent("uploader")
+
+        logger.w("upload warning")
+        assertTrue(ApmDiagnostics.flush(1_000L))
+
+        assertEquals("uploader", ApmDiagnostics.snapshot(1).single().component)
+    }
+
+    /** One failing module stop must not prevent later modules or infrastructure from stopping. */
+    @Test
+    fun `stop continues after module failure`() {
+        val application = RuntimeEnvironment.getApplication() as Application
+        var secondStopped = false
+        Apm.register(TestModule("diagnostics-stop-failure", onStop = { throw IOException("stop failed") }))
+        Apm.register(TestModule("diagnostics-stop-success", onStop = { secondStopped = true }))
+        Apm.init(
+            application,
+            ApmConfig(
+                diagnostics = DiagnosticsConfig(),
+                storageType = StorageType.FILE,
+                enableSelfMonitoring = false,
+                enableRetry = false
+            )
+        )
+
+        Apm.stop()
+
+        assertTrue(secondStopped)
+        assertFalse(Apm.isInitialized())
+        assertTrue(ApmDiagnostics.snapshot(20).any { entry -> entry.code == "stop_module_diagnostics-stop-failure" })
+    }
+
+    /** Minimal lifecycle module used by shutdown-continuation tests. */
+    private class TestModule(
+        /** Stable module name. */
+        override val name: String,
+        /** Test-controlled stop action. */
+        private val onStop: () -> Unit
+    ) : ApmModule {
+        /** Initialization needs no test state. */
+        override fun onInitialize(context: ApmContext) = Unit
+
+        /** Start needs no test state. */
+        override fun onStart() = Unit
+
+        /** Delegates to the test action. */
+        override fun onStop() = onStop.invoke()
     }
 }

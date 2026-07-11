@@ -311,7 +311,7 @@ internal class ApmDispatcher(
      */
     fun shutdown() {
         shutdown = true
-        aggregationExecutor?.shutdownNow()
+        shutdownPhase("aggregation executor") { aggregationExecutor?.shutdownNow() }
 
         // 通知 worker 排空队列后退出
         running = false
@@ -326,28 +326,40 @@ internal class ApmDispatcher(
         }
 
         // 刷出聚合器的残留数据（worker 已退出，直接写存储）
-        aggregator?.let { agg ->
-            val remaining = agg.flush()
-            for (event in remaining) {
-                try {
-                    store.append(event)
-                    if (persistentUploadWorker != null) {
-                        persistentUploadWorker.signal()
-                    } else {
-                        uploader.upload(event)
+        shutdownPhase("aggregation flush") {
+            aggregator?.let { agg ->
+                val remaining = agg.flush()
+                for (event in remaining) {
+                    try {
+                        store.append(event)
+                        if (persistentUploadWorker != null) {
+                            persistentUploadWorker.signal()
+                        } else {
+                            uploader.upload(event)
+                        }
+                    } catch (e: Throwable) {
+                        logger.e("Failed to flush aggregated event", e)
                     }
-                } catch (e: Throwable) {
-                    logger.e("Failed to flush aggregated event", e)
                 }
             }
         }
 
         if (persistentUploadWorker != null) {
-            persistentUploadWorker.shutdown()
+            shutdownPhase("persistent uploader") { persistentUploadWorker.shutdown() }
         } else {
-            uploader.shutdown()
+            shutdownPhase("uploader") { uploader.shutdown() }
         }
-        store.close()
+        shutdownPhase("store") { store.close() }
+    }
+
+    /** Executes one dispatcher shutdown phase and continues after degradation. */
+    private inline fun shutdownPhase(name: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (error: Throwable) {
+            logger.e("Failed to shutdown dispatcher $name", error)
+            Apm.recordInternalError("$SHUTDOWN_ERROR_TAG_PREFIX${name.replace(' ', '_')}", error)
+        }
     }
 
     companion object {
@@ -377,5 +389,7 @@ internal class ApmDispatcher(
 
         /** worker 空闲时的队列轮询超时（毫秒），决定关闭响应延迟。 */
         private const val WORKER_POLL_MS = 100L
+        /** Stable internal-error prefix for isolated dispatcher shutdown phases. */
+        private const val SHUTDOWN_ERROR_TAG_PREFIX = "dispatcher_shutdown_"
     }
 }
