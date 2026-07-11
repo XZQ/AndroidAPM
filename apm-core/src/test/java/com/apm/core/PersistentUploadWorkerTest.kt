@@ -38,6 +38,8 @@ class PersistentUploadWorkerTest {
 
         assertEquals(listOf("saved"), uploader.names)
         assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
+        assertTrue(store.claimedOwner.isNotBlank())
+        assertEquals(store.claimedOwner, store.acknowledgedOwner)
     }
 
     /** Failed uploads keep rows durable and increment retry counters. */
@@ -62,6 +64,7 @@ class PersistentUploadWorkerTest {
 
         assertEquals(listOf(11L), store.rows.map(PendingEvent::id))
         assertEquals(listOf(1), store.rows.map(PendingEvent::retryCount))
+        assertEquals(store.claimedOwner, store.failedOwner)
     }
 
     /** Non-batch uploaders are invoked once per event and acknowledged as one durable batch. */
@@ -93,6 +96,25 @@ class PersistentUploadWorkerTest {
         assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
     }
 
+    /** Shutdown releases every lease owned by this worker instance. */
+    @Test
+    fun `shutdown releases worker claims`() {
+        val store = FakePendingStore(mutableListOf())
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = RecordingBatchUploader(CountDownLatch(0)),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 10,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        worker.shutdown()
+
+        assertTrue(store.released.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.releasedOwner.isNotBlank())
+    }
+
     /**
      * Creates a test event.
      *
@@ -111,6 +133,25 @@ class PersistentUploadWorkerTest {
 
         /** Retry update signal. */
         val markedRetry = CountDownLatch(1)
+
+        /** Lease release signal. */
+        val released = CountDownLatch(1)
+
+        /** Most recent claim owner. */
+        @Volatile
+        var claimedOwner: String = ""
+
+        /** Most recent acknowledgement owner. */
+        @Volatile
+        var acknowledgedOwner: String = ""
+
+        /** Most recent failure owner. */
+        @Volatile
+        var failedOwner: String = ""
+
+        /** Most recent release owner. */
+        @Volatile
+        var releasedOwner: String = ""
 
         /** Adds an event using a generated row id. */
         @Synchronized
@@ -132,6 +173,13 @@ class PersistentUploadWorkerTest {
         @Synchronized
         override fun readPending(limit: Int): List<PendingEvent> = rows.take(limit)
 
+        /** Claims rows while recording the worker owner. */
+        @Synchronized
+        override fun claimPending(ownerId: String, limit: Int, nowMs: Long, leaseDurationMs: Long): List<PendingEvent> {
+            claimedOwner = ownerId
+            return rows.take(limit)
+        }
+
         /** Removes acknowledged rows. */
         @Synchronized
         override fun deletePending(ids: List<Long>): Int {
@@ -141,6 +189,13 @@ class PersistentUploadWorkerTest {
             return before - rows.size
         }
 
+        /** Acknowledges rows only through the owner-aware API. */
+        @Synchronized
+        override fun acknowledgeClaim(ownerId: String, ids: List<Long>): Int {
+            acknowledgedOwner = ownerId
+            return deletePending(ids)
+        }
+
         /** Increments retry counters for selected rows. */
         @Synchronized
         override fun markRetry(ids: List<Long>) {
@@ -148,6 +203,21 @@ class PersistentUploadWorkerTest {
                 if (row.id in ids) row.copy(retryCount = row.retryCount + 1) else row
             }
             markedRetry.countDown()
+        }
+
+        /** Marks failed rows only through the owner-aware API. */
+        @Synchronized
+        override fun failClaim(ownerId: String, ids: List<Long>) {
+            failedOwner = ownerId
+            markRetry(ids)
+        }
+
+        /** Records explicit lease release on shutdown. */
+        @Synchronized
+        override fun releaseClaims(ownerId: String): Int {
+            releasedOwner = ownerId
+            released.countDown()
+            return rows.size
         }
 
         /** Returns the current pending count. */

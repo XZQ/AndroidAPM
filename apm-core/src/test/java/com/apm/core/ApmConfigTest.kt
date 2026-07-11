@@ -78,6 +78,12 @@ class ApmConfigTest {
         assertTrue(config.enableHttpGzip)
     }
 
+    /** 默认上传租约为两分钟。 */
+    @Test
+    fun `default upload lease is two minutes`() {
+        assertEquals(120_000L, ApmConfig().uploadLeaseDurationMs)
+    }
+
     /** 自定义参数应正确覆盖。 */
     @Test
     fun `custom values override defaults`() {
@@ -86,13 +92,15 @@ class ApmConfigTest {
             debugLogging = false,
             processStrategy = ProcessStrategy.ALL_PROCESSES,
             rateLimitEventsPerWindow = 50,
-            rateLimitWindowMs = 120_000L
+            rateLimitWindowMs = 120_000L,
+            uploadLeaseDurationMs = 45_000L
         )
         assertEquals("https://apm.example.com", config.endpoint)
         assertFalse(config.debugLogging)
         assertEquals(ProcessStrategy.ALL_PROCESSES, config.processStrategy)
         assertEquals(50, config.rateLimitEventsPerWindow)
         assertEquals(120_000L, config.rateLimitWindowMs)
+        assertEquals(45_000L, config.uploadLeaseDurationMs)
     }
 
     /** ProcessStrategy 枚举完整性。 */

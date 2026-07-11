@@ -108,7 +108,9 @@ data class ApmConfig(
     /** Enables file-based cross-process event forwarding. */
     val enableMultiProcessCoordination: Boolean = false,
     /** 默认 HTTP uploader 是否启用 Gzip 压缩。 */
-    val enableHttpGzip: Boolean = true
+    val enableHttpGzip: Boolean = true,
+    /** Durable row lease duration for one upload attempt. */
+    val uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -122,6 +124,9 @@ data class ApmConfig(
 
         /** Default number of events per upload request. */
         private const val DEFAULT_UPLOAD_BATCH_SIZE = 20
+
+        /** Default lease duration, longer than the built-in HTTP request timeout. */
+        private const val DEFAULT_UPLOAD_LEASE_DURATION_MS = 120_000L
 
         /** Default SDK health report interval. */
         private const val DEFAULT_SELF_MONITOR_INTERVAL_MS = 60_000L

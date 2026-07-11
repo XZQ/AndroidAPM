@@ -182,7 +182,8 @@ object Apm {
                 maxRetries = if (config.enableRetry) config.maxRetries else 0,
                 baseDelayMs = config.retryBaseDelayMs
             ),
-            uploadBatchSize = config.uploadBatchSize
+            uploadBatchSize = config.uploadBatchSize,
+            uploadLeaseDurationMs = config.uploadLeaseDurationMs
         )
         stagedDispatcher = dispatcher
         val isUploaderProcess = application.isMainProcessCompat()

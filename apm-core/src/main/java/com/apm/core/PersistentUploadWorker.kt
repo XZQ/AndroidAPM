@@ -9,12 +9,13 @@ import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Replays a persistent outbox and acknowledges rows only after upload success.
  *
  * 重试语义（单一重试权威）：每个处理周期对一批行只做一次上传尝试；
- * 失败时 markRetry 并按（该批最大 retry_count + 1）指数退避，
+ * 失败时 owner-aware failClaim 并按（该批最大 retry_count + 1）指数退避，
  * 下个周期重新从 outbox 选取。不存在内层重试循环，
  * 因此实际重试次数 = 行的 retry_count 上限（由 pruneExpired 控制），
  * 而不是 maxRetries × 周期数的放大值。
@@ -28,11 +29,16 @@ internal class PersistentUploadWorker(
     private val retryPolicy: RetryPolicy,
     /** Maximum events sent in one transport call. */
     private val batchSize: Int,
+    /** Maximum ownership interval before another worker may reclaim a row. */
+    private val leaseDurationMs: Long = DEFAULT_LEASE_DURATION_MS,
     /** Logger for recoverable worker failures. */
     private val logger: ApmLogger,
     /** Optional SDK health monitor. */
     private val selfMonitor: SdkSelfMonitor?
 ) {
+    /** Unique claim owner for this worker instance. */
+    private val ownerId = "${ProcessSessionId.get()}-upload-${workerSequence.incrementAndGet()}"
+
     /** Single worker executor that preserves outbox ordering. */
     private val executor: ExecutorService = ApmExecutors.newSingleThreadExecutor(THREAD_NAME)
 
@@ -58,20 +64,36 @@ internal class PersistentUploadWorker(
     fun shutdown() {
         running = false
         signal()
+        // Ask the transport to cancel or stop before making owned rows
+        // available to another worker.
+        uploader.shutdown()
         executor.shutdownNow()
         try {
             executor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
         }
-        uploader.shutdown()
+        runCatching { store.releaseClaims(ownerId) }
+            .onFailure {
+                logger.e("Failed to release persistent upload claims", it)
+                Apm.recordInternalError(ERROR_RELEASE_CLAIMS, it)
+            }
     }
 
     /** Main durable replay loop. */
     private fun processLoop() {
         while (running) {
-            val batch = runCatching { store.readPending(batchSize) }
-                .onFailure { logger.e("Failed to read persistent upload outbox", it) }
+            val batch = runCatching {
+                store.claimPending(
+                    ownerId = ownerId,
+                    limit = batchSize,
+                    nowMs = System.currentTimeMillis(),
+                    leaseDurationMs = leaseDurationMs
+                )
+            }.onFailure {
+                logger.e("Failed to claim persistent upload outbox", it)
+                Apm.recordInternalError(ERROR_CLAIM, it)
+            }
                 .getOrDefault(emptyList())
             selfMonitor?.updateQueueSize(runCatching { store.pendingCount() }.getOrDefault(0))
 
@@ -85,13 +107,27 @@ internal class PersistentUploadWorker(
             val startedAt = System.currentTimeMillis()
             if (uploadOnce(batch)) {
                 val ids = batch.map(PendingEvent::id)
-                runCatching { store.deletePending(ids) }
-                    .onFailure { logger.e("Failed to acknowledge uploaded events", it) }
+                runCatching { store.acknowledgeClaim(ownerId, ids) }
+                    .onSuccess { acknowledged ->
+                        // A short lease may expire during a custom transport
+                        // call; an ownership mismatch intentionally leaves the
+                        // row durable for the new owner.
+                        if (acknowledged != ids.size) {
+                            logger.w("Acknowledged $acknowledged/${ids.size} uploaded rows because claim ownership changed")
+                        }
+                    }
+                    .onFailure {
+                        logger.e("Failed to acknowledge uploaded events", it)
+                        Apm.recordInternalError(ERROR_ACKNOWLEDGE, it)
+                    }
                 selfMonitor?.recordUploadLatency(System.currentTimeMillis() - startedAt)
             } else {
                 val ids = batch.map(PendingEvent::id)
-                runCatching { store.markRetry(ids) }
-                    .onFailure { logger.e("Failed to update persistent retry counters", it) }
+                runCatching { store.failClaim(ownerId, ids) }
+                    .onFailure {
+                        logger.e("Failed to update persistent retry counters", it)
+                        Apm.recordInternalError(ERROR_FAIL_CLAIM, it)
+                    }
                 // Rows remain durable; wait before selecting them again.
                 // 服务端 Retry-After 建议优先于本地指数退避
                 val retryAttempt = (batch.maxOfOrNull(PendingEvent::retryCount)?.plus(1) ?: 1)
@@ -122,6 +158,7 @@ internal class PersistentUploadWorker(
             }
         }.onFailure {
             logger.e("Persistent upload attempt failed", it)
+            Apm.recordInternalError(ERROR_UPLOAD, it)
         }.getOrDefault(false)
     }
 
@@ -134,6 +171,7 @@ internal class PersistentUploadWorker(
             store.pruneExpired(MAX_OUTBOX_RETRIES, OUTBOX_TTL_MS)
         }.onFailure {
             logger.e("Failed to prune expired outbox rows", it)
+            Apm.recordInternalError(ERROR_PRUNE, it)
         }.getOrDefault(0)
         // 有清理动作时输出警告，帮助发现持续性上传失败
         if (pruned > 0) {
@@ -172,6 +210,9 @@ internal class PersistentUploadWorker(
         /** Maximum worker shutdown wait. */
         private const val SHUTDOWN_TIMEOUT_MS = 3_000L
 
+        /** Default lease comfortably exceeds the built-in HTTP timeout. */
+        private const val DEFAULT_LEASE_DURATION_MS = 120_000L
+
         /** Caps exponent work for rows retained over long outages. */
         private const val MAX_BACKOFF_ATTEMPT = 16
 
@@ -180,5 +221,21 @@ internal class PersistentUploadWorker(
 
         /** outbox 行最长保留时长：7 天。 */
         private const val OUTBOX_TTL_MS = 7L * 24 * 60 * 60 * 1000
+
+        /** Process-local sequence that distinguishes worker restarts. */
+        private val workerSequence = AtomicLong(0L)
+
+        /** Self-monitor tag for claim failures. */
+        private const val ERROR_CLAIM = "persistent_upload_claim"
+        /** Self-monitor tag for acknowledgement failures. */
+        private const val ERROR_ACKNOWLEDGE = "persistent_upload_acknowledge"
+        /** Self-monitor tag for failed-claim persistence failures. */
+        private const val ERROR_FAIL_CLAIM = "persistent_upload_fail_claim"
+        /** Self-monitor tag for transport exceptions. */
+        private const val ERROR_UPLOAD = "persistent_upload_transport"
+        /** Self-monitor tag for expiry pruning failures. */
+        private const val ERROR_PRUNE = "persistent_upload_prune"
+        /** Self-monitor tag for shutdown release failures. */
+        private const val ERROR_RELEASE_CLAIMS = "persistent_upload_release"
     }
 }

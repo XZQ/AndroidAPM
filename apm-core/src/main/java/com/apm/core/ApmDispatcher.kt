@@ -46,7 +46,9 @@ internal class ApmDispatcher(
     /** Retry policy for the persistent upload worker. */
     retryPolicy: RetryPolicy = RetryPolicy(),
     /** Maximum events sent in one durable batch. */
-    uploadBatchSize: Int = DEFAULT_UPLOAD_BATCH_SIZE
+    uploadBatchSize: Int = DEFAULT_UPLOAD_BATCH_SIZE,
+    /** Duration for which one durable upload worker owns a claimed batch. */
+    uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
 ) {
     /**
      * 队列元素：已构建事件或延迟构建工厂 + 是否已经过聚合处理。
@@ -87,6 +89,7 @@ internal class ApmDispatcher(
             uploader = uploader,
             retryPolicy = retryPolicy,
             batchSize = uploadBatchSize.coerceAtLeast(1),
+            leaseDurationMs = uploadLeaseDurationMs.coerceAtLeast(MIN_UPLOAD_LEASE_DURATION_MS),
             logger = logger,
             selfMonitor = selfMonitor
         )
@@ -368,6 +371,12 @@ internal class ApmDispatcher(
 
         /** Default durable upload batch size. */
         private const val DEFAULT_UPLOAD_BATCH_SIZE = 20
+
+        /** Default row ownership duration for one transport attempt. */
+        private const val DEFAULT_UPLOAD_LEASE_DURATION_MS = 120_000L
+
+        /** Lower bound that prevents immediately expired ownership. */
+        private const val MIN_UPLOAD_LEASE_DURATION_MS = 1L
 
         /** Maximum time allowed for already accepted dispatch tasks. */
         private const val DISPATCH_SHUTDOWN_TIMEOUT_MS = 3_000L
