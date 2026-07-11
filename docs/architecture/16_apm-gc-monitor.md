@@ -1,6 +1,6 @@
 # apm-gc-monitor 模块
 
-> 同步日期：2026-07-10｜模块名：`gc_monitor`
+> 同步日期：2026-07-11｜模块名：`gc_monitor`
 
 ## 目的
 
@@ -27,11 +27,11 @@
 | allocation rate | 1024 KiB/s |
 | low reclaim rate | 10% |
 | allocation/reclaim analysis | 开 |
-| stack max | 4000 chars |
+| legacy stack max | 4000 chars / deprecated；GC 计数采样没有调用栈 |
 
 ## 线程与降级
 
-scheduled background executor 串行采样。`Debug.getRuntimeStat` 在不支持/异常时返回 null 并通过 internal error 记录，模块保留可计算的 heap 维度。
+`ApmExecutors` 单线程 scheduled background executor 串行采样，使用 `SystemClock.elapsedRealtime` 计算窗口；非法的 0/负间隔会钳制到 1 秒，避免 busy loop。`Debug.getRuntimeStat` 在不支持/异常时返回 unavailable sentinel；GC count/time、allocated/freed 任一端不可用或累计计数重置时，该窗口不计算对应派生维度，避免恢复后把进程累计值误报成单窗口尖峰，同时保留可计算的 heap 维度。
 
 ## 边界
 
@@ -42,4 +42,4 @@ scheduled background executor 串行采样。`Debug.getRuntimeStat` 在不支持
 
 ## 测试
 
-Config、GcStats 和 module 阈值/差分有测试；真实 ART stat、后台限制和长时间准确性需真机验证。
+Config、GcStats 与 reset-safe 分配/回收窗口差分有 JVM 测试；真实 ART stat、后台限制和长时间准确性需真机验证。

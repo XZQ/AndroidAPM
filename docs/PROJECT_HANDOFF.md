@@ -29,8 +29,8 @@
 | 基础模块 | 4 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
-| 主源码 | 141：136 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 76 |
+| 主源码 | 143：138 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 78 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
@@ -116,7 +116,7 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。XML 报告合计 76 个套件、507 个测试，0 failures / 0 errors / 0 skipped；生成 22 份 lint HTML、4,622,432 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
+全部通过。Root Gradle XML 报告合计 80 个套件、535 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 22 份 lint HTML、4,687,968 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
 
 ## 新电脑接手
 

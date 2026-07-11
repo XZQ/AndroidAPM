@@ -1,6 +1,7 @@
 package com.apm.sqlite
 
 import android.os.Looper
+import android.database.sqlite.SQLiteDatabase
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
@@ -35,6 +36,8 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
     /** 是否已启动。 */
     @Volatile
     private var started = false
+    /** Query-plan analyzer sharing this module's detection switches. */
+    private val queryPlanAnalyzer = QueryPlanAnalyzer(config)
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
@@ -59,6 +62,29 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
      * @param databaseName 数据库名称
      */
     fun onSqlExecuted(sql: String, durationMs: Long, affectedRows: Int = 0, databaseName: String = "") {
+        handleSqlExecuted(sql, durationMs, affectedRows, databaseName)
+    }
+
+    /** Handles wrapper-originated SQL and runs EXPLAIN when the configured gate allows it. */
+    internal fun onSqlExecutedWithPlan(
+        database: SQLiteDatabase,
+        sql: String,
+        durationMs: Long,
+        selectionArgs: Array<String>? = null,
+        affectedRows: Int = 0,
+        databaseName: String = ""
+    ) {
+        if (started && queryPlanAnalyzer.shouldAnalyze(durationMs, sql)) {
+            val issues = queryPlanAnalyzer.analyze(database, sql, selectionArgs)
+            for (issue in issues) {
+                reportQueryPlanIssue(sql, databaseName, issue)
+            }
+        }
+        handleSqlExecuted(sql, durationMs, affectedRows, databaseName)
+    }
+
+    /** Applies common slow/main-thread/row-count detection to one completed operation. */
+    private fun handleSqlExecuted(sql: String, durationMs: Long, affectedRows: Int, databaseName: String) {
         if (!started) {
             return
         }
@@ -114,6 +140,28 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
         )
     }
 
+    /** Emits one bounded structural query-plan finding. */
+    private fun reportQueryPlanIssue(
+        sql: String,
+        databaseName: String,
+        issue: QueryPlanAnalyzer.QueryPlanIssue
+    ) {
+        Apm.emit(
+            module = MODULE_NAME,
+            name = EVENT_QUERY_PLAN_ISSUE,
+            kind = ApmEventKind.ALERT,
+            severity = issue.severity,
+            priority = ApmPriority.NORMAL,
+            fields = mapOf(
+                FIELD_SQL to sql.take(config.maxSqlLength),
+                FIELD_DB_NAME to databaseName,
+                FIELD_ISSUE_TYPE to issue.issueType,
+                FIELD_TABLE_NAME to issue.tableName,
+                FIELD_DETAIL to issue.detail.take(config.maxSqlLength)
+            )
+        )
+    }
+
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "sqlite"
@@ -123,6 +171,8 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
         private const val EVENT_MAIN_THREAD_DB = "main_thread_db"
         /** 大数据量操作事件。 */
         private const val EVENT_LARGE_OPERATION = "large_db_operation"
+        /** Query-plan structural issue event. */
+        private const val EVENT_QUERY_PLAN_ISSUE = "query_plan_issue"
         /** 字段：SQL 语句。 */
         private const val FIELD_SQL = "sql"
         /** 字段：耗时。 */
@@ -135,6 +185,12 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
         private const val FIELD_DB_NAME = "databaseName"
         /** 字段：堆栈。 */
         private const val FIELD_STACK_TRACE = "stackTrace"
+        /** Field: query-plan issue type. */
+        private const val FIELD_ISSUE_TYPE = "issueType"
+        /** Field: table named by the query planner. */
+        private const val FIELD_TABLE_NAME = "tableName"
+        /** Field: bounded query-plan detail. */
+        private const val FIELD_DETAIL = "detail"
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
     }

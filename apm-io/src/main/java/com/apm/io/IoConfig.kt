@@ -15,8 +15,12 @@ data class IoConfig(
     val largeBufferSize: Long = DEFAULT_LARGE_BUFFER_SIZE,
     /** 最大堆栈截取长度。 */
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
-    /** 是否启用自动 Hook（代理 InputStream/OutputStream）。 */
-    val enableAutoHook: Boolean = true,
+    /** Compatibility-only generic Java IO hook; use the explicit stream wrappers. */
+    @Deprecated(
+        message = "Generic Java IO hooking is not supported; use IoModule.wrapInputStream/wrapOutputStream",
+        replaceWith = ReplaceWith("false")
+    )
+    val enableAutoHook: Boolean = false,
     /** 小 buffer 检测阈值（字节），低于此值的读写操作视为小 buffer。 */
     val smallBufferThreshold: Int = DEFAULT_SMALL_BUFFER_THRESHOLD,
     /** 重复读检测阈值：同一文件被读次数超过此值触发告警。 */
@@ -60,5 +64,41 @@ data class IoConfig(
 
         /** 默认吞吐量统计窗口：100。 */
         private const val DEFAULT_THROUGHPUT_WINDOW = 100
+    }
+}
+
+/** Pure throughput reporting gate shared by runtime code and unit tests. */
+internal object ThroughputWindowGate {
+    /** Returns true at each complete configured operation window. */
+    internal fun shouldReport(operationCount: Long, configuredWindow: Int): Boolean {
+        val window = configuredWindow.coerceAtLeast(1).toLong()
+        return operationCount > 0L && operationCount % window == 0L
+    }
+}
+
+/** Selects exactly one throughput source when Native and Java instrumentation coexist. */
+internal object ThroughputSourcePolicy {
+    /** Explicit Java proxy calls always count their logical bytes when enabled. */
+    internal fun shouldCountJava(enableThroughput: Boolean): Boolean = enableThroughput
+
+    /** Native callbacks count only calls not already enclosed by a Java proxy. */
+    internal fun shouldCountNative(enableThroughput: Boolean, insideJavaProxy: Boolean): Boolean {
+        return enableThroughput && !insideJavaProxy
+    }
+}
+
+/** Bounds duplicate-read reporting to one event per tracked path lifecycle. */
+internal object DuplicateReadGate {
+    /** Reports only when the threshold is first reached. */
+    internal fun shouldReport(readCount: Int, threshold: Int): Boolean {
+        return readCount == threshold.coerceAtLeast(1)
+    }
+}
+
+/** Pure small-buffer gate used with bounded per-path runtime state. */
+internal object SmallBufferGate {
+    /** Reports a small buffer only before that path has emitted its first finding. */
+    internal fun shouldReport(bufferSize: Int, threshold: Int, alreadyReported: Boolean): Boolean {
+        return !alreadyReported && bufferSize in 1 until threshold.coerceAtLeast(1)
     }
 }

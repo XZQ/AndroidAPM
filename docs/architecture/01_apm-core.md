@@ -64,10 +64,10 @@ Apm.init(application, config)
 - 读取当前 state；未初始化直接返回
 - 捕获 `System.currentTimeMillis()`
 - 捕获 `Thread.currentThread().name`
-- 调用 `BizContextProvider.currentContext()` 取得快照
+- 调用 `BizContextProvider.currentContext()` 并复制成不可变快照；异常记录 internal error 后降级为空上下文
 - 创建 lazy event factory 并非阻塞入队
 
-event 的 map 合并和对象构建延迟到 dispatcher worker。子进程 IPC 需要完整 payload，因此会立即执行 factory。
+event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。
 
 `emitCriticalSync` 不走 lazy queue：立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。
 

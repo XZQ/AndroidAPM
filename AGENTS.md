@@ -21,8 +21,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Latest runtime implementation commit before this documentation sync: `210236f Fix: Warn on ignored legacy switches`
 - Build units: `25`
 - Composition: `23` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `141` (`136` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `76`
+- Main source files: `143` (`138` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `78`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
@@ -37,7 +37,7 @@ Fresh checks executed on `2026-07-11` against the completed client-closure tip:
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.11`. The generated XML reports contain `76` suites and `507` tests with `0` failures/errors/skips; lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,622,432` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. The Android SDK was present but `adb devices` reported no connected target, so physical-device measurements remain external validation rather than fabricated local results.
+All commands passed under JDK `21.0.11`. Root Gradle XML reports contain `80` suites and `535` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,687,968` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. The Android SDK was present but `adb devices` reported no connected target, so physical-device measurements remain external validation rather than fabricated local results.
 
 ## Project Boundary
 
@@ -66,14 +66,15 @@ Delivery is acknowledged and at least once. Stable `eventId` survives Line Proto
 Registration alone does not make every monitor automatic:
 
 - Network requires the OkHttp interceptor/listener or manual completion callbacks.
-- SQLite requires `ApmSQLiteDatabase` or `onSqlExecuted` callbacks.
+- SQLite requires `ApmSQLiteDatabase` or `onSqlExecuted` callbacks. Only wrapper `rawQuery` has the database handle, full SQL, and bound arguments needed for threshold-gated `EXPLAIN QUERY PLAN`; monitoring reports are isolated from host database results/exceptions.
 - IPC uses `traceBinderCall` or `onBinderCallComplete`; deprecated `enableBinderHook=false` does not use hidden APIs.
 - WebView uses explicit per-instance `install/uninstall`, delegate wrappers, `evaluateJavascript`, or callbacks; deprecated global `enableAutoRegister=false` does not take over arbitrary instances.
 - Battery WakeLock/GPS/Alarm signals are host callbacks.
-- IO uses stream wrappers and an optional xhook-backed native path.
+- IO uses explicit stream wrappers and an optional xhook-backed native path. Deprecated `enableAutoHook=false` does not take over arbitrary Java streams; Java ThreadLocal call-path suppression prevents double counting without dropping custom streams, Native callback-depth prevents APM-owned IO recursion, fd sessions use mutex/generation protection, duplicate/small-buffer findings report once per bounded path, and wrapper bookkeeping cannot fail completed host IO.
 - Slow-method ASM requires the host module to apply `com.apm.slow-method`.
 - Render measures view count/depth and API 24+ FrameMetrics. Deprecated `detectOverdraw=false` is truthful because no supported GPU overdraw counter exists.
 - Thread monitoring inspects count/name/BLOCKED state; real ThreadPoolExecutor backlog requires explicit registration. Generic leak fields are deprecated/false.
+- GC count/time/allocation/reclaim analysis consumes monotonic ART cumulative counters on an `ApmExecutors` background sampler; missing/reset counters invalidate only that dimension/window, invalid intervals clamp to one second, and available heap dimensions continue.
 - `apm-otel-exporter` maps data only; it does not depend on or send through the OTel SDK.
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.

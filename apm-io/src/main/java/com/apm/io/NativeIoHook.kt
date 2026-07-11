@@ -35,7 +35,7 @@ import java.util.concurrent.atomic.AtomicLong
  * ## Native Hook 层级
  * - **Level 1**：Java 层代理（默认，零依赖）
  * - **Level 2**：Native PLT Hook（需 JNI 库，更全面）
- * Level 2 不可用时自动降级为 Level 1。
+ * Level 2 不可用时，已显式安装的 Level 1 wrapper 继续工作；模块不会接管任意 Java 流。
  */
 class NativeIoHook(private val config: IoConfig) {
 
@@ -44,6 +44,9 @@ class NativeIoHook(private val config: IoConfig) {
 
     /** 文件读取计数器：path → 读取次数。 */
     private val readFileCounts = ConcurrentHashMap<String, Int>()
+
+    /** Bounded paths that already emitted a small-buffer finding. */
+    private val smallBufferReportedPaths = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
     /** Closeable leak tracking metadata keyed by phantom reference. */
     private val closeableRefs = ConcurrentHashMap<PhantomReference<Any>, CloseableMetadata>()
@@ -86,6 +89,9 @@ class NativeIoHook(private val config: IoConfig) {
 
     /** 按路径聚合的吞吐量：path → ThroughputStats。 */
     private val pathThroughput = ConcurrentHashMap<String, ThroughputStats>()
+
+    /** Per-thread nesting marker used to suppress Native callbacks for explicitly wrapped calls. */
+    private val javaProxyIoDepth = ThreadLocal<Int>()
 
     // --- Native PLT Hook 状态 ---
     /** Native PLT Hook 是否已安装。 */
@@ -160,20 +166,26 @@ class NativeIoHook(private val config: IoConfig) {
 
             /** Reads one byte and records the operation. */
             override fun read(): Int {
-                val value = source.read()
+                val startMs = monotonicTimeMs()
+                val value = withJavaProxyIo { source.read() }
+                val durationMs = monotonicTimeMs() - startMs
+                monitorSafely { reportProxyLatency(path, OP_READ, durationMs, if (value >= 0) 1L else 0L) }
                 if (value >= 0) {
                     totalBytes++
-                    onRead(path, 1, 1)
+                    monitorSafely { onRead(path, 1, 1) }
                 }
                 return value
             }
 
             /** Reads a byte range and records the actual byte count. */
             override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
-                val count = source.read(buffer, offset, length)
+                val startMs = monotonicTimeMs()
+                val count = withJavaProxyIo { source.read(buffer, offset, length) }
+                val durationMs = monotonicTimeMs() - startMs
+                monitorSafely { reportProxyLatency(path, OP_READ, durationMs, count.coerceAtLeast(0).toLong()) }
                 if (count > 0) {
                     totalBytes += count
-                    onRead(path, count, length)
+                    monitorSafely { onRead(path, count, length) }
                 }
                 return count
             }
@@ -201,14 +213,17 @@ class NativeIoHook(private val config: IoConfig) {
                     return
                 }
                 closed = true
+                val startMs = monotonicTimeMs()
                 try {
-                    source.close()
+                    withJavaProxyIo { source.close() }
                 } finally {
-                    onClose(this, totalBytes)
+                    val durationMs = monotonicTimeMs() - startMs
+                    monitorSafely { reportProxyLatency(path, OP_CLOSE, durationMs, totalBytes) }
+                    monitorSafely { onClose(this, totalBytes) }
                 }
             }
         }
-        registerSession(wrapper, path)
+        monitorSafely { registerSession(wrapper, path) }
         return wrapper
     }
 
@@ -229,20 +244,31 @@ class NativeIoHook(private val config: IoConfig) {
 
             /** Writes one byte and records the operation. */
             override fun write(value: Int) {
-                source.write(value)
+                val startMs = monotonicTimeMs()
+                withJavaProxyIo { source.write(value) }
+                val durationMs = monotonicTimeMs() - startMs
+                monitorSafely { reportProxyLatency(path, OP_WRITE, durationMs, 1L) }
                 totalBytes++
-                onWrite(path, 1, 1)
+                monitorSafely { onWrite(path, 1, 1) }
             }
 
             /** Writes a byte range without per-byte double counting. */
             override fun write(buffer: ByteArray, offset: Int, length: Int) {
-                source.write(buffer, offset, length)
+                val startMs = monotonicTimeMs()
+                withJavaProxyIo { source.write(buffer, offset, length) }
+                val durationMs = monotonicTimeMs() - startMs
+                monitorSafely { reportProxyLatency(path, OP_WRITE, durationMs, length.toLong()) }
                 totalBytes += length
-                onWrite(path, length, length)
+                monitorSafely { onWrite(path, length, length) }
             }
 
             /** Flushes the source stream. */
-            override fun flush() = source.flush()
+            override fun flush() {
+                val startMs = monotonicTimeMs()
+                withJavaProxyIo { source.flush() }
+                val durationMs = monotonicTimeMs() - startMs
+                monitorSafely { reportProxyLatency(path, OP_FLUSH, durationMs, 0L) }
+            }
 
             /** Closes the source and completes the tracking session once. */
             override fun close() {
@@ -250,14 +276,17 @@ class NativeIoHook(private val config: IoConfig) {
                     return
                 }
                 closed = true
+                val startMs = monotonicTimeMs()
                 try {
-                    source.close()
+                    withJavaProxyIo { source.close() }
                 } finally {
-                    onClose(this, totalBytes)
+                    val durationMs = monotonicTimeMs() - startMs
+                    monitorSafely { reportProxyLatency(path, OP_CLOSE, durationMs, totalBytes) }
+                    monitorSafely { onClose(this, totalBytes) }
                 }
             }
         }
-        registerSession(wrapper, path)
+        monitorSafely { registerSession(wrapper, path) }
         return wrapper
     }
 
@@ -304,14 +333,15 @@ class NativeIoHook(private val config: IoConfig) {
         }
 
         // 更新吞吐量统计
-        if (config.enableThroughputStats) {
+        if (ThroughputSourcePolicy.shouldCountJava(config.enableThroughputStats)) {
             totalReadBytes.addAndGet(bytesRead.toLong())
-            totalIoOps.incrementAndGet()
+            val operationCount = totalIoOps.incrementAndGet()
             updatePathThroughput(path, bytesRead.toLong(), isWrite = false)
+            maybeReportThroughput(operationCount)
         }
 
         // 小 buffer 检测
-        if (bufferUsed in 1 until config.smallBufferThreshold) {
+        if (shouldReportSmallBuffer(path, bufferUsed)) {
             Apm.emit(
                 module = MODULE_IO,
                 name = EVENT_SMALL_BUFFER,
@@ -326,9 +356,8 @@ class NativeIoHook(private val config: IoConfig) {
         }
 
         // 重复读检测
-        val readCount = readFileCounts.getOrDefault(path, 0) + 1
-        readFileCounts[path] = readCount
-        if (readCount >= config.duplicateReadThreshold) {
+        val readCount = incrementBoundedReadCount(path)
+        if (readCount != null && DuplicateReadGate.shouldReport(readCount, config.duplicateReadThreshold)) {
             Apm.emit(
                 module = MODULE_IO,
                 name = EVENT_DUPLICATE_READ,
@@ -354,12 +383,13 @@ class NativeIoHook(private val config: IoConfig) {
         if (!initialized || bytesWritten <= 0) {
             return
         }
-        if (config.enableThroughputStats) {
+        if (ThroughputSourcePolicy.shouldCountJava(config.enableThroughputStats)) {
             totalWriteBytes.addAndGet(bytesWritten.toLong())
-            totalIoOps.incrementAndGet()
+            val operationCount = totalIoOps.incrementAndGet()
             updatePathThroughput(path, bytesWritten.toLong(), isWrite = true)
+            maybeReportThroughput(operationCount)
         }
-        if (bufferUsed in 1 until config.smallBufferThreshold) {
+        if (shouldReportSmallBuffer(path, bufferUsed)) {
             Apm.emit(
                 module = MODULE_IO,
                 name = EVENT_SMALL_BUFFER,
@@ -384,32 +414,16 @@ class NativeIoHook(private val config: IoConfig) {
      */
     fun onClose(source: Any, totalBytes: Long) {
         val sessionId = proxySessionIds.remove(source) ?: return
-        val session = activeSessions.remove(sessionId) ?: return
+        activeSessions.remove(sessionId) ?: return
         sessionRefs.remove(sessionId)?.let { reference ->
             closeableRefs.remove(reference)
             reference.clear()
         }
-        val durationMs = System.currentTimeMillis() - session.openTime
-
         // 记录 FD 关闭
         if (config.enableFdLeakDetection) {
             recordFdClose(sessionId)
         }
-
-        // 主线程 IO 耗时检测
-        if (session.isMainThread && durationMs >= config.mainThreadIoThresholdMs) {
-            Apm.emit(
-                module = MODULE_IO,
-                name = EVENT_MAIN_THREAD_IO,
-                kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.ERROR, priority = ApmPriority.NORMAL,
-                fields = mapOf(
-                    FIELD_PATH to session.path.take(MAX_PATH_LENGTH),
-                    FIELD_DURATION_MS to durationMs,
-                    FIELD_BYTES to totalBytes
-                )
-            )
-        }
+        // Stream lifetime is not operation latency; wrapper call boundaries report actual duration.
     }
 
     // ========================================================================
@@ -499,7 +513,17 @@ class NativeIoHook(private val config: IoConfig) {
      * 更新路径维度的吞吐量统计。
      */
     private fun updatePathThroughput(path: String, bytes: Long, isWrite: Boolean) {
-        val stats = pathThroughput.getOrPut(path) { ThroughputStats(path) }
+        val stats = pathThroughput[path] ?: synchronized(pathThroughput) {
+            pathThroughput[path] ?: run {
+                // Reserve one of the bounded entries for high-cardinality overflow.
+                val metricPath = if (pathThroughput.size < MAX_TRACKED_PATHS - 1) {
+                    path
+                } else {
+                    PATH_OVERFLOW_BUCKET
+                }
+                pathThroughput.getOrPut(metricPath) { ThroughputStats(metricPath) }
+            }
+        }
         if (isWrite) {
             stats.writeBytes.addAndGet(bytes)
         } else {
@@ -508,11 +532,128 @@ class NativeIoHook(private val config: IoConfig) {
         stats.opCount.incrementAndGet()
     }
 
+    /** Increments duplicate-read state without allowing unique paths to grow memory without bound. */
+    private fun incrementBoundedReadCount(path: String): Int? {
+        readFileCounts.computeIfPresent(path) { _, count -> count + 1 }?.let { return it }
+        synchronized(readFileCounts) {
+            readFileCounts.computeIfPresent(path) { _, count -> count + 1 }?.let { return it }
+            if (readFileCounts.size >= MAX_TRACKED_PATHS) {
+                return null
+            }
+            readFileCounts[path] = 1
+            return 1
+        }
+    }
+
+    /** Reports actual explicit-wrapper operation latency without using stream lifetime as duration. */
+    private fun reportProxyLatency(path: String, operation: String, durationMs: Long, bytes: Long) {
+        if (durationMs < minOf(config.mainThreadIoThresholdMs, config.singleIoThresholdMs)) {
+            return
+        }
+        val isMainThread = Looper.myLooper() == Looper.getMainLooper()
+        val slowOnMain = isMainThread && durationMs >= config.mainThreadIoThresholdMs
+        val slowOperation = durationMs >= config.singleIoThresholdMs
+        if (!slowOnMain && !slowOperation) {
+            return
+        }
+        Apm.emit(
+            module = MODULE_IO,
+            name = if (slowOnMain) EVENT_MAIN_THREAD_IO else EVENT_IO_ISSUE,
+            kind = ApmEventKind.ALERT,
+            severity = if (slowOnMain) ApmSeverity.ERROR else ApmSeverity.WARN,
+            priority = ApmPriority.NORMAL,
+            fields = mapOf(
+                FIELD_PATH to path.take(MAX_PATH_LENGTH),
+                FIELD_DURATION_MS to durationMs,
+                FIELD_BYTES to bytes,
+                FIELD_IS_MAIN_THREAD to isMainThread,
+                FIELD_OPERATION to operation,
+                FIELD_HOOK_LEVEL to HOOK_LEVEL_JAVA
+            )
+        )
+    }
+
+    /** Atomically gates small-buffer findings to one event per bounded path lifecycle. */
+    private fun shouldReportSmallBuffer(path: String, bufferSize: Int): Boolean {
+        if (!SmallBufferGate.shouldReport(
+                bufferSize = bufferSize,
+                threshold = config.smallBufferThreshold,
+                alreadyReported = smallBufferReportedPaths.contains(path)
+            )
+        ) {
+            return false
+        }
+        synchronized(smallBufferReportedPaths) {
+            if (!SmallBufferGate.shouldReport(
+                    bufferSize = bufferSize,
+                    threshold = config.smallBufferThreshold,
+                    alreadyReported = smallBufferReportedPaths.contains(path)
+                ) || smallBufferReportedPaths.size >= MAX_TRACKED_PATHS
+            ) {
+                return false
+            }
+            return smallBufferReportedPaths.add(path)
+        }
+    }
+
+    /** Emits one cumulative throughput snapshot at the configured operation window. */
+    private fun maybeReportThroughput(operationCount: Long) {
+        val window = config.throughputWindow.coerceAtLeast(1).toLong()
+        if (!ThroughputWindowGate.shouldReport(operationCount, config.throughputWindow)) {
+            return
+        }
+        Apm.emit(
+            module = MODULE_IO,
+            name = EVENT_THROUGHPUT,
+            kind = ApmEventKind.METRIC,
+            severity = ApmSeverity.INFO,
+            priority = ApmPriority.LOW,
+            fields = getGlobalStats() + mapOf(FIELD_THROUGHPUT_WINDOW to window)
+        )
+    }
+
+    /** Isolates proxy bookkeeping so completed host IO never appears to fail because monitoring degraded. */
+    private inline fun monitorSafely(block: () -> Unit) {
+        try {
+            block()
+        } catch (error: RuntimeException) {
+            Apm.recordInternalError(ERROR_TAG_JAVA_CALLBACK, error)
+        }
+    }
+
+    /** Returns monotonic milliseconds for operation-duration measurement. */
+    private fun monotonicTimeMs(): Long = System.nanoTime() / NANOS_PER_MILLISECOND
+
+    /** Executes one source call while marking synchronous Native callbacks as represented by the wrapper. */
+    private inline fun <T> withJavaProxyIo(block: () -> T): T {
+        val previousDepth = javaProxyIoDepth.get() ?: 0
+        javaProxyIoDepth.set(previousDepth + 1)
+        try {
+            return block()
+        } finally {
+            if (previousDepth == 0) {
+                javaProxyIoDepth.remove()
+            } else {
+                javaProxyIoDepth.set(previousDepth)
+            }
+        }
+    }
+
+    /** Returns true on the thread currently executing an explicit wrapper's source call. */
+    private fun isInsideJavaProxyIo(): Boolean = (javaProxyIoDepth.get() ?: 0) > 0
+
     /**
      * 获取所有路径的吞吐量统计快照。
      */
     fun getThroughputStats(): List<ThroughputStats> {
-        return pathThroughput.values.toList()
+        return pathThroughput.values.map { stats ->
+            ThroughputStats(
+                path = stats.path,
+                readBytes = AtomicLong(stats.readBytes.get()),
+                writeBytes = AtomicLong(stats.writeBytes.get()),
+                opCount = AtomicLong(stats.opCount.get())
+            )
+        }
     }
 
     /**
@@ -551,21 +692,27 @@ class NativeIoHook(private val config: IoConfig) {
      * @param isMainThread 是否主线程。
      */
     internal fun handleNativeIoEvent(operation: String, path: String, bytes: Long, durationMs: Long, isMainThread: Boolean) {
+        val insideJavaProxy = isInsideJavaProxyIo()
         if (!initialized) {
             return
         }
+        val isReadOrWrite = operation == OP_READ || operation == OP_WRITE
 
-        // 主线程 IO 检测
-        if (isMainThread && durationMs >= config.mainThreadIoThresholdMs) {
+        val slowOnMain = isMainThread && durationMs >= config.mainThreadIoThresholdMs
+        val slowOperation = durationMs >= config.singleIoThresholdMs
+        // Only read/write callbacks carry actual syscall duration; wrapper-marked calls report on the Java boundary.
+        if (isReadOrWrite && !insideJavaProxy && (slowOnMain || slowOperation)) {
             Apm.emit(
                 module = MODULE_IO,
-                name = EVENT_MAIN_THREAD_IO,
+                name = if (slowOnMain) EVENT_MAIN_THREAD_IO else EVENT_IO_ISSUE,
                 kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.ERROR, priority = ApmPriority.NORMAL,
+                severity = if (slowOnMain) ApmSeverity.ERROR else ApmSeverity.WARN,
+                priority = ApmPriority.NORMAL,
                 fields = mapOf(
                     FIELD_PATH to path.take(MAX_PATH_LENGTH),
                     FIELD_DURATION_MS to durationMs,
                     FIELD_BYTES to bytes,
+                    FIELD_IS_MAIN_THREAD to isMainThread,
                     FIELD_OPERATION to operation,
                     FIELD_HOOK_LEVEL to HOOK_LEVEL_NATIVE
                 )
@@ -573,15 +720,18 @@ class NativeIoHook(private val config: IoConfig) {
         }
 
         // 更新吞吐量统计
-        if (config.enableThroughputStats) {
-            totalIoOps.incrementAndGet()
-            val isWrite = operation == OP_WRITE || operation == OP_CREATE_NEW
+        if (ThroughputSourcePolicy.shouldCountNative(config.enableThroughputStats, insideJavaProxy) &&
+            isReadOrWrite && bytes > 0L
+        ) {
+            val operationCount = totalIoOps.incrementAndGet()
+            val isWrite = operation == OP_WRITE
             if (isWrite) {
                 totalWriteBytes.addAndGet(bytes)
             } else {
                 totalReadBytes.addAndGet(bytes)
             }
             updatePathThroughput(path, bytes, isWrite)
+            maybeReportThroughput(operationCount)
         }
     }
 
@@ -641,7 +791,14 @@ class NativeIoHook(private val config: IoConfig) {
         }
         // 构建拷贝链 key
         val chainKey = "${fromPath}$CHAIN_KEY_SEPARATOR$toPath"
-        val chain = copyChains.getOrPut(chainKey) { CopyChain(fromPath, toPath) }
+        val chain = copyChains[chainKey] ?: synchronized(copyChains) {
+            copyChains[chainKey] ?: run {
+                if (copyChains.size >= MAX_TRACKED_COPY_CHAINS) {
+                    return
+                }
+                CopyChain(fromPath, toPath).also { copyChains[chainKey] = it }
+            }
+        }
         // 累加拷贝统计
         chain.totalBytes.addAndGet(bytes)
         chain.copyCount.incrementAndGet()
@@ -693,8 +850,9 @@ class NativeIoHook(private val config: IoConfig) {
                 }
             } catch (_: InterruptedException) {
                 break
-            } catch (_: Exception) {
-                // 静默处理
+            } catch (error: Exception) {
+                // A failed scan must not terminate the monitor, but remains visible in SDK diagnostics.
+                Apm.recordInternalError(ERROR_TAG_ZERO_COPY_LOOP, error)
             }
         }
     }
@@ -708,6 +866,7 @@ class NativeIoHook(private val config: IoConfig) {
         }
         activeSessions.clear()
         readFileCounts.clear()
+        smallBufferReportedPaths.clear()
         closeableRefs.clear()
         sessionRefs.clear()
         proxySessionIds.clear()
@@ -782,6 +941,12 @@ class NativeIoHook(private val config: IoConfig) {
         /** 自监控 tag：Closeable 泄漏检测轮询失败。 */
         private const val ERROR_TAG_CLOSEABLE_LEAK_LOOP = "io_closeable_leak_loop"
 
+        /** Self-monitoring tag for zero-copy scan failures. */
+        private const val ERROR_TAG_ZERO_COPY_LOOP = "io_zero_copy_loop"
+
+        /** Self-monitoring tag for an isolated Java proxy callback failure. */
+        private const val ERROR_TAG_JAVA_CALLBACK = "io_java_proxy_callback"
+
         /**
          * 当前接收 Native IO 事件的活跃实例。
          * JNI 层以静态方法查找回调（GetStaticMethodID），因此静态桥接方法
@@ -823,6 +988,9 @@ class NativeIoHook(private val config: IoConfig) {
         /** 主线程 IO 事件。 */
         private const val EVENT_MAIN_THREAD_IO = "io_main_thread"
 
+        /** Slow background IO event shared with the module-level manual callback. */
+        private const val EVENT_IO_ISSUE = "io_issue"
+
         /** Closeable 泄漏事件。 */
         private const val EVENT_CLOSEABLE_LEAK = "io_closeable_leak"
 
@@ -831,6 +999,9 @@ class NativeIoHook(private val config: IoConfig) {
 
         /** 零拷贝优化建议事件。 */
         private const val EVENT_ZERO_COPY_OPPORTUNITY = "io_zero_copy_opportunity"
+
+        /** Cumulative IO throughput snapshot event. */
+        private const val EVENT_THROUGHPUT = "io_throughput"
 
         // --- 字段名 ---
         /** 字段：路径。 */
@@ -850,6 +1021,9 @@ class NativeIoHook(private val config: IoConfig) {
 
         /** 字段：字节数。 */
         private const val FIELD_BYTES = "bytes"
+
+        /** Field: whether the measured operation ran on the main thread. */
+        private const val FIELD_IS_MAIN_THREAD = "isMainThread"
 
         /** 字段：FD 数量。 */
         private const val FIELD_FD_COUNT = "fdCount"
@@ -878,6 +1052,18 @@ class NativeIoHook(private val config: IoConfig) {
         /** 字段：总 IO 操作数。 */
         private const val FIELD_TOTAL_IO_OPS = "totalIoOps"
 
+        /** Field: configured operation count per throughput report. */
+        private const val FIELD_THROUGHPUT_WINDOW = "throughputWindow"
+
+        /** Maximum unique paths retained for duplicate-read and throughput diagnostics. */
+        private const val MAX_TRACKED_PATHS = 256
+
+        /** Overflow bucket used when unique throughput paths exceed the bound. */
+        private const val PATH_OVERFLOW_BUCKET = "<other>"
+
+        /** Maximum source/destination copy chains retained by zero-copy analysis. */
+        private const val MAX_TRACKED_COPY_CHAINS = 256
+
         /** 字段：源路径（零拷贝）。 */
         private const val FIELD_FROM_PATH = "fromPath"
 
@@ -899,6 +1085,9 @@ class NativeIoHook(private val config: IoConfig) {
         // --- 常量 ---
         /** 路径最大长度。 */
         private const val MAX_PATH_LENGTH = 256
+
+        /** Nanoseconds contained in one millisecond. */
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
 
         /** Closeable 检测间隔。 */
         private const val CLOSEABLE_CHECK_INTERVAL_MS = 1000L
@@ -923,10 +1112,17 @@ class NativeIoHook(private val config: IoConfig) {
 
         /** Hook 层级：Native。 */
         private const val HOOK_LEVEL_NATIVE = "native_plt"
+        /** Hook level for explicit Java stream wrappers. */
+        private const val HOOK_LEVEL_JAVA = "java_wrapper"
 
         /** 操作类型值。 */
         private const val OP_WRITE = "write"
-        private const val OP_CREATE_NEW = "createNew"
+        /** Native read operation name. */
+        private const val OP_READ = "read"
+        /** Explicit stream flush operation name. */
+        private const val OP_FLUSH = "flush"
+        /** Explicit stream close operation name. */
+        private const val OP_CLOSE = "close"
 
         // --- 零拷贝检测常量 ---
         /** 零拷贝检测线程名。 */

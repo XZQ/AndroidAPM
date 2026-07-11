@@ -2,8 +2,10 @@ package com.apm.sqlite
 
 import android.content.ContentValues
 import android.database.Cursor
+import android.database.CursorWrapper
 import android.database.sqlite.SQLiteDatabase
 import android.os.SystemClock
+import com.apm.core.Apm
 
 /**
  * SQLiteDatabase 自动计时包装器。
@@ -40,7 +42,16 @@ class ApmSQLiteDatabase(
      * @return 查询游标
      */
     fun rawQuery(sql: String, selectionArgs: Array<String>? = null): Cursor {
-        return timed(sql) { delegate.rawQuery(sql, selectionArgs) }
+        val cursor = delegate.rawQuery(sql, selectionArgs)
+        return FirstAccessReportingCursor(cursor) { durationMs ->
+            reportDuration(
+                sql = sql,
+                durationMs = durationMs,
+                affectedRows = 0,
+                queryPlanSql = sql,
+                queryPlanArgs = selectionArgs
+            )
+        }
     }
 
     /**
@@ -68,8 +79,9 @@ class ApmSQLiteDatabase(
     ): Cursor {
         // 上报语句采用可读的概要形式
         val sqlSummary = "SELECT FROM $table WHERE ${selection ?: SUMMARY_NO_SELECTION}"
-        return timed(sqlSummary) {
-            delegate.query(table, columns, selection, selectionArgs, groupBy, having, orderBy, limit)
+        val cursor = delegate.query(table, columns, selection, selectionArgs, groupBy, having, orderBy, limit)
+        return FirstAccessReportingCursor(cursor) { durationMs ->
+            reportDuration(sqlSummary, durationMs, affectedRows = 0)
         }
     }
 
@@ -142,13 +154,19 @@ class ApmSQLiteDatabase(
      * @param block 实际数据库操作
      * @return 操作结果
      */
-    private inline fun <T> timed(sql: String, affectedRows: Int = 0, block: () -> T): T {
+    private inline fun <T> timed(
+        sql: String,
+        affectedRows: Int = 0,
+        queryPlanSql: String? = null,
+        queryPlanArgs: Array<String>? = null,
+        block: () -> T
+    ): T {
         val startMs = SystemClock.elapsedRealtime()
         try {
             return block()
         } finally {
             // 无论成功失败都上报耗时（失败的慢操作同样有诊断价值）
-            report(sql, startMs, affectedRows)
+            report(sql, startMs, affectedRows, queryPlanSql, queryPlanArgs)
         }
     }
 
@@ -159,14 +177,49 @@ class ApmSQLiteDatabase(
      * @param startMs 开始时间（elapsedRealtime）
      * @param affectedRows 受影响行数
      */
-    private fun report(sql: String, startMs: Long, affectedRows: Int) {
+    private fun report(
+        sql: String,
+        startMs: Long,
+        affectedRows: Int,
+        queryPlanSql: String? = null,
+        queryPlanArgs: Array<String>? = null
+    ) {
         val durationMs = SystemClock.elapsedRealtime() - startMs
-        module.onSqlExecuted(
-            sql = sql.take(MAX_SQL_LENGTH),
-            durationMs = durationMs,
-            affectedRows = affectedRows,
-            databaseName = databaseName
-        )
+        reportDuration(sql, durationMs, affectedRows, queryPlanSql, queryPlanArgs)
+    }
+
+    /** Routes an already measured operation to the appropriate module entry point. */
+    private fun reportDuration(
+        sql: String,
+        durationMs: Long,
+        affectedRows: Int,
+        queryPlanSql: String? = null,
+        queryPlanArgs: Array<String>? = null
+    ) {
+        try {
+            if (queryPlanSql != null) {
+                module.onSqlExecutedWithPlan(
+                    database = delegate,
+                    // EXPLAIN needs the complete SQL and matching bind arguments;
+                    // event construction applies its own bounded field truncation.
+                    sql = queryPlanSql,
+                    durationMs = durationMs,
+                    selectionArgs = queryPlanArgs,
+                    affectedRows = affectedRows,
+                    databaseName = databaseName
+                )
+            } else {
+                module.onSqlExecuted(
+                    sql = sql.take(MAX_SQL_LENGTH),
+                    durationMs = durationMs,
+                    affectedRows = affectedRows,
+                    databaseName = databaseName
+                )
+            }
+        } catch (error: RuntimeException) {
+            // Database results and exceptions always belong to the host; monitoring degrades locally.
+            Apm.recordInternalError(ERROR_TAG_DATABASE_REPORT, error)
+        }
     }
 
     companion object {
@@ -180,3 +233,62 @@ class ApmSQLiteDatabase(
         private const val MAX_SQL_LENGTH = 500
     }
 }
+
+/**
+ * Measures the first Cursor operation that forces SQLite to consume results.
+ * Cursor construction itself is lazy and therefore is not a valid query-duration boundary.
+ */
+private class FirstAccessReportingCursor(
+    cursor: Cursor,
+    /** Callback receiving the first result-access duration in milliseconds. */
+    private val onFirstAccess: (Long) -> Unit
+) : CursorWrapper(cursor) {
+    /** Whether one access duration has already been reported. */
+    private var reported = false
+
+    /** Measures only the first result-consuming cursor operation. */
+    private inline fun <T> measureFirstAccess(block: () -> T): T {
+        if (reported) {
+            return block()
+        }
+        val startMs = SystemClock.elapsedRealtime()
+        try {
+            return block()
+        } finally {
+            reported = true
+            try {
+                onFirstAccess(SystemClock.elapsedRealtime() - startMs)
+            } catch (error: RuntimeException) {
+                // Monitoring must never change Cursor semantics for the host application.
+                Apm.recordInternalError(ERROR_TAG_CURSOR_REPORT, error)
+            }
+        }
+    }
+
+    /** Measures initial positioning at the first row. */
+    override fun moveToFirst(): Boolean = measureFirstAccess { super.moveToFirst() }
+
+    /** Measures initial forward iteration. */
+    override fun moveToNext(): Boolean = measureFirstAccess { super.moveToNext() }
+
+    /** Measures initial positioning at the last row. */
+    override fun moveToLast(): Boolean = measureFirstAccess { super.moveToLast() }
+
+    /** Measures initial backward iteration. */
+    override fun moveToPrevious(): Boolean = measureFirstAccess { super.moveToPrevious() }
+
+    /** Measures an initial relative move. */
+    override fun move(offset: Int): Boolean = measureFirstAccess { super.move(offset) }
+
+    /** Measures an initial absolute move. */
+    override fun moveToPosition(position: Int): Boolean = measureFirstAccess { super.moveToPosition(position) }
+
+    /** Measures an initial count request, which can force the query window to fill. */
+    override fun getCount(): Int = measureFirstAccess { super.getCount() }
+}
+
+/** Self-monitoring tag for a wrapper report that failed after Cursor access. */
+private const val ERROR_TAG_CURSOR_REPORT = "sqlite_cursor_report"
+
+/** Self-monitoring tag for a write/query report that must not alter database semantics. */
+private const val ERROR_TAG_DATABASE_REPORT = "sqlite_database_report"

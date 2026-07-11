@@ -319,7 +319,7 @@ object Apm {
         // 上下文 map 合并等分配开销推迟到 dispatcher worker 线程执行
         val timestamp = System.currentTimeMillis()
         val threadName = Thread.currentThread().name
-        val bizContext = currentState.context.config.bizContextProvider.currentContext()
+        val bizContext = captureBizContext(currentState)
         currentState.context.emitLazy {
             buildEvent(
                 currentState, module, name, kind, severity, priority, scene, foreground,
@@ -351,7 +351,7 @@ object Apm {
             fields, extras,
             timestamp = System.currentTimeMillis(),
             threadName = Thread.currentThread().name,
-            bizContext = currentState.context.config.bizContextProvider.currentContext()
+            bizContext = captureBizContext(currentState)
         )
         return currentState.context.emitCriticalSync(event)
     }
@@ -377,6 +377,16 @@ object Apm {
             MESSAGE_INTERNAL_ERROR,
             error
         )
+    }
+
+    /** Captures an immutable host context without allowing provider failures into business code. */
+    private fun captureBizContext(currentState: State): Map<String, String> {
+        return try {
+            currentState.context.config.bizContextProvider.currentContext().toMap()
+        } catch (error: RuntimeException) {
+            recordInternalError(ERROR_TAG_BIZ_CONTEXT, error)
+            emptyMap()
+        }
     }
 
     /**
@@ -626,6 +636,9 @@ object Apm {
 
     /** Diagnostic code for initialization failure. */
     private const val ERROR_CODE_INIT = "init_failed"
+
+    /** Self-monitoring tag for a host business-context provider failure. */
+    private const val ERROR_TAG_BIZ_CONTEXT = "biz_context_provider"
 
     /** Safe initialization-start message. */
     private const val MESSAGE_INIT_STARTED = "APM initialization started"

@@ -8,8 +8,8 @@
 
 - 同步日期：2026-07-11
 - 25 个构建单元：23 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 141 个主源码文件：136 Kotlin + 4 C + 1 proto
-- 76 个测试/benchmark 文件
+- 143 个主源码文件：138 Kotlin + 4 C + 1 proto
+- 78 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
@@ -169,6 +169,8 @@ threads.registerThreadPool("image-loader", imageExecutor)
 
 `WebviewModule.uninstall` 会恢复原 delegate；Render 在 Activity 可见期使用 API 24+ `FrameMetrics`。GPU overdraw 没有稳定公共计数 API，因此 `detectOverdraw` 仅为弃用兼容字段并默认 `false`。
 
+IO 的 Java 层同样采用显式 `wrapInputStream` / `wrapOutputStream`；旧 `enableAutoHook` 已弃用并默认 `false`，不会宣称接管任意流。`throughputWindow` 每累计指定操作数输出一次 `io_throughput`；Java wrapper 调用用 ThreadLocal 标记并抑制其同线程同步 Native 回调，既不双计常规文件流，也不漏掉内存/自定义流。若自定义流把底层 syscall 转交给另一线程，ThreadLocal 无法跨线程关联，宿主应只启用 wrapper 或 Native 路径之一。Native 路径对非 ASCII/非法路径字节使用 `%HH`，并给截断路径追加哈希后缀。duplicate-read 和 small-buffer 每个路径只在首次达到阈值/条件时上报。使用 `ApmSQLiteDatabase.rawQuery` 且查询达到阈值时，会在原始数据库上对完整 SQL 与绑定参数执行 `EXPLAIN QUERY PLAN` 并输出 `query_plan_issue`；手动 `onSqlExecuted` 没有数据库句柄，因此只做耗时/线程/影响行数判断。GC 分配率与回收率来自后台线程上的相邻 ART 累计字节计数窗口，使用单调时钟；任一累计计数缺失或重置的窗口会跳过对应派生维度并保留可计算的 GC/Heap 检测。
+
 ### 慢方法 ASM 插桩
 
 ```kotlin
@@ -197,6 +199,7 @@ apmSlowMethod {
 | Native Crash | `false` | 避免默认启用高风险信号能力 |
 | Hprof/fork dump | `false` | 避免默认产生大文件或依赖设备兼容性 |
 | `uploadLeaseDurationMs` | `120000` | durable batch owner 租约；超时后可被其他 Worker 重领 |
+| `IoConfig.enableAutoHook` | `false` / deprecated | 无公共全局 Java IO Hook；使用显式流 wrapper |
 
 ## 与微信 Matrix、快手 KOOM 的定位对比
 

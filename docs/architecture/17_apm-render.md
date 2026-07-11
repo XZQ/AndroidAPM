@@ -10,7 +10,7 @@
 
 - view count > 300 -> `view_count_spike`
 - max depth > 10 -> `deep_hierarchy`
-- 带 Activity scene、count/depth 和截断 stack
+- 带 Activity scene、count/depth；公共层级/帧指标不提供业务调用栈
 - Activity visible 期间挂载 API 24+ `Window.OnFrameMetricsAvailableListener`
 - 每 60 帧输出 count/slow/average/max/platform dropped callback；默认 slow frame 32ms
 
@@ -23,9 +23,9 @@
 | monitor | 开 | 已消费 |
 | view depth | 10 | 已消费 |
 | view count | 300 | 已消费 |
-| `viewDrawThresholdMs` | 16ms | 未消费 |
+| `viewDrawThresholdMs` | 16ms / deprecated | 公共 API 不提供单 View draw timing |
 | `detectOverdraw` | false / deprecated | 公共 API 不支持 GPU overdraw 计数 |
-| stack max | 4000 | 已消费 |
+| stack max | 4000 / deprecated | 层级与 FrameMetrics 不采集调用栈 |
 | `slowFrameThresholdMs` | 32ms | FrameMetrics 已消费 |
 
 ## 线程与开销

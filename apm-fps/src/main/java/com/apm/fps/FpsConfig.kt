@@ -17,7 +17,8 @@ data class FpsConfig(
     val fpsWarnThreshold: Int = DEFAULT_FPS_WARN_THRESHOLD,
     /** 是否检测场景信息（当前 Activity 名）。 */
     val enableSceneDetect: Boolean = true,
-    /** 最大堆栈截取长度。 */
+    /** Compatibility-only field; frame callbacks do not capture stack traces. */
+    @Deprecated(message = "FPS monitoring does not capture stack traces")
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** 是否启用 FrameMetrics（API 24+）采集渲染管线各阶段耗时。 */
     val enableFrameMetrics: Boolean = true,

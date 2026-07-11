@@ -22,6 +22,9 @@
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <pthread.h>
+#include <stdatomic.h>
+#include <stdint.h>
 
 /* ======================== 常量定义 ======================== */
 
@@ -42,6 +45,15 @@
 
 /** xhook 同步刷新标记。 */
 #define XHOOK_REFRESH_SYNC 0
+
+/** All loaded shared-object callers whose PLT imports libc IO symbols. */
+#define XHOOK_TARGET_REGEX ".*\\.so$"
+
+/** Never rewrite this hook library's own PLT entries. */
+#define XHOOK_SELF_REGEX ".*/libapm-io\\.so$"
+
+/** Never rewrite xhook's own PLT entries. */
+#define XHOOK_LIBRARY_REGEX ".*/libxhook\\.so$"
 
 /* 日志宏 */
 #define LOG_D(fmt, ...) __android_log_print(ANDROID_LOG_DEBUG, TAG, fmt, ##__VA_ARGS__)
@@ -91,6 +103,9 @@ typedef int (*xhook_register_t)(const char *path_regex, const char *symbol,
 /** xhook_refresh 函数指针类型。 */
 typedef int (*xhook_refresh_t)(int async);
 
+/** xhook_ignore function pointer type. */
+typedef int (*xhook_ignore_t)(const char *path_regex, const char *symbol);
+
 /** xhook 共享库句柄。 */
 static void *s_xhook_handle = NULL;
 
@@ -99,6 +114,9 @@ static xhook_register_t s_xhook_register = NULL;
 
 /** 动态解析到的 xhook_refresh。 */
 static xhook_refresh_t s_xhook_refresh = NULL;
+
+/** Dynamically resolved xhook_ignore. */
+static xhook_ignore_t s_xhook_ignore = NULL;
 
 /* ======================== IO 会话跟踪 ======================== */
 
@@ -117,6 +135,8 @@ typedef struct {
     long long total_write_bytes;
     /** 是否已使用（有效数据）。 */
     int in_use;
+    /** Monotonic session generation protecting fd reuse races. */
+    unsigned long generation;
 } io_session_t;
 
 /**
@@ -125,10 +145,25 @@ typedef struct {
  */
 static io_session_t s_io_sessions[MAX_IO_SESSIONS];
 
+/** Serializes session mutation across concurrent read/write/close and fd reuse. */
+static pthread_mutex_t s_sessions_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+/** Next non-zero fd-session generation, protected by s_sessions_mutex. */
+static unsigned long s_next_session_generation = 1;
+
 /* ======================== JNI 引用缓存 ======================== */
 
 /** JavaVM 指针，用于获取 JNIEnv。 */
 static JavaVM *s_jvm = NULL;
+
+/** TLS key marking native threads attached by this library. */
+static pthread_key_t s_jni_detach_key;
+
+/** One-time initializer for the JNI detach TLS key. */
+static pthread_once_t s_jni_detach_key_once = PTHREAD_ONCE_INIT;
+
+/** Whether pthread TLS key creation succeeded. */
+static int s_jni_detach_key_ready = 0;
 
 /** NativeIoHook 类的全局引用。 */
 static jclass s_native_io_hook_class = NULL;
@@ -139,7 +174,13 @@ static jmethodID s_on_native_io_event_method = NULL;
 /* ======================== Hook 安装状态 ======================== */
 
 /** Hook 是否已安装。 */
-static int s_hooks_installed = 0;
+static atomic_int s_hooks_installed = 0;
+
+/** Recording can be stopped while the process PLT remains patched. */
+static atomic_int s_recording_enabled = 0;
+
+/** Reentrancy guard covering Java callbacks and any APM-owned IO they trigger. */
+static __thread int s_callback_depth = 0;
 
 /* ======================== 工具函数 ======================== */
 
@@ -176,6 +217,18 @@ static int is_main_thread(void) {
     return (gettid() == getpid()) ? 1 : 0;
 }
 
+/** Detaches only native threads that this library attached. */
+static void detach_jni_thread(void *value) {
+    if (value != NULL && s_jvm != NULL) {
+        (*s_jvm)->DetachCurrentThread(s_jvm);
+    }
+}
+
+/** Creates the pthread TLS key used for automatic JNI detach on thread exit. */
+static void create_jni_detach_key(void) {
+    s_jni_detach_key_ready = pthread_key_create(&s_jni_detach_key, detach_jni_thread) == 0;
+}
+
 /**
  * 获取当前线程的 JNIEnv。
  * 从 JavaVM 获取适用于当前线程的 JNIEnv。
@@ -187,10 +240,24 @@ static JNIEnv *get_jni_env(void) {
         return NULL;
     }
     JNIEnv *env = NULL;
-    /* AttachCurrentThread 对已附加的线程无副作用 */
+    int status = (*s_jvm)->GetEnv(s_jvm, (void **)&env, JNI_VERSION_1_6);
+    if (status == JNI_OK) {
+        return env;
+    }
+    if (status != JNI_EDETACHED) {
+        return NULL;
+    }
+    pthread_once(&s_jni_detach_key_once, create_jni_detach_key);
+    if (!s_jni_detach_key_ready) {
+        return NULL;
+    }
     int ret = (*s_jvm)->AttachCurrentThread(s_jvm, &env, NULL);
-    if (ret != 0 || env == NULL) {
+    if (ret != JNI_OK || env == NULL) {
         LOG_E("Failed to attach current thread to JVM, ret=%d", ret);
+        return NULL;
+    }
+    if (pthread_setspecific(s_jni_detach_key, (void *)1) != 0) {
+        (*s_jvm)->DetachCurrentThread(s_jvm);
         return NULL;
     }
     return env;
@@ -202,8 +269,131 @@ static JNIEnv *get_jni_env(void) {
  */
 static void init_io_sessions(void) {
     int i;
+    pthread_mutex_lock(&s_sessions_mutex);
     for (i = 0; i < MAX_IO_SESSIONS; i++) {
         s_io_sessions[i].in_use = 0;
+        s_io_sessions[i].generation = 0;
+    }
+    pthread_mutex_unlock(&s_sessions_mutex);
+}
+
+/** Returns the next non-zero session generation while the session mutex is held. */
+static unsigned long next_session_generation_locked(void) {
+    unsigned long generation = s_next_session_generation++;
+    if (generation == 0) {
+        generation = s_next_session_generation++;
+    }
+    return generation;
+}
+
+/** Returns whether this hook invocation may perform monitoring work. */
+static int should_record_io(void) {
+    return atomic_load(&s_recording_enabled) && s_callback_depth == 0;
+}
+
+/** Returns whether open/openat carries a mode vararg without misreading O_DIRECTORY. */
+static int flags_require_mode(int flags) {
+    return (flags & O_CREAT) != 0 || (flags & O_TMPFILE) == O_TMPFILE;
+}
+
+/** FNV-1a offset used to distinguish paths that share the same bounded prefix. */
+#define PATH_HASH_OFFSET UINT64_C(14695981039346656037)
+
+/** FNV-1a prime used to distinguish paths that share the same bounded prefix. */
+#define PATH_HASH_PRIME UINT64_C(1099511628211)
+
+/** Number of hexadecimal characters in a 64-bit path hash suffix. */
+#define PATH_HASH_HEX_LENGTH 16
+
+/** Total characters in the `~0123456789abcdef` truncation suffix. */
+#define PATH_HASH_SUFFIX_LENGTH (1 + PATH_HASH_HEX_LENGTH)
+
+/** Returns a stable hash for arbitrary filesystem bytes. */
+static uint64_t hash_path_bytes(const char *input) {
+    uint64_t hash = PATH_HASH_OFFSET;
+    const unsigned char *cursor = (const unsigned char *)input;
+    while (*cursor != '\0') {
+        hash ^= *cursor++;
+        hash *= PATH_HASH_PRIME;
+    }
+    return hash;
+}
+
+/** Appends a bounded hash suffix and terminates the output. */
+static void append_path_hash_suffix(
+        char output[MAX_PATH_LENGTH],
+        size_t prefix_length,
+        uint64_t hash) {
+    static const char HEX_DIGITS[] = "0123456789abcdef";
+    size_t index;
+    output[prefix_length] = '~';
+    for (index = 0; index < PATH_HASH_HEX_LENGTH; index++) {
+        unsigned int shift = (unsigned int)((PATH_HASH_HEX_LENGTH - index - 1) * 4);
+        output[prefix_length + 1 + index] = HEX_DIGITS[(hash >> shift) & 0x0fU];
+    }
+    output[prefix_length + PATH_HASH_SUFFIX_LENGTH] = '\0';
+}
+
+/** Copies a path into a session while distinguishing paths with the same long prefix. */
+static void copy_path_for_session(const char *input, char output[MAX_PATH_LENGTH]) {
+    if (input == NULL) {
+        strncpy(output, "unknown", MAX_PATH_LENGTH);
+        output[MAX_PATH_LENGTH - 1] = '\0';
+        return;
+    }
+    size_t input_length = strlen(input);
+    if (input_length < MAX_PATH_LENGTH) {
+        memcpy(output, input, input_length + 1);
+        return;
+    }
+    size_t prefix_length = MAX_PATH_LENGTH - 1 - PATH_HASH_SUFFIX_LENGTH;
+    memcpy(output, input, prefix_length);
+    append_path_hash_suffix(output, prefix_length, hash_path_bytes(input));
+}
+
+/** Converts arbitrary filesystem bytes into collision-resistant ASCII safe for NewStringUTF. */
+static void sanitize_path_for_jni(const char *input, char output[MAX_PATH_LENGTH]) {
+    if (input == NULL) {
+        strncpy(output, "unknown", MAX_PATH_LENGTH);
+        output[MAX_PATH_LENGTH - 1] = '\0';
+        return;
+    }
+
+    static const char HEX_DIGITS[] = "0123456789abcdef";
+    size_t encoded_length = 0;
+    const unsigned char *cursor = (const unsigned char *)input;
+    while (*cursor != '\0') {
+        unsigned char value = *cursor++;
+        encoded_length += value >= 0x20 && value <= 0x7e && value != '%' ? 1 : 3;
+    }
+
+    size_t output_limit = MAX_PATH_LENGTH - 1;
+    int truncated = encoded_length > output_limit;
+    if (truncated) {
+        output_limit -= PATH_HASH_SUFFIX_LENGTH;
+    }
+
+    size_t output_index = 0;
+    cursor = (const unsigned char *)input;
+    while (*cursor != '\0') {
+        unsigned char value = *cursor;
+        size_t required = value >= 0x20 && value <= 0x7e && value != '%' ? 1 : 3;
+        if (output_index + required > output_limit) {
+            break;
+        }
+        if (required == 1) {
+            output[output_index++] = (char)value;
+        } else {
+            output[output_index++] = '%';
+            output[output_index++] = HEX_DIGITS[value >> 4];
+            output[output_index++] = HEX_DIGITS[value & 0x0fU];
+        }
+        cursor++;
+    }
+    if (truncated) {
+        append_path_hash_suffix(output, output_index, hash_path_bytes(input));
+    } else {
+        output[output_index] = '\0';
     }
 }
 
@@ -239,13 +429,14 @@ static void throw_illegal_state(JNIEnv *env, const char *message) {
  * @return 1 表示 xhook 可用，0 表示不可用
  */
 static int resolve_xhook_symbols(void) {
-    if (s_xhook_register != NULL && s_xhook_refresh != NULL) {
+    if (s_xhook_register != NULL && s_xhook_refresh != NULL && s_xhook_ignore != NULL) {
         return 1;
     }
 
     s_xhook_register = (xhook_register_t)dlsym(RTLD_DEFAULT, "xhook_register");
     s_xhook_refresh = (xhook_refresh_t)dlsym(RTLD_DEFAULT, "xhook_refresh");
-    if (s_xhook_register != NULL && s_xhook_refresh != NULL) {
+    s_xhook_ignore = (xhook_ignore_t)dlsym(RTLD_DEFAULT, "xhook_ignore");
+    if (s_xhook_register != NULL && s_xhook_refresh != NULL && s_xhook_ignore != NULL) {
         return 1;
     }
 
@@ -257,12 +448,14 @@ static int resolve_xhook_symbols(void) {
 
     s_xhook_register = (xhook_register_t)dlsym(s_xhook_handle, "xhook_register");
     s_xhook_refresh = (xhook_refresh_t)dlsym(s_xhook_handle, "xhook_refresh");
-    if (s_xhook_register == NULL || s_xhook_refresh == NULL) {
+    s_xhook_ignore = (xhook_ignore_t)dlsym(s_xhook_handle, "xhook_ignore");
+    if (s_xhook_register == NULL || s_xhook_refresh == NULL || s_xhook_ignore == NULL) {
         LOG_W("xhook symbols not found");
         dlclose(s_xhook_handle);
         s_xhook_handle = NULL;
         s_xhook_register = NULL;
         s_xhook_refresh = NULL;
+        s_xhook_ignore = NULL;
         return 0;
     }
 
@@ -285,19 +478,32 @@ static void notify_java_callback(
         long long bytes,
         long long duration_ms,
         int is_main_thread) {
+    if (s_callback_depth > 0) {
+        return;
+    }
+    s_callback_depth++;
     JNIEnv *env = get_jni_env();
     if (env == NULL || s_native_io_hook_class == NULL || s_on_native_io_event_method == NULL) {
         /* JNI 环境未就绪，静默忽略 */
+        s_callback_depth--;
         return;
     }
 
+    /* Convert arbitrary filesystem bytes before Modified UTF-8 JNI conversion. */
+    char safe_path[MAX_PATH_LENGTH];
+    sanitize_path_for_jni(path, safe_path);
+
     /* 构造 Java 字符串参数 */
     jstring j_operation = (*env)->NewStringUTF(env, operation);
-    jstring j_path = (*env)->NewStringUTF(env, path);
+    jstring j_path = (*env)->NewStringUTF(env, safe_path);
     if (j_operation == NULL || j_path == NULL) {
         /* OOM 时清理已创建的引用 */
         if (j_operation != NULL) (*env)->DeleteLocalRef(env, j_operation);
         if (j_path != NULL) (*env)->DeleteLocalRef(env, j_path);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        s_callback_depth--;
         return;
     }
 
@@ -322,6 +528,7 @@ static void notify_java_callback(
     /* 释放局部引用，防止 JNI 局部引用表溢出 */
     (*env)->DeleteLocalRef(env, j_operation);
     (*env)->DeleteLocalRef(env, j_path);
+    s_callback_depth--;
 }
 
 /* ======================== Hook 实现 ======================== */
@@ -333,7 +540,7 @@ static void notify_java_callback(
 int hooked_open(const char *pathname, int flags, ...) {
     /* 提取可变参数中的 mode（创建文件时需要） */
     mode_t mode = 0;
-    if (flags & (O_CREAT | O_TMPFILE)) {
+    if (flags_require_mode(flags)) {
         va_list args;
         va_start(args, flags);
         mode = va_arg(args, int);
@@ -343,28 +550,19 @@ int hooked_open(const char *pathname, int flags, ...) {
     /* 调用原始 open 函数 */
     int fd = s_orig_open(pathname, flags, mode);
 
-    if (fd >= 0 && is_valid_fd(fd)) {
-        /* 记录打开时间 */
+    if (should_record_io() && fd >= 0 && is_valid_fd(fd)) {
         long long start_ns = get_time_ns();
-        long long duration_ms = 0;
 
         /* 记录 IO 会话 */
+        pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
-        strncpy(session->path, pathname, MAX_PATH_LENGTH - 1);
-        session->path[MAX_PATH_LENGTH - 1] = '\0';
+        copy_path_for_session(pathname, session->path);
         session->open_time_ns = start_ns;
         session->total_read_bytes = 0;
         session->total_write_bytes = 0;
         session->in_use = 1;
-
-        /* 通知 Java 层 */
-        notify_java_callback(
-                "open",
-                pathname,
-                0,
-                duration_ms,
-                is_main_thread()
-        );
+        session->generation = next_session_generation_locked();
+        pthread_mutex_unlock(&s_sessions_mutex);
     }
 
     return fd;
@@ -377,7 +575,7 @@ int hooked_open(const char *pathname, int flags, ...) {
 int hooked_openat(int dirfd, const char *pathname, int flags, ...) {
     /* 提取可变参数中的 mode */
     mode_t mode = 0;
-    if (flags & (O_CREAT | O_TMPFILE)) {
+    if (flags_require_mode(flags)) {
         va_list args;
         va_start(args, flags);
         mode = va_arg(args, int);
@@ -387,26 +585,19 @@ int hooked_openat(int dirfd, const char *pathname, int flags, ...) {
     /* 调用原始 openat 函数 */
     int fd = s_orig_openat(dirfd, pathname, flags, mode);
 
-    if (fd >= 0 && is_valid_fd(fd)) {
+    if (should_record_io() && fd >= 0 && is_valid_fd(fd)) {
         long long start_ns = get_time_ns();
 
         /* 记录 IO 会话 */
+        pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
-        strncpy(session->path, pathname, MAX_PATH_LENGTH - 1);
-        session->path[MAX_PATH_LENGTH - 1] = '\0';
+        copy_path_for_session(pathname, session->path);
         session->open_time_ns = start_ns;
         session->total_read_bytes = 0;
         session->total_write_bytes = 0;
         session->in_use = 1;
-
-        /* 通知 Java 层 */
-        notify_java_callback(
-                "open",
-                pathname,
-                0,
-                0,
-                is_main_thread()
-        );
+        session->generation = next_session_generation_locked();
+        pthread_mutex_unlock(&s_sessions_mutex);
     }
 
     return fd;
@@ -417,33 +608,43 @@ int hooked_openat(int dirfd, const char *pathname, int flags, ...) {
  * 记录读取字节数和耗时。
  */
 ssize_t hooked_read(int fd, void *buf, size_t count) {
-    /* 记录读操作开始时间 */
-    long long start_ns = get_time_ns();
+    int record = should_record_io();
+    unsigned long generation = 0;
+    if (record && is_valid_fd(fd)) {
+        pthread_mutex_lock(&s_sessions_mutex);
+        if (s_io_sessions[fd].in_use) {
+            generation = s_io_sessions[fd].generation;
+        }
+        pthread_mutex_unlock(&s_sessions_mutex);
+    }
+    long long start_ns = record ? get_time_ns() : 0;
 
     /* 调用原始 read 函数 */
     ssize_t result = s_orig_read(fd, buf, count);
 
-    if (result > 0 && is_valid_fd(fd)) {
+    if (record && result > 0 && is_valid_fd(fd)) {
         long long end_ns = get_time_ns();
         long long duration_ms = ns_to_ms(end_ns - start_ns);
-
-        /* 累加会话中的读取字节数 */
+        char path[MAX_PATH_LENGTH] = "unknown";
+        int session_matches = generation == 0;
+        pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
-        if (session->in_use) {
+        if (generation != 0 && session->in_use && session->generation == generation) {
             session->total_read_bytes += (long long)result;
+            strncpy(path, session->path, MAX_PATH_LENGTH - 1);
+            path[MAX_PATH_LENGTH - 1] = '\0';
+            session_matches = 1;
         }
-
-        /* 获取文件路径 */
-        const char *path = session->in_use ? session->path : "unknown";
-
-        /* 通知 Java 层 */
-        notify_java_callback(
-                "read",
-                path,
-                (long long)result,
-                duration_ms,
-                is_main_thread()
-        );
+        pthread_mutex_unlock(&s_sessions_mutex);
+        if (session_matches) {
+            notify_java_callback(
+                    "read",
+                    path,
+                    (long long)result,
+                    duration_ms,
+                    is_main_thread()
+            );
+        }
     }
 
     return result;
@@ -454,33 +655,43 @@ ssize_t hooked_read(int fd, void *buf, size_t count) {
  * 记录写入字节数和耗时。
  */
 ssize_t hooked_write(int fd, const void *buf, size_t count) {
-    /* 记录写操作开始时间 */
-    long long start_ns = get_time_ns();
+    int record = should_record_io();
+    unsigned long generation = 0;
+    if (record && is_valid_fd(fd)) {
+        pthread_mutex_lock(&s_sessions_mutex);
+        if (s_io_sessions[fd].in_use) {
+            generation = s_io_sessions[fd].generation;
+        }
+        pthread_mutex_unlock(&s_sessions_mutex);
+    }
+    long long start_ns = record ? get_time_ns() : 0;
 
     /* 调用原始 write 函数 */
     ssize_t result = s_orig_write(fd, buf, count);
 
-    if (result > 0 && is_valid_fd(fd)) {
+    if (record && result > 0 && is_valid_fd(fd)) {
         long long end_ns = get_time_ns();
         long long duration_ms = ns_to_ms(end_ns - start_ns);
-
-        /* 累加会话中的写入字节数 */
+        char path[MAX_PATH_LENGTH] = "unknown";
+        int session_matches = generation == 0;
+        pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
-        if (session->in_use) {
+        if (generation != 0 && session->in_use && session->generation == generation) {
             session->total_write_bytes += (long long)result;
+            strncpy(path, session->path, MAX_PATH_LENGTH - 1);
+            path[MAX_PATH_LENGTH - 1] = '\0';
+            session_matches = 1;
         }
-
-        /* 获取文件路径 */
-        const char *path = session->in_use ? session->path : "unknown";
-
-        /* 通知 Java 层 */
-        notify_java_callback(
-                "write",
-                path,
-                (long long)result,
-                duration_ms,
-                is_main_thread()
-        );
+        pthread_mutex_unlock(&s_sessions_mutex);
+        if (session_matches) {
+            notify_java_callback(
+                    "write",
+                    path,
+                    (long long)result,
+                    duration_ms,
+                    is_main_thread()
+            );
+        }
     }
 
     return result;
@@ -491,42 +702,31 @@ ssize_t hooked_write(int fd, const void *buf, size_t count) {
  * 计算会话总耗时，汇总读写字节数后通知 Java 层。
  */
 int hooked_close(int fd) {
-    /* 在关闭前提取会话信息 */
-    char path[MAX_PATH_LENGTH] = "unknown";
-    long long session_duration_ms = 0;
-    long long total_bytes = 0;
+    int record = should_record_io();
     int had_session = 0;
 
-    if (is_valid_fd(fd) && s_io_sessions[fd].in_use) {
+    unsigned long generation = 0;
+    if (record && is_valid_fd(fd)) {
+        pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
-        /* 复制路径（close 后 session 将被清理） */
-        strncpy(path, session->path, MAX_PATH_LENGTH - 1);
-        path[MAX_PATH_LENGTH - 1] = '\0';
-
-        /* 计算会话总耗时 */
-        long long now_ns = get_time_ns();
-        session_duration_ms = ns_to_ms(now_ns - session->open_time_ns);
-
-        /* 汇总读写字节数 */
-        total_bytes = session->total_read_bytes + session->total_write_bytes;
-
-        /* 标记会话为无效 */
-        session->in_use = 0;
-        had_session = 1;
+        if (session->in_use) {
+            generation = session->generation;
+            had_session = 1;
+        }
+        pthread_mutex_unlock(&s_sessions_mutex);
     }
 
     /* 调用原始 close 函数 */
     int result = s_orig_close(fd);
 
-    /* 在 close 成功后通知 Java 层 */
-    if (result == 0 && had_session) {
-        notify_java_callback(
-                "close",
-                path,
-                total_bytes,
-                session_duration_ms,
-                is_main_thread()
-        );
+    /* Clear only the generation closed by this call; close lifetime is not syscall latency. */
+    if (record && result == 0 && had_session) {
+        pthread_mutex_lock(&s_sessions_mutex);
+        if (s_io_sessions[fd].in_use && s_io_sessions[fd].generation == generation) {
+            s_io_sessions[fd].in_use = 0;
+            s_io_sessions[fd].generation = 0;
+        }
+        pthread_mutex_unlock(&s_sessions_mutex);
     }
 
     return result;
@@ -601,8 +801,9 @@ JNIEXPORT void JNICALL
 Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
         JNIEnv *env,
         jclass clazz) {
-    if (s_hooks_installed) {
-        LOG_D("IO hooks already installed, skipping");
+    if (atomic_load(&s_hooks_installed)) {
+        atomic_store(&s_recording_enabled, 1);
+        LOG_D("IO hooks already patched, recording re-enabled");
         return;
     }
 
@@ -617,7 +818,7 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     /* 注册 open hook */
     int ret = s_xhook_register(
-            "libc\\.so$",
+            XHOOK_TARGET_REGEX,
             "open",
             (void *)hooked_open,
             (void **)&s_orig_open
@@ -629,7 +830,7 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     /* 注册 openat hook */
     ret = s_xhook_register(
-            "libc\\.so$",
+            XHOOK_TARGET_REGEX,
             "openat",
             (void *)hooked_openat,
             (void **)&s_orig_openat
@@ -641,7 +842,7 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     /* 注册 read hook */
     ret = s_xhook_register(
-            "libc\\.so$",
+            XHOOK_TARGET_REGEX,
             "read",
             (void *)hooked_read,
             (void **)&s_orig_read
@@ -653,7 +854,7 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     /* 注册 write hook */
     ret = s_xhook_register(
-            "libc\\.so$",
+            XHOOK_TARGET_REGEX,
             "write",
             (void *)hooked_write,
             (void **)&s_orig_write
@@ -665,7 +866,7 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
 
     /* 注册 close hook */
     ret = s_xhook_register(
-            "libc\\.so$",
+            XHOOK_TARGET_REGEX,
             "close",
             (void *)hooked_close,
             (void **)&s_orig_close
@@ -680,23 +881,30 @@ Java_com_apm_io_NativeIoHook_nativeInstallIoHooks(
         return;
     }
 
+    /* xhook matches caller ELF pathnames, not libc itself; exclude both hook engines. */
+    if (s_xhook_ignore(XHOOK_SELF_REGEX, NULL) != 0 ||
+        s_xhook_ignore(XHOOK_LIBRARY_REGEX, NULL) != 0) {
+        throw_illegal_state(env, "xhook self-ignore registration failed; falling back to Java IO proxy");
+        return;
+    }
+
     /* 刷新 hook，使已加载的 SO 库中的 PLT 项被替换 */
     ret = s_xhook_refresh(XHOOK_REFRESH_SYNC);
     if (ret != 0) {
         LOG_E("xhook_refresh failed, ret=%d", ret);
         throw_illegal_state(env, "xhook_refresh failed; falling back to Java IO proxy");
     } else {
-        s_hooks_installed = 1;
+        atomic_store(&s_hooks_installed, 1);
+        atomic_store(&s_recording_enabled, 1);
         LOG_D("IO hooks installed successfully");
     }
 }
 
 /**
- * 卸载 IO Hook。
- * 恢复原始函数指针，清理会话表。
+ * 停止 IO 记录并清理会话表。
  *
  * 注意：PLT Hook 框架在运行时不支持完全卸载，
- * 此函数将停止记录但已修改的 PLT 项不会恢复。
+ * 此函数通过 recording flag 停止 hook 快路径记录，但已修改的 PLT 项不会恢复。
  * s_orig_xxx 函数指针继续有效，因此调用链不会断裂。
  *
  * @param env JNIEnv 指针
@@ -706,15 +914,15 @@ JNIEXPORT void JNICALL
 Java_com_apm_io_NativeIoHook_nativeUninstallIoHooks(
         JNIEnv *env,
         jclass clazz) {
-    if (!s_hooks_installed) {
+    if (!atomic_load(&s_hooks_installed) || !atomic_load(&s_recording_enabled)) {
         LOG_D("IO hooks not installed, nothing to uninstall");
         return;
     }
 
     LOG_D("Uninstalling IO hooks...");
 
-    /* 标记 Hook 为已卸载，停止记录新事件 */
-    s_hooks_installed = 0;
+    /* PLT remains patched; disable the hook fast-path without re-registering later. */
+    atomic_store(&s_recording_enabled, 0);
 
     /* 清理会话表 */
     init_io_sessions();
@@ -745,9 +953,11 @@ JNIEXPORT void JNI_OnUnload(JavaVM *vm, void *reserved) {
     /* 清理状态 */
     s_on_native_io_event_method = NULL;
     s_jvm = NULL;
-    s_hooks_installed = 0;
+    atomic_store(&s_hooks_installed, 0);
+    atomic_store(&s_recording_enabled, 0);
     s_xhook_register = NULL;
     s_xhook_refresh = NULL;
+    s_xhook_ignore = NULL;
     if (s_xhook_handle != NULL) {
         dlclose(s_xhook_handle);
         s_xhook_handle = NULL;

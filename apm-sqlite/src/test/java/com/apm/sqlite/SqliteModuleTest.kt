@@ -2,6 +2,7 @@ package com.apm.sqlite
 
 import org.junit.Assert.*
 import org.junit.Test
+import android.database.sqlite.SQLiteDatabase
 
 /**
  * SqliteModule 配置和参数测试。
@@ -129,6 +130,52 @@ class SqliteModuleTest {
     fun `query plan threshold is less than slow query threshold`() {
         val config = SqliteConfig()
         assertTrue(config.queryPlanThresholdMs < config.slowQueryThresholdMs)
+    }
+
+    /** 查询计划仅在开关开启、达到阈值且 SQL 可分析时执行。 */
+    @Test
+    fun `query plan gate consumes enable threshold and sql type`() {
+        val analyzer = QueryPlanAnalyzer(SqliteConfig(queryPlanThresholdMs = EXPECTED_QUERY_PLAN_MS))
+
+        assertFalse(analyzer.shouldAnalyze(EXPECTED_QUERY_PLAN_MS - 1L, "SELECT * FROM users"))
+        assertTrue(analyzer.shouldAnalyze(EXPECTED_QUERY_PLAN_MS, "SELECT * FROM users"))
+        assertFalse(analyzer.shouldAnalyze(EXPECTED_QUERY_PLAN_MS, "UPDATE users SET active = 1"))
+        assertFalse(
+            QueryPlanAnalyzer(SqliteConfig(enableQueryPlanAnalysis = false))
+                .shouldAnalyze(EXPECTED_QUERY_PLAN_MS, "SELECT * FROM users")
+        )
+    }
+
+    /** 规则兼容现代 SQLite 的 SCAN table 输出并识别临时排序。 */
+    @Test
+    fun `query plan parser recognizes modern scan output`() {
+        val analyzer = QueryPlanAnalyzer(SqliteConfig())
+
+        val issues = analyzer.analyzeDetails(
+            listOf(
+                "SCAN users",
+                "USE TEMP B-TREE FOR ORDER BY",
+                "SCAN CONSTANT ROW",
+                "SCAN 2 CONSTANT ROWS",
+                "SCAN SUBQUERY 2"
+            )
+        )
+
+        assertTrue(issues.any { it.issueType == "SCAN_TABLE" && it.tableName == "users" })
+        assertTrue(issues.any { it.issueType == "USE_TEMP_BTREE" })
+        assertFalse(issues.any { it.tableName == "CONSTANT" || it.tableName == "SUBQUERY" })
+    }
+
+    /** 已发布的二参 JVM API 必须保留，避免旧消费者运行时 NoSuchMethodError。 */
+    @Test
+    fun `query plan analyzer retains two argument jvm method`() {
+        val method = QueryPlanAnalyzer::class.java.getDeclaredMethod(
+            "analyze",
+            SQLiteDatabase::class.java,
+            String::class.java
+        )
+
+        assertEquals(List::class.java, method.returnType)
     }
 
     companion object {

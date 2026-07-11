@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-11｜25 个构建单元｜141 个主源码文件（136 Kotlin + 4 C + 1 proto）｜76 个测试/benchmark 文件
+> 文档同步：2026-07-11｜25 个构建单元｜143 个主源码文件（138 Kotlin + 4 C + 1 proto）｜78 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -52,8 +52,8 @@ monitor module
 | root Gradle subproject | 23 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 25 |
-| 主源码 | 141：136 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 76 |
+| 主源码 | 143：138 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 78 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -85,13 +85,13 @@ monitor module
 | Network | OkHttp 全阶段、慢/错请求、聚合 | Interceptor/EventListener 或手动回调 |
 | FPS | Choreographer、FrameMetrics、掉帧等级 | Activity 生命周期自动 |
 | Slow Method | Looper Hook、栈采样、ASM | ASM 必须由宿主应用 Gradle 插件 |
-| IO | 流代理、慢/主线程 IO、FD/Closeable、PLT Hook | 包装流；Native 依赖运行时 xhook |
+| IO | 流代理、慢/主线程 IO、FD/Closeable、去重吞吐窗口、PLT Hook | 显式包装流；Native 依赖运行时 xhook；回调 no-throw |
 | Battery | 电量、CPU、WakeLock/GPS/Alarm | 后三类为宿主回调 |
-| SQLite | 慢 SQL、主线程 DB、大影响行、QueryPlan | wrapper 或手动回调 |
+| SQLite | 慢 SQL、主线程 DB、大影响行、QueryPlan | wrapper rawQuery 对完整 SQL/参数做 QueryPlan；监控不改变 DB 结果 |
 | WebView | 页面/JS/白屏/Bridge/Console/资源瀑布 | 对指定实例 install/uninstall、delegate wrapper 或手动回调 |
 | IPC | Binder 耗时、主线程阈值、固定窗口聚合 | `traceBinderCall` / `onBinderCallComplete`，不使用隐藏 API |
 | Thread | 数量、同名线程、BLOCKED、真实线程池 backlog | `ThreadPoolExecutor` 由宿主显式注册 |
-| GC | GC 次数/耗时、Heap、分配和回收率 | 定时运行时采样 |
+| GC | GC 次数/耗时、Heap、分配和回收率 | 后台单调时钟采样；无效计数窗口跳过派生维度 |
 | Render | View 数量/层级、API 24+ FrameMetrics | Activity 自动；公共 API 不支持 GPU overdraw 计数 |
 
 ### 4.3 扩展与工具
@@ -129,7 +129,7 @@ monitor module
 
 ## 六、分发与宿主开销
 
-`Apm.emit` 在调用线程捕获时间戳、线程名和业务上下文快照，把事件构建延迟到 dispatcher worker。队列容量 2048，使用非阻塞 `offer`；满载时丢弃并计入自监控，避免监控 SDK 卡住业务线程。
+`Apm.emit` 在调用线程捕获时间戳、线程名和业务上下文不可变快照，把事件构建延迟到 dispatcher worker。宿主 `bizContextProvider` 异常会记录 internal error 并降级为空上下文，不向业务调用栈外泄。队列容量 2048，使用非阻塞 `offer`；满载时丢弃并计入自监控，避免监控 SDK 卡住业务线程。
 
 worker 单轮 drain 最多 32 条：
 
@@ -209,6 +209,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `WebviewConfig.enableAutoRegister` | false / deprecated | 无全局 WebView 注册；按实例 install |
 | `ThreadMonitorConfig.enableThreadLeakDetect` | false / deprecated | 通用 leak 判断不可靠；显式注册线程池 |
 | `RenderConfig.detectOverdraw` | false / deprecated | 公共 API 无 GPU overdraw 计数 |
+| `IoConfig.enableAutoHook` | false / deprecated | 无公共全局 Java IO Hook；使用显式 stream wrapper |
+
+各监控模块中历史遗留但没有对应运行时数据来源的 `maxStackTraceLength`（Battery/FPS/GC/Render）、Render 单 View `viewDrawThresholdMs` 和 Thread 通用 leak threshold 均保留为弃用兼容字段，不再描述为已生效能力。
 
 ## 十一、构建与发布
 
@@ -232,9 +235,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- 76 个 JUnit XML 测试套件、507 个测试，0 failures / 0 errors / 0 skipped；
+- root Gradle 80 个 JUnit XML 测试套件、535 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
 - 22 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,622,432 字节；
+- `apm-sample-app-release-unsigned.apk`，4,687,968 字节；
 - Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
 - `apm-benchmark` 未进入 Maven Local publication，Release 与 AndroidTest Kotlin 均编译成功；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
@@ -243,7 +246,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-76 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency、SQLite/Robolectric、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
+78 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 

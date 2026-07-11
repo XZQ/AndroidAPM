@@ -48,11 +48,12 @@ class IoModuleTest {
         assertEquals(4_000, config.maxStackTraceLength)
     }
 
-    /** 默认开启自动 Hook。 */
+    /** 通用 Java IO 自动 Hook 不受公共 API 支持，默认关闭。 */
     @Test
-    fun `default auto hook is enabled`() {
+    fun `default auto hook is disabled`() {
         val config = IoConfig()
-        assertTrue(config.enableAutoHook)
+        @Suppress("DEPRECATION")
+        assertFalse(config.enableAutoHook)
     }
 
     /** 默认小 buffer 阈值 4KB。 */

@@ -1,14 +1,15 @@
 package com.apm.gcmonitor
 
-import android.os.Handler
-import android.os.Looper
 import android.os.SystemClock
 import com.apm.core.Apm
 import com.apm.core.ApmContext
+import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * GC 监控模块（Memory Churn 检测）。
@@ -28,8 +29,8 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
 
     /** APM 上下文引用。 */
     private var apmContext: ApmContext? = null
-    /** 主线程 Handler，用于定时检测。 */
-    private val mainHandler = Handler(Looper.getMainLooper())
+    /** Serial background sampler created for each started lifecycle. */
+    private var sampler: ScheduledExecutorService? = null
     /** 是否正在监控。 */
     @Volatile
     private var monitoring = false
@@ -37,13 +38,15 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
     private var lastStats: GcStats? = null
 
     /** 定时检测任务。 */
-    private val checkTask = object : Runnable {
-        override fun run() {
-            if (!monitoring) {
-                return
-            }
+    private val checkTask = Runnable {
+        if (!monitoring) {
+            return@Runnable
+        }
+        try {
             checkGc()
-            mainHandler.postDelayed(this, config.checkIntervalMs)
+        } catch (error: RuntimeException) {
+            // Scheduled executors suppress future runs after an uncaught exception.
+            Apm.recordInternalError(ERROR_TAG_SAMPLE_LOOP, error)
         }
     }
 
@@ -52,20 +55,27 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
     }
 
     override fun onStart() {
-        if (!config.enableGcMonitor) {
+        if (!config.enableGcMonitor || monitoring) {
             return
         }
         monitoring = true
-        // 采集初始快照
-        lastStats = collectGcStats()
-        // 启动定时检测
-        mainHandler.postDelayed(checkTask, config.checkIntervalMs)
+        lastStats = null
+        sampler = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME_SAMPLER).also { executor ->
+            executor.scheduleWithFixedDelay(
+                checkTask,
+                INITIAL_DELAY_MS,
+                config.checkIntervalMs.coerceAtLeast(MIN_CHECK_INTERVAL_MS),
+                TimeUnit.MILLISECONDS
+            )
+        }
         apmContext?.logger?.d("GC monitor started")
     }
 
     override fun onStop() {
         monitoring = false
-        mainHandler.removeCallbacks(checkTask)
+        sampler?.shutdownNow()
+        sampler = null
+        lastStats = null
     }
 
     /**
@@ -79,10 +89,10 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
             return
         }
 
-        // 计算 GC 增量
-        val gcCountDelta = current.gcCount - prev.gcCount
-        val gcTimeDelta = current.gcTimeMs - prev.gcTimeMs
         val windowMs = current.timestamp - prev.timestamp
+        val windowMetrics = GcWindowMetrics.calculate(prev, current)
+        val gcCountDelta = windowMetrics.gcCountDelta
+        val gcTimeDelta = windowMetrics.gcTimeDeltaMs
 
         // 计算 Heap 增长
         val prevHeapRatio = if (prev.javaHeapMax > 0) {
@@ -103,13 +113,13 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         var reason = ""
 
         // GC 次数飙升
-        if (gcCountDelta >= config.gcCountSpikeThreshold) {
+        if (windowMetrics.gcCountersAvailable && gcCountDelta >= config.gcCountSpikeThreshold) {
             needReport = true
             reason = "GC count spike: $gcCountDelta in ${windowMs}ms"
         }
 
         // GC 耗时占比过高
-        if (gcTimeRatio >= config.gcTimeRatioThreshold) {
+        if (windowMetrics.gcCountersAvailable && gcTimeRatio >= config.gcTimeRatioThreshold) {
             needReport = true
             if (reason.isNotEmpty()) reason += "; "
             reason += "GC time ratio: ${"%.1f%%".format(gcTimeRatio * 100)}"
@@ -122,6 +132,27 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
             reason += "Heap growth: ${"%.1f%%".format(heapGrowth * 100)}"
         }
 
+        // ART cumulative allocation counters make this calculation independent
+        // of heap growth, which can be hidden by GC within the same window.
+        if (config.enableAllocationRate && windowMetrics.allocationRateAvailable &&
+            windowMetrics.allocationRateKbPerSec >= config.allocationRateThresholdKbPerSec
+        ) {
+            needReport = true
+            if (reason.isNotEmpty()) reason += "; "
+            reason += "Allocation rate: ${"%.1f".format(windowMetrics.allocationRateKbPerSec)} KiB/s"
+        }
+
+        // A reclaim ratio is meaningful only when both a GC and allocation
+        // occurred in this sampling window.
+        if (config.enableGcReclaimAnalysis && windowMetrics.reclaimRateAvailable &&
+            gcCountDelta > 0L && windowMetrics.allocatedBytes > 0L &&
+            windowMetrics.gcReclaimRate <= config.gcLowReclaimRate
+        ) {
+            needReport = true
+            if (reason.isNotEmpty()) reason += "; "
+            reason += "Low GC reclaim rate: ${"%.1f%%".format(windowMetrics.gcReclaimRate * 100)}"
+        }
+
         if (needReport) {
             Apm.emit(
                 module = MODULE_NAME,
@@ -131,17 +162,28 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
                 fields = mapOf(
                     FIELD_GC_COUNT_DELTA to gcCountDelta,
                     FIELD_GC_TIME_DELTA_MS to gcTimeDelta,
+                    FIELD_GC_COUNTERS_AVAILABLE to windowMetrics.gcCountersAvailable,
                     FIELD_GC_TIME_RATIO to gcTimeRatio,
                     FIELD_HEAP_GROWTH to heapGrowth,
                     FIELD_HEAP_USED_RATIO to currHeapRatio,
+                    FIELD_ALLOCATION_RATE_KIB_PER_SEC to windowMetrics.allocationRateKbPerSec,
+                    FIELD_GC_RECLAIM_BYTES to windowMetrics.gcReclaimBytes,
+                    FIELD_GC_RECLAIM_RATE to windowMetrics.gcReclaimRate,
+                    FIELD_ALLOCATION_RATE_AVAILABLE to windowMetrics.allocationRateAvailable,
+                    FIELD_RECLAIM_RATE_AVAILABLE to windowMetrics.reclaimRateAvailable,
                     FIELD_WINDOW_MS to windowMs,
                     FIELD_REASON to reason
                 )
             )
         }
 
-        // 更新快照
-        lastStats = current
+        // Retain the derived values with the raw cumulative counters so a
+        // debugger inspecting the latest snapshot sees the same reported window.
+        lastStats = current.copy(
+            allocationRateKbPerSec = windowMetrics.allocationRateKbPerSec,
+            gcReclaimBytes = windowMetrics.gcReclaimBytes,
+            gcReclaimRate = windowMetrics.gcReclaimRate
+        )
     }
 
     /**
@@ -151,8 +193,10 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
     private fun collectGcStats(): GcStats? {
         return try {
             val runtime = Runtime.getRuntime()
-            val gcCount = getRuntimeStat("art.gc.gc-count")?.toLongOrNull() ?: 0L
-            val gcTimeMs = getRuntimeStat("art.gc.gc-time")?.toLongOrNull() ?: 0L
+            val gcCount = getRuntimeStat(STAT_GC_COUNT)?.toLongOrNull() ?: COUNTER_UNAVAILABLE
+            val gcTimeMs = getRuntimeStat(STAT_GC_TIME)?.toLongOrNull() ?: COUNTER_UNAVAILABLE
+            val bytesAllocated = getRuntimeStat(STAT_BYTES_ALLOCATED)?.toLongOrNull() ?: COUNTER_UNAVAILABLE
+            val bytesFreed = getRuntimeStat(STAT_BYTES_FREED)?.toLongOrNull() ?: COUNTER_UNAVAILABLE
             // gc-time 单位是 ms（API 23+）
             val heapUsed = runtime.totalMemory() - runtime.freeMemory()
             val heapMax = runtime.maxMemory()
@@ -162,9 +206,12 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
                 gcTimeMs = gcTimeMs,
                 javaHeapUsed = heapUsed,
                 javaHeapMax = heapMax,
-                timestamp = System.currentTimeMillis()
+                timestamp = SystemClock.elapsedRealtime(),
+                bytesAllocated = bytesAllocated,
+                bytesFreed = bytesFreed
             )
         } catch (e: Exception) {
+            Apm.recordInternalError(ERROR_TAG_COLLECT_STATS, e)
             null
         }
     }
@@ -189,6 +236,36 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         /** 自监控 tag：Debug.getRuntimeStat 调用失败。 */
         private const val ERROR_TAG_RUNTIME_STAT = "gc_runtime_stat"
 
+        /** Self-diagnostic tag for unexpected snapshot construction failures. */
+        private const val ERROR_TAG_COLLECT_STATS = "gc_collect_stats"
+
+        /** Self-diagnostic tag for an unexpected scheduled sampling failure. */
+        private const val ERROR_TAG_SAMPLE_LOOP = "gc_sample_loop"
+
+        /** Dedicated daemon sampler thread name. */
+        private const val THREAD_NAME_SAMPLER = "gc-monitor"
+
+        /** First sample establishes a baseline immediately on the background thread. */
+        private const val INITIAL_DELAY_MS = 0L
+
+        /** Prevents invalid configuration from creating a busy loop. */
+        private const val MIN_CHECK_INTERVAL_MS = 1_000L
+
+        /** Sentinel distinguishing missing ART counters from a legitimate zero. */
+        private const val COUNTER_UNAVAILABLE = -1L
+
+        /** ART cumulative allocated-byte runtime-stat key. */
+        private const val STAT_BYTES_ALLOCATED = "art.gc.bytes-allocated"
+
+        /** ART cumulative freed-byte runtime-stat key. */
+        private const val STAT_BYTES_FREED = "art.gc.bytes-freed"
+
+        /** ART cumulative GC-count runtime-stat key. */
+        private const val STAT_GC_COUNT = "art.gc.gc-count"
+
+        /** ART cumulative GC-time runtime-stat key. */
+        private const val STAT_GC_TIME = "art.gc.gc-time"
+
         /** 模块名。 */
         private const val MODULE_NAME = "gc_monitor"
         /** Memory Churn 告警事件名。 */
@@ -197,12 +274,24 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         private const val FIELD_GC_COUNT_DELTA = "gcCountDelta"
         /** 字段：GC 耗时增量。 */
         private const val FIELD_GC_TIME_DELTA_MS = "gcTimeDeltaMs"
+        /** Field: whether GC count/time deltas were valid for this window. */
+        private const val FIELD_GC_COUNTERS_AVAILABLE = "gcCountersAvailable"
         /** 字段：GC 耗时占比。 */
         private const val FIELD_GC_TIME_RATIO = "gcTimeRatio"
         /** 字段：Heap 增长。 */
         private const val FIELD_HEAP_GROWTH = "heapGrowth"
         /** 字段：当前 Heap 使用率。 */
         private const val FIELD_HEAP_USED_RATIO = "heapUsedRatio"
+        /** Field: allocation rate in KiB per second. */
+        private const val FIELD_ALLOCATION_RATE_KIB_PER_SEC = "allocationRateKiBPerSec"
+        /** Field: reclaimed bytes in the sampling window. */
+        private const val FIELD_GC_RECLAIM_BYTES = "gcReclaimBytes"
+        /** Field: reclaimed-to-allocated byte ratio. */
+        private const val FIELD_GC_RECLAIM_RATE = "gcReclaimRate"
+        /** Field: whether allocation rate was valid for this window. */
+        private const val FIELD_ALLOCATION_RATE_AVAILABLE = "allocationRateAvailable"
+        /** Field: whether reclaim rate was valid for this window. */
+        private const val FIELD_RECLAIM_RATE_AVAILABLE = "reclaimRateAvailable"
         /** 字段：检测窗口时长。 */
         private const val FIELD_WINDOW_MS = "windowMs"
         /** 字段：告警原因。 */

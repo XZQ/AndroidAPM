@@ -22,7 +22,8 @@ data class RenderConfig(
         replaceWith = ReplaceWith("false")
     )
     val detectOverdraw: Boolean = false,
-    /** 最大堆栈截取长度。 */
+    /** Compatibility-only field; frame and hierarchy metrics do not capture stack traces. */
+    @Deprecated(message = "Render monitoring does not capture stack traces")
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** FrameMetrics total-duration threshold for a slow frame. */
     val slowFrameThresholdMs: Long = DEFAULT_SLOW_FRAME_THRESHOLD_MS

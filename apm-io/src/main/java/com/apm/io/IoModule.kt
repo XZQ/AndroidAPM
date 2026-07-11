@@ -49,6 +49,12 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
     override fun onStart() {
         started = config.enableIoMonitor
         if (started) {
+            @Suppress("DEPRECATION")
+            if (config.enableAutoHook) {
+                apmContext?.logger?.w(
+                    "enableAutoHook is deprecated and ignored; use explicit stream wrappers"
+                )
+            }
             nativeIoHook = NativeIoHook(config).also { it.init() }
         }
         apmContext?.logger?.d("IO module started, mainThreadThreshold=${config.mainThreadIoThresholdMs}ms")
