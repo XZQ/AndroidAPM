@@ -36,6 +36,8 @@ object ApmEventCodec {
             output.writeStringMap(event.fields.mapValues { (_, value) -> value?.toString().orEmpty() })
             output.writeStringMap(event.globalContext)
             output.writeStringMap(event.extras)
+            // Version 2 appends identity so every version-1 field keeps its original order.
+            output.writeString(event.eventId)
         }
         return buffer.toByteArray().also { payload ->
             require(payload.size <= MAX_PAYLOAD_BYTES) {
@@ -57,7 +59,9 @@ object ApmEventCodec {
         }
         return DataInputStream(ByteArrayInputStream(payload)).use { input ->
             val version = input.readInt()
-            require(version == FORMAT_VERSION) { "Unsupported APM event format version: $version" }
+            require(version in LEGACY_FORMAT_VERSION..FORMAT_VERSION) {
+                "Unsupported APM event format version: $version"
+            }
             ApmEvent(
                 timestamp = input.readLong(),
                 module = input.readString(),
@@ -71,7 +75,9 @@ object ApmEventCodec {
                 foreground = input.readNullableBoolean(),
                 fields = input.readStringMap(),
                 globalContext = input.readStringMap(),
-                extras = input.readStringMap()
+                extras = input.readStringMap(),
+                // Legacy rows receive a deterministic ID from their SQLite row during schema migration.
+                eventId = if (version >= FORMAT_VERSION_WITH_EVENT_ID) input.readString() else ""
             )
         }
     }
@@ -196,7 +202,13 @@ object ApmEventCodec {
     }
 
     /** Current durable payload format version. */
-    private const val FORMAT_VERSION = 1
+    private const val FORMAT_VERSION = 2
+
+    /** Oldest durable format still accepted. */
+    private const val LEGACY_FORMAT_VERSION = 1
+
+    /** First durable format containing the appended event identity. */
+    private const val FORMAT_VERSION_WITH_EVENT_ID = 2
 
     /** Maximum accepted encoded event size. */
     private const val MAX_PAYLOAD_BYTES = 2 * 1024 * 1024

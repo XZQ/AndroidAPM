@@ -245,6 +245,26 @@ class ProtobufSerializerTest {
         assertTrue("Priority should be encoded under proto field 13", found)
     }
 
+    /** Stable identity is appended under protobuf field 14. */
+    @Test
+    fun `serialize writes event identity under proto field 14`() {
+        val event = ApmEvent(module = "test", name = "identity", eventId = "event-14")
+
+        val bytes = ProtobufSerializer.serialize(event)
+
+        val identityTag = ((EVENT_ID_FIELD_NUMBER shl 3) or WIRE_TYPE_LENGTH_DELIMITED).toByte()
+        val identityBytes = event.eventId.toByteArray(Charsets.UTF_8)
+        assertTrue(
+            "Event identity should be encoded under proto field 14",
+            bytes.indices.any { index ->
+                index + identityBytes.size + 1 < bytes.size &&
+                    bytes[index] == identityTag &&
+                    bytes[index + 1].toInt() == identityBytes.size &&
+                    bytes.copyOfRange(index + 2, index + 2 + identityBytes.size).contentEquals(identityBytes)
+            }
+        )
+    }
+
     // --- 批量序列化测试 ---
 
     @Test
@@ -313,6 +333,9 @@ class ProtobufSerializerTest {
     companion object {
         /** priority 的 proto 字段编号，须与 ProtobufSerializer/apm_event.proto 一致。 */
         private const val PRIORITY_FIELD_NUMBER = 13
+
+        /** event_id proto field number appended after priority. */
+        private const val EVENT_ID_FIELD_NUMBER = 14
 
         /** protobuf wire type 2：length-delimited（字符串/bytes/嵌套消息）。 */
         private const val WIRE_TYPE_LENGTH_DELIMITED = 2

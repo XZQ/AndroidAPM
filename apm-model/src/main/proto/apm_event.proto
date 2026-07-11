@@ -55,4 +55,7 @@ message ApmEventMessage {
   // 上传优先级枚举名：LOW / NORMAL / HIGH / CRITICAL。
   // 与 Line Protocol 输出保持同一套字段语义。
   string priority = 13;
+
+  // Stable opaque client identity used by collectors for deduplication.
+  string event_id = 14;
 }

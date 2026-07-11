@@ -94,6 +94,25 @@ class ApmEventTest {
         assertTrue("Timestamp should be non-zero", event.timestamp > 0L)
     }
 
+    /** New events receive unique identities and data-class copies preserve them. */
+    @Test
+    fun `event identity is unique and stable across copy`() {
+        val first = ApmEvent(module = "test", name = "first")
+        val second = ApmEvent(module = "test", name = "second")
+
+        assertTrue(first.eventId.isNotBlank())
+        assertNotEquals(first.eventId, second.eventId)
+        assertEquals(first.eventId, first.copy(name = "copied").eventId)
+    }
+
+    /** Line protocol exposes the stable identity as a top-level field. */
+    @Test
+    fun `line protocol contains event identity`() {
+        val line = ApmEvent(module = "test", name = "line", eventId = "event-7").toLineProtocol()
+
+        assertTrue(line.contains("eventId=event-7"))
+    }
+
     /** Severity 枚举值完整性检查。 */
     @Test
     fun `severity enum has expected values`() {

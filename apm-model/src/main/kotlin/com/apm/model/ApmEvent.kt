@@ -55,7 +55,9 @@ data class ApmEvent(
     /** 全局上下文（默认上下文 + 业务上下文合并）。 */
     val globalContext: Map<String, String> = emptyMap(),
     /** 附加键值对，用于扩展信息。 */
-    val extras: Map<String, String> = emptyMap()
+    val extras: Map<String, String> = emptyMap(),
+    /** Stable opaque identity retained across storage, forwarding, and upload retry. */
+    val eventId: String = ApmEventIdGenerator.next()
 )
 
 /**
@@ -66,6 +68,7 @@ data class ApmEvent(
 fun ApmEvent.toLineProtocol(): String {
     val segments = mutableListOf(
         "ts=$timestamp",
+        "eventId=${eventId.sanitize()}",
         "module=${module.sanitize()}",
         "name=${name.sanitize()}",
         "kind=${kind.name}",
