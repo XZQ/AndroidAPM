@@ -12,8 +12,16 @@ data class IpcConfig(
     val mainThreadBinderThresholdMs: Long = DEFAULT_MAIN_THREAD_BINDER_THRESHOLD_MS,
     /** 最大堆栈截取长度。 */
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
-    /** 是否启用 BinderProxy transact 反射 Hook。 */
-    val enableBinderHook: Boolean = true,
+    /**
+     * Compatibility-only flag for the previously declared generic Binder hook.
+     * Android has no supported public API for a process-wide BinderProxy hook;
+     * use [IpcModule.traceBinderCall] or [IpcModule.onBinderCallComplete].
+     */
+    @Deprecated(
+        message = "No supported generic Binder hook exists; use traceBinderCall or onBinderCallComplete",
+        replaceWith = ReplaceWith("false")
+    )
+    val enableBinderHook: Boolean = false,
     /** 是否启用 Binder 调用聚合统计。 */
     val enableBinderAggregation: Boolean = true,
     /** 聚合统计窗口大小（调用次数）。 */

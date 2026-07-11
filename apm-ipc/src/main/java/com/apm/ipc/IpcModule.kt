@@ -38,6 +38,13 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
     @Volatile
     private var started = false
 
+    /** Optional fixed-size call accumulator. */
+    private val aggregator = if (config.enableBinderAggregation) {
+        BinderCallAggregator(config.aggregationWindowSize.coerceAtLeast(1))
+    } else {
+        null
+    }
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
@@ -49,6 +56,28 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
     override fun onStop() {
         started = false
+        aggregator?.reset()
+    }
+
+    /**
+     * Measures one explicit AIDL or service call without reflection or hidden APIs.
+     * The application result and exception semantics are preserved exactly.
+     *
+     * @param interfaceName Binder interface or service name
+     * @param methodName invoked method name
+     * @param block application call to execute
+     * @return application result from [block]
+     */
+    fun <T> traceBinderCall(interfaceName: String, methodName: String, block: () -> T): T {
+        val startedAtNanos = System.nanoTime()
+        try {
+            return block()
+        } finally {
+            // Completion is recorded even when the application call throws;
+            // the original exception continues to the caller.
+            val durationMs = (System.nanoTime() - startedAtNanos).coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+            onBinderCallComplete(interfaceName, methodName, durationMs)
+        }
     }
 
     /**
@@ -65,6 +94,11 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
         val threshold = if (isMainThread) config.mainThreadBinderThresholdMs else config.binderThresholdMs
+
+        val aggregation = aggregator?.record(durationMs, durationMs >= threshold)
+        if (aggregation != null) {
+            reportAggregation(aggregation)
+        }
 
         if (durationMs < threshold) {
             return
@@ -95,12 +129,32 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
         )
     }
 
+    /** Emits one completed Binder aggregation window. */
+    private fun reportAggregation(snapshot: BinderAggregationSnapshot) {
+        Apm.emit(
+            module = MODULE_NAME,
+            name = EVENT_BINDER_AGGREGATION,
+            kind = ApmEventKind.METRIC,
+            severity = ApmSeverity.INFO,
+            priority = ApmPriority.LOW,
+            fields = mapOf(
+                FIELD_CALL_COUNT to snapshot.callCount,
+                FIELD_TOTAL_DURATION_MS to snapshot.totalDurationMs,
+                FIELD_AVERAGE_DURATION_MS to snapshot.totalDurationMs / snapshot.callCount,
+                FIELD_MAX_DURATION_MS to snapshot.maxDurationMs,
+                FIELD_SLOW_CALL_COUNT to snapshot.slowCallCount
+            )
+        )
+    }
+
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "ipc"
 
         /** 慢 Binder 调用事件。 */
         private const val EVENT_SLOW_BINDER = "slow_binder_call"
+        /** Completed Binder aggregation window event. */
+        private const val EVENT_BINDER_AGGREGATION = "binder_call_aggregation"
 
         /** 字段：接口名。 */
         private const val FIELD_INTERFACE = "interfaceName"
@@ -119,8 +173,20 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
         /** 字段：堆栈。 */
         private const val FIELD_STACK_TRACE = "stackTrace"
+        /** Field: calls retained in an aggregation window. */
+        private const val FIELD_CALL_COUNT = "callCount"
+        /** Field: summed call latency. */
+        private const val FIELD_TOTAL_DURATION_MS = "totalDurationMs"
+        /** Field: average call latency. */
+        private const val FIELD_AVERAGE_DURATION_MS = "averageDurationMs"
+        /** Field: maximum call latency. */
+        private const val FIELD_MAX_DURATION_MS = "maxDurationMs"
+        /** Field: calls that crossed the applicable threshold. */
+        private const val FIELD_SLOW_CALL_COUNT = "slowCallCount"
 
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
+        /** Nanoseconds contained in one millisecond. */
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }

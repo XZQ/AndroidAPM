@@ -44,11 +44,11 @@ class IpcModuleTest {
         assertEquals(4000, config.maxStackTraceLength)
     }
 
-    /** 默认开启 Binder Hook。 */
+    /** 不存在安全通用 Hook，因此兼容字段默认关闭。 */
     @Test
-    fun `default enable binder hook is true`() {
+    fun `default enable binder hook is false`() {
         val config = IpcConfig()
-        assertTrue(config.enableBinderHook)
+        assertFalse(config.enableBinderHook)
     }
 
     /** 默认开启聚合。 */
@@ -103,5 +103,21 @@ class IpcModuleTest {
     fun `main thread threshold is stricter than background`() {
         val config = IpcConfig()
         assertTrue(config.mainThreadBinderThresholdMs < config.binderThresholdMs)
+    }
+
+    /** Explicit tracing returns the wrapped Binder result unchanged. */
+    @Test
+    fun `trace binder call preserves result`() {
+        val result = IpcModule().traceBinderCall("service", "method") { "accepted" }
+
+        assertEquals("accepted", result)
+    }
+
+    /** Explicit tracing never swallows an application exception. */
+    @Test(expected = IllegalStateException::class)
+    fun `trace binder call preserves exception`() {
+        IpcModule().traceBinderCall<Unit>("service", "method") {
+            throw IllegalStateException("expected")
+        }
     }
 }
