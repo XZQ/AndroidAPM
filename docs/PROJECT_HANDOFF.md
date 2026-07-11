@@ -41,7 +41,7 @@
 最新 runtime 实现提交（文档同步前）为：
 
 ```text
-210236f Fix: Warn on ignored legacy switches
+70a879d Fix: Close reliability review findings
 ```
 
 之后的提交可能是样式、文档或仓库跟踪调整；使用 Git 历史判断实际 tip。

@@ -48,7 +48,7 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `210236f Fix: Warn on ignored legacy switches` |
+| 最新 runtime 实现提交（文档同步前） | `70a879d Fix: Close reliability review findings` |
 | root Gradle subproject | 23 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 25 |
