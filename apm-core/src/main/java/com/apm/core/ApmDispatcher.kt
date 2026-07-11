@@ -187,15 +187,17 @@ internal class ApmDispatcher(
             return false
         }
         selfMonitor?.recordEmit()
-        return runCatching {
+        return try {
             val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
             store.append(sanitizedEvent)
             persistentUploadWorker?.signal()
             true
-        }.onFailure {
-            logger.e("Failed to persist critical event ${event.module}/${event.name}", it)
+        } catch (error: Exception) {
+            logger.e("Failed to persist critical event ${event.module}/${event.name}", error)
             selfMonitor?.recordDrop(event.priority)
-        }.getOrDefault(false)
+            Apm.recordInternalError(ERROR_PROCESS_EVENT, error)
+            false
+        }
     }
 
     /**
@@ -234,21 +236,28 @@ internal class ApmDispatcher(
         // 聚合与限流在此线程执行，调用线程零开销
         val toPersist = ArrayList<ApmEvent>(batch.size)
         for (queued in batch) {
-            // 延迟构建的事件在此线程完成构建（上下文合并等）
-            val resolved = queued.resolve()
-            // 聚合检查 — 可能吞入事件（返回空）或输出聚合结果
-            val expanded = if (aggregator != null && !queued.preAggregated) {
-                aggregator.process(resolved)
-            } else {
-                listOf(resolved)
-            }
-            for (event in expanded) {
-                // 限流检查（ERROR/FATAL 跳过限流，保证关键事件不丢失）
-                if (!passesRateLimit(event)) {
-                    continue
+            try {
+                // 延迟构建的事件在此线程完成构建（上下文合并等）
+                val resolved = queued.resolve()
+                // 聚合检查 — 可能吞入事件（返回空）或输出聚合结果
+                val expanded = if (aggregator != null && !queued.preAggregated) {
+                    aggregator.process(resolved)
+                } else {
+                    listOf(resolved)
                 }
-                // PII 脱敏：在存储和上传前对文本字段执行脱敏
-                toPersist += piiSanitizer?.sanitize(event) ?: event
+                for (event in expanded) {
+                    // 限流检查（ERROR/FATAL 跳过限流，保证关键事件不丢失）
+                    if (!passesRateLimit(event)) {
+                        continue
+                    }
+                    // PII 脱敏：在存储和上传前对文本字段执行脱敏
+                    toPersist += piiSanitizer?.sanitize(event) ?: event
+                }
+            } catch (error: Exception) {
+                // One malformed or failing monitor event must not terminate the shared worker.
+                logger.e("Failed to process queued event", error)
+                selfMonitor?.recordDrop(queued.event?.priority ?: com.apm.model.ApmPriority.NORMAL)
+                Apm.recordInternalError(ERROR_PROCESS_EVENT, error)
             }
         }
         if (toPersist.isEmpty()) {
@@ -275,8 +284,9 @@ internal class ApmDispatcher(
                 // 记录整批处理延迟
                 selfMonitor?.recordUploadLatency(System.currentTimeMillis() - startTime)
             }
-        } catch (throwable: Throwable) {
-            logger.e("Failed to dispatch batch of ${toPersist.size} events", throwable)
+        } catch (error: Exception) {
+            logger.e("Failed to dispatch batch of ${toPersist.size} events", error)
+            Apm.recordInternalError(ERROR_PERSIST_BATCH, error)
             // 异常整批计入丢弃
             for (event in toPersist) {
                 selfMonitor?.recordDrop(event.priority)
@@ -340,8 +350,9 @@ internal class ApmDispatcher(
                         } else {
                             uploader.upload(event)
                         }
-                    } catch (e: Throwable) {
+                    } catch (e: Exception) {
                         logger.e("Failed to flush aggregated event", e)
+                        Apm.recordInternalError(ERROR_AGGREGATION_FLUSH, e)
                     }
                 }
             }
@@ -359,7 +370,7 @@ internal class ApmDispatcher(
     private inline fun shutdownPhase(name: String, block: () -> Unit) {
         try {
             block()
-        } catch (error: Throwable) {
+        } catch (error: Exception) {
             logger.e("Failed to shutdown dispatcher $name", error)
             Apm.recordInternalError("$SHUTDOWN_ERROR_TAG_PREFIX${name.replace(' ', '_')}", error)
         }
@@ -392,6 +403,15 @@ internal class ApmDispatcher(
 
         /** 有界事件队列容量：满时丢弃新事件（背压保护）。 */
         private const val QUEUE_CAPACITY = 2_048
+
+        /** Internal-error tag for one failed queued event transformation. */
+        private const val ERROR_PROCESS_EVENT = "dispatcher_process_event"
+
+        /** Internal-error tag for a failed durable batch append. */
+        private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"
+
+        /** Internal-error tag for a failed aggregation shutdown flush. */
+        private const val ERROR_AGGREGATION_FLUSH = "dispatcher_aggregation_flush"
 
         /** worker 单轮最多批量取出的事件数。 */
         private const val MAX_BATCH_DRAIN = 32

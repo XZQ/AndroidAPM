@@ -10,6 +10,8 @@ import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.uploader.ApmUploader
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
@@ -104,6 +106,43 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
     }
 
+    /** A recoverable event factory failure must not terminate the shared dispatcher worker. */
+    @Test
+    fun `recoverable lazy factory failure does not kill dispatcher worker`() {
+        val uploaded = CountDownLatch(1)
+        val store = RecordingStore()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(uploaded),
+            logger = RecordingLogger()
+        )
+
+        dispatcher.dispatchLazy { throw IllegalStateException("factory failure") }
+        dispatcher.dispatch(createEvent(name = "after_failure"))
+
+        assertTrue(uploaded.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertEquals(listOf("after_failure"), store.events.map(ApmEvent::name))
+        dispatcher.shutdown()
+    }
+
+    /** Fatal VM errors must remain visible instead of being converted into a telemetry drop. */
+    @Test
+    fun `critical persistence does not swallow fatal vm error`() {
+        val fatal = OutOfMemoryError("fatal")
+        val dispatcher = ApmDispatcher(
+            store = ThrowingAppendStore(fatal),
+            uploader = RecordingUploader(),
+            logger = RecordingLogger()
+        )
+
+        val actual = assertThrows(OutOfMemoryError::class.java) {
+            dispatcher.dispatchCriticalSync(createEvent(name = "fatal"))
+        }
+
+        assertSame(fatal, actual)
+        dispatcher.shutdown()
+    }
+
     /**
      * 构造测试事件。
      *
@@ -154,6 +193,24 @@ class ApmDispatcherTest {
             // 测试场景无需额外动作。
             events.clear()
         }
+    }
+
+    /** Store that exposes whether dispatcher recovery code swallows a fatal error. */
+    private class ThrowingAppendStore(
+        /** Fatal error thrown from local persistence. */
+        private val fatal: Error
+    ) : EventStore {
+
+        /** Throws the configured fatal error. */
+        override fun append(event: ApmEvent) {
+            throw fatal
+        }
+
+        /** No persisted rows are available. */
+        override fun readRecent(limit: Int): List<String> = emptyList()
+
+        /** Nothing is retained by this test store. */
+        override fun clear() = Unit
     }
 
     /**
