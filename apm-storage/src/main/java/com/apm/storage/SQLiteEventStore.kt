@@ -68,6 +68,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         ensureRowCountInitialized(db)
 
         // 单事务批量插入：一次 fsync 落盘整批事件
+        var insertedCount = 0
         db.beginTransaction()
         try {
             for (event in events) {
@@ -80,10 +81,17 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                     // 避免每条事件的双重序列化开销；保留列以免 schema 迁移
                     put(COLUMN_DATA, EMPTY_DATA)
                     put(COLUMN_PAYLOAD, ApmEventCodec.encode(event))
+                    put(COLUMN_EVENT_ID, event.eventId)
                     put(COLUMN_TIMESTAMP, event.timestamp)
                     put(COLUMN_RETRY_COUNT, 0)
+                    putNull(COLUMN_LEASE_OWNER)
+                    put(COLUMN_LEASE_EXPIRES_AT, NO_LEASE_EXPIRY)
                 }
-                db.insert(TABLE_NAME, null, values)
+                // Stable event identity makes local replay idempotent. Count
+                // only successful inserts so capacity accounting stays exact.
+                if (db.insertWithOnConflict(TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE) >= 0L) {
+                    insertedCount += 1
+                }
             }
             db.setTransactionSuccessful()
         } finally {
@@ -91,8 +99,8 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         }
 
         // 维护缓存计数并周期性重同步，纠正外部删除造成的漂移
-        cachedRowCount.addAndGet(events.size.toLong())
-        appendsSinceResync += events.size
+        cachedRowCount.addAndGet(insertedCount.toLong())
+        appendsSinceResync += insertedCount
         if (appendsSinceResync >= COUNT_RESYNC_INTERVAL) {
             cachedRowCount.set(countInternal(db))
             appendsSinceResync = 0
@@ -120,7 +128,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
 
         db.query(
             TABLE_NAME,
-            arrayOf(COLUMN_DATA, COLUMN_PAYLOAD),
+            arrayOf(COLUMN_DATA, COLUMN_PAYLOAD, COLUMN_EVENT_ID),
             null, null,
             null, null,
             "$COLUMN_TIMESTAMP DESC",
@@ -133,7 +141,8 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                     results.add(data)
                 } else {
                     val payload = cursor.getBlob(1)
-                    runCatching { ApmEventCodec.decode(payload).toLineProtocol() }
+                    val storedEventId = cursor.getString(2)
+                    runCatching { decodeStoredEvent(payload, storedEventId).toLineProtocol() }
                         .onSuccess(results::add)
                 }
             }
@@ -172,7 +181,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         // 优先级降序（CRITICAL=3 先出），同优先级按时间升序（旧的先出）
         db.query(
             TABLE_NAME,
-            arrayOf(COLUMN_ID, COLUMN_PAYLOAD, COLUMN_RETRY_COUNT),
+            arrayOf(COLUMN_ID, COLUMN_PAYLOAD, COLUMN_RETRY_COUNT, COLUMN_EVENT_ID),
             null, null,
             null, null,
             "$COLUMN_PRIORITY DESC, $COLUMN_TIMESTAMP ASC",
@@ -182,8 +191,9 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                 val id = cursor.getLong(0)
                 val payload = cursor.getBlob(1)
                 val retryCount = cursor.getInt(2)
+                val storedEventId = cursor.getString(3)
                 runCatching {
-                    PendingEvent(id, ApmEventCodec.decode(payload), retryCount)
+                    PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
                 }.onSuccess(results::add)
                     .onFailure { corruptedIds += id }
             }
@@ -193,6 +203,136 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         }
 
         return results
+    }
+
+    /**
+     * Atomically reserves available rows for one upload worker.
+     * SQLite write transactions serialize the read-and-update sequence across
+     * store instances and processes that share this database.
+     *
+     * @param ownerId unique upload worker identifier
+     * @param limit maximum rows to reserve
+     * @param nowMs current wall-clock time
+     * @param leaseDurationMs reclaim delay for abandoned work
+     * @return rows whose persisted owner is [ownerId]
+     */
+    @Synchronized
+    override fun claimPending(
+        ownerId: String,
+        limit: Int,
+        nowMs: Long,
+        leaseDurationMs: Long
+    ): List<PendingEvent> {
+        require(ownerId.isNotBlank()) { "ownerId must not be blank" }
+        require(leaseDurationMs > 0L) { "leaseDurationMs must be positive" }
+        if (limit <= 0) {
+            return emptyList()
+        }
+
+        val db = dbHelper.writableDatabase
+        val claimed = mutableListOf<PendingEvent>()
+        val corruptedIds = mutableListOf<Long>()
+        val leaseExpiresAt = safeAdd(nowMs, leaseDurationMs)
+        db.beginTransaction()
+        try {
+            // The write transaction is acquired before selecting candidates,
+            // preventing another process from observing the same free rows.
+            db.query(
+                TABLE_NAME,
+                arrayOf(COLUMN_ID, COLUMN_PAYLOAD, COLUMN_RETRY_COUNT, COLUMN_EVENT_ID),
+                "$COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?",
+                arrayOf(nowMs.toString()),
+                null,
+                null,
+                "$COLUMN_PRIORITY DESC, $COLUMN_TIMESTAMP ASC",
+                limit.toString()
+            ).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(0)
+                    val payload = cursor.getBlob(1)
+                    val retryCount = cursor.getInt(2)
+                    val storedEventId = cursor.getString(3)
+                    runCatching {
+                        PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
+                    }.onSuccess(claimed::add)
+                        .onFailure { corruptedIds += id }
+                }
+            }
+            if (corruptedIds.isNotEmpty()) {
+                deleteRows(db, corruptedIds)
+            }
+            if (claimed.isNotEmpty()) {
+                val claimedIds = claimed.map(PendingEvent::id)
+                val placeholders = claimedIds.joinToString(",") { "?" }
+                val values = ContentValues().apply {
+                    put(COLUMN_LEASE_OWNER, ownerId)
+                    put(COLUMN_LEASE_EXPIRES_AT, leaseExpiresAt)
+                }
+                db.update(
+                    TABLE_NAME,
+                    values,
+                    "$COLUMN_ID IN ($placeholders)",
+                    claimedIds.map(Long::toString).toTypedArray()
+                )
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        decrementCachedCount(corruptedIds.size)
+        return claimed
+    }
+
+    /** Deletes only rows still owned by the acknowledging worker. */
+    @Synchronized
+    override fun acknowledgeClaim(ownerId: String, ids: List<Long>): Int {
+        require(ownerId.isNotBlank()) { "ownerId must not be blank" }
+        if (ids.isEmpty()) {
+            return 0
+        }
+        val db = dbHelper.writableDatabase
+        val placeholders = ids.joinToString(",") { "?" }
+        val arguments = ids.map(Long::toString) + ownerId
+        val deleted = db.delete(
+            TABLE_NAME,
+            "$COLUMN_ID IN ($placeholders) AND $COLUMN_LEASE_OWNER = ?",
+            arguments.toTypedArray()
+        )
+        decrementCachedCount(deleted)
+        return deleted
+    }
+
+    /** Increments retry count and releases only rows owned by the caller. */
+    @Synchronized
+    override fun failClaim(ownerId: String, ids: List<Long>) {
+        require(ownerId.isNotBlank()) { "ownerId must not be blank" }
+        if (ids.isEmpty()) {
+            return
+        }
+        val placeholders = ids.joinToString(",") { "?" }
+        val arguments = ids.map(Long::toString) + ownerId
+        dbHelper.writableDatabase.execSQL(
+            "UPDATE $TABLE_NAME SET $COLUMN_RETRY_COUNT = $COLUMN_RETRY_COUNT + 1, " +
+                "$COLUMN_LEASE_OWNER = NULL, $COLUMN_LEASE_EXPIRES_AT = $NO_LEASE_EXPIRY " +
+                "WHERE $COLUMN_ID IN ($placeholders) AND $COLUMN_LEASE_OWNER = ?",
+            arguments.toTypedArray()
+        )
+    }
+
+    /** Releases every active lease belonging to one worker. */
+    @Synchronized
+    override fun releaseClaims(ownerId: String): Int {
+        require(ownerId.isNotBlank()) { "ownerId must not be blank" }
+        val values = ContentValues().apply {
+            putNull(COLUMN_LEASE_OWNER)
+            put(COLUMN_LEASE_EXPIRES_AT, NO_LEASE_EXPIRY)
+        }
+        return dbHelper.writableDatabase.update(
+            TABLE_NAME,
+            values,
+            "$COLUMN_LEASE_OWNER = ?",
+            arrayOf(ownerId)
+        )
     }
 
     /**
@@ -273,10 +413,12 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
     override fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int {
         val db = dbHelper.writableDatabase
         val oldestAllowedTimestamp = System.currentTimeMillis() - maxAgeMs
+        val nowMs = System.currentTimeMillis()
         val deleted = db.delete(
             TABLE_NAME,
-            "$COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?",
-            arrayOf(maxRetryCount.toString(), oldestAllowedTimestamp.toString())
+            "($COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?) AND " +
+                "($COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?)",
+            arrayOf(maxRetryCount.toString(), oldestAllowedTimestamp.toString(), nowMs.toString())
         )
         // 清理后同步扣减缓存计数
         if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
@@ -319,7 +461,8 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         db.query(
             TABLE_NAME,
             arrayOf(COLUMN_ID),
-            null, null,
+            "$COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?",
+            arrayOf(System.currentTimeMillis().toString()),
             null, null,
             "$COLUMN_PRIORITY ASC, $COLUMN_TIMESTAMP ASC",
             toDelete.toString()
@@ -357,6 +500,36 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         return 0L
     }
 
+    /** Restores a migrated event ID when the payload predates codec version 2. */
+    private fun decodeStoredEvent(payload: ByteArray, storedEventId: String): ApmEvent {
+        val event = ApmEventCodec.decode(payload)
+        return if (event.eventId.isBlank()) event.copy(eventId = storedEventId) else event
+    }
+
+    /** Deletes rows inside an existing transaction without reopening the database. */
+    private fun deleteRows(db: SQLiteDatabase, ids: List<Long>): Int {
+        if (ids.isEmpty()) {
+            return 0
+        }
+        val placeholders = ids.joinToString(",") { "?" }
+        return db.delete(
+            TABLE_NAME,
+            "$COLUMN_ID IN ($placeholders)",
+            ids.map(Long::toString).toTypedArray()
+        )
+    }
+
+    /** Applies one deletion delta without mutating an uninitialized cache. */
+    private fun decrementCachedCount(deleted: Int) {
+        if (deleted > 0 && cachedRowCount.get() != UNINITIALIZED_COUNT) {
+            cachedRowCount.addAndGet(-deleted.toLong())
+        }
+    }
+
+    /** Adds a lease duration without overflowing into an already-expired value. */
+    private fun safeAdd(nowMs: Long, durationMs: Long): Long =
+        if (nowMs > Long.MAX_VALUE - durationMs) Long.MAX_VALUE else nowMs + durationMs
+
     companion object {
         /** 默认最大存储事件数：50,000 条。 */
         private const val DEFAULT_MAX_EVENTS = 50_000
@@ -387,9 +560,17 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         private const val COLUMN_DATA = "data"
         /** 列：可逆二进制事件负载。 */
         private const val COLUMN_PAYLOAD = "payload"
+        /** Column: stable event identity used for server-side deduplication. */
+        private const val COLUMN_EVENT_ID = "event_id"
         /** 列：时间戳。 */
         private const val COLUMN_TIMESTAMP = "timestamp"
         /** 列：重试次数。 */
         private const val COLUMN_RETRY_COUNT = "retry_count"
+        /** Column: upload worker that currently owns the row. */
+        private const val COLUMN_LEASE_OWNER = "lease_owner"
+        /** Column: wall-clock time after which another worker may reclaim the row. */
+        private const val COLUMN_LEASE_EXPIRES_AT = "lease_expires_at"
+        /** Sentinel expiry for an unclaimed row. */
+        private const val NO_LEASE_EXPIRY = 0L
     }
 }

@@ -4,6 +4,8 @@ import android.content.ContentValues
 import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
 import com.apm.model.toLineProtocol
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -73,6 +75,25 @@ class SQLiteEventStoreTest {
         assertEquals(BATCH_SIZE, store.pendingCount())
     }
 
+    /** Duplicate event IDs are ignored without corrupting the capacity counter. */
+    @Test
+    fun `duplicate event identity does not trigger false trimming`() {
+        val duplicate = event("duplicate", timestamp = 1L).copy(eventId = "same-event")
+        val smallStore = SQLiteEventStore(
+            EventDbHelper(RuntimeEnvironment.getApplication(), "dedupe-${System.nanoTime()}.db"),
+            maxEvents = 2
+        )
+        try {
+            smallStore.appendBatch(listOf(duplicate, duplicate))
+            smallStore.append(event("unique", timestamp = 2L).copy(eventId = "unique-event"))
+
+            assertEquals(2, smallStore.pendingCount())
+            assertEquals(setOf("same-event", "unique-event"), smallStore.readPending(2).map { it.event.eventId }.toSet())
+        } finally {
+            smallStore.close()
+        }
+    }
+
     /** 超过容量时按 priority ASC + timestamp ASC 淘汰低优先级旧事件。 */
     @Test
     fun `trim evicts low priority old events at capacity`() {
@@ -128,6 +149,97 @@ class SQLiteEventStoreTest {
         assertEquals(2, store.readPending(1).single().retryCount)
     }
 
+    /** Active leases exclude other owners until expiry. */
+    @Test
+    fun `claim excludes another owner and expiry reclaims row`() {
+        store.append(event("leased"))
+
+        val first = store.claimPending("worker-a", 10, nowMs = 1_000L, leaseDurationMs = 500L)
+        val blocked = store.claimPending("worker-b", 10, nowMs = 1_100L, leaseDurationMs = 500L)
+        val reclaimed = store.claimPending("worker-b", 10, nowMs = 1_501L, leaseDurationMs = 500L)
+
+        assertEquals(1, first.size)
+        assertTrue(blocked.isEmpty())
+        assertEquals(first.single().id, reclaimed.single().id)
+    }
+
+    /** An owner cannot acknowledge rows leased by another worker. */
+    @Test
+    fun `owner mismatch cannot acknowledge claim`() {
+        store.append(event("owned"))
+        val id = store.claimPending("worker-a", 1, nowMs = 1_000L, leaseDurationMs = 500L).single().id
+
+        assertEquals(0, store.acknowledgeClaim("worker-b", listOf(id)))
+        assertEquals(1, store.pendingCount())
+        assertEquals(1, store.acknowledgeClaim("worker-a", listOf(id)))
+        assertEquals(0, store.pendingCount())
+    }
+
+    /** Failed claims increment retry count and become immediately available. */
+    @Test
+    fun `failed claim increments retry and releases ownership`() {
+        store.append(event("failed"))
+        val id = store.claimPending("worker-a", 1, nowMs = 1_000L, leaseDurationMs = 500L).single().id
+
+        store.failClaim("worker-a", listOf(id))
+
+        val retried = store.claimPending("worker-b", 1, nowMs = 1_001L, leaseDurationMs = 500L).single()
+        assertEquals(1, retried.retryCount)
+    }
+
+    /** Explicit owner release returns every active claim to the available set. */
+    @Test
+    fun `release claims clears owner leases`() {
+        store.appendBatch(listOf(event("one"), event("two")))
+        assertEquals(2, store.claimPending("worker-a", 2, 1_000L, 500L).size)
+
+        assertEquals(2, store.releaseClaims("worker-a"))
+        assertEquals(2, store.claimPending("worker-b", 2, 1_001L, 500L).size)
+    }
+
+    /** Event identities stored in SQLite survive claim retries. */
+    @Test
+    fun `claim preserves event identity`() {
+        store.append(event("identity").copy(eventId = "event-db"))
+
+        val claimed = store.claimPending("worker-a", 1, 1_000L, 500L).single()
+
+        assertEquals("event-db", claimed.event.eventId)
+    }
+
+    /** Two store instances cannot claim the same durable row concurrently. */
+    @Test
+    fun `concurrent store instances receive disjoint claims`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "claim-race-${System.nanoTime()}.db"
+        val firstStore = SQLiteEventStore(EventDbHelper(context, databaseName), maxEvents = TEST_MAX_EVENTS)
+        val secondStore = SQLiteEventStore(EventDbHelper(context, databaseName), maxEvents = TEST_MAX_EVENTS)
+        firstStore.appendBatch((0 until TEST_MAX_EVENTS).map { event("race-$it", timestamp = it.toLong()) })
+        val start = CountDownLatch(1)
+        val executor = Executors.newFixedThreadPool(2)
+        try {
+            val firstFuture = executor.submit<List<PendingEvent>> {
+                start.await()
+                firstStore.claimPending("worker-a", CLAIM_BATCH_SIZE, 1_000L, 500L)
+            }
+            val secondFuture = executor.submit<List<PendingEvent>> {
+                start.await()
+                secondStore.claimPending("worker-b", CLAIM_BATCH_SIZE, 1_000L, 500L)
+            }
+            // Release both claimers only after they are ready to compete.
+            start.countDown()
+            val firstIds = firstFuture.get().map(PendingEvent::id).toSet()
+            val secondIds = secondFuture.get().map(PendingEvent::id).toSet()
+
+            assertTrue(firstIds.intersect(secondIds).isEmpty())
+            assertEquals(TEST_MAX_EVENTS, firstIds.size + secondIds.size)
+        } finally {
+            executor.shutdownNow()
+            firstStore.close()
+            secondStore.close()
+        }
+    }
+
     /** pruneExpired 清除重试耗尽与超龄的行。 */
     @Test
     fun `pruneExpired removes exhausted and aged rows`() {
@@ -152,7 +264,7 @@ class SQLiteEventStoreTest {
         store.append(event("good"))
         // 直接向表内注入坏 payload 行
         val db = dbHelper.writableDatabase
-        db.insert(
+        val corruptId = db.insert(
             "events",
             null,
             ContentValues().apply {
@@ -162,10 +274,12 @@ class SQLiteEventStoreTest {
                 put("severity", "INFO")
                 put("data", "")
                 put("payload", byteArrayOf(1, 2, 3))
+                put("event_id", "corrupt-event")
                 put("timestamp", System.currentTimeMillis())
                 put("retry_count", 0)
             }
         )
+        assertTrue(corruptId > 0L)
 
         val pending = store.readPending(10)
 
@@ -192,6 +306,9 @@ class SQLiteEventStoreTest {
 
         /** 批量写入条数。 */
         private const val BATCH_SIZE = 5
+
+        /** Per-worker claim size used to force overlapping demand. */
+        private const val CLAIM_BATCH_SIZE = 12
 
         /** 测试用重试上限。 */
         private const val MAX_RETRY_FOR_TEST = 3

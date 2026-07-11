@@ -67,6 +67,47 @@ interface PendingEventStore : EventStore {
     fun readPending(limit: Int): List<PendingEvent>
 
     /**
+     * Atomically claims currently available rows for one upload worker.
+     *
+     * Implementations that do not support concurrent ownership retain the
+     * legacy read behavior; durable multi-worker stores must override this
+     * method and persist the lease before returning rows.
+     *
+     * @param ownerId stable identifier for the upload worker instance
+     * @param limit maximum number of rows
+     * @param nowMs current wall-clock time in milliseconds
+     * @param leaseDurationMs duration after which abandoned rows are reclaimable
+     * @return rows owned by [ownerId] until acknowledgement, failure, or expiry
+     */
+    fun claimPending(ownerId: String, limit: Int, nowMs: Long, leaseDurationMs: Long): List<PendingEvent> =
+        readPending(limit)
+
+    /**
+     * Deletes rows only when they are currently owned by the caller.
+     *
+     * @param ownerId upload worker owner identifier
+     * @param ids claimed row identifiers
+     * @return acknowledged row count
+     */
+    fun acknowledgeClaim(ownerId: String, ids: List<Long>): Int = deletePending(ids)
+
+    /**
+     * Records a failed upload and makes the caller's rows immediately available.
+     *
+     * @param ownerId upload worker owner identifier
+     * @param ids claimed row identifiers
+     */
+    fun failClaim(ownerId: String, ids: List<Long>) = markRetry(ids)
+
+    /**
+     * Releases every row currently owned by one worker.
+     *
+     * @param ownerId upload worker owner identifier
+     * @return released row count, or zero for stores without lease support
+     */
+    fun releaseClaims(ownerId: String): Int = 0
+
+    /**
      * Deletes events acknowledged by the server.
      *
      * @param ids row identifiers

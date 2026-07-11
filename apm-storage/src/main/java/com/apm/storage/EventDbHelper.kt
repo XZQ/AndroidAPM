@@ -28,12 +28,13 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
      */
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(SQL_CREATE_TABLE)
-        db.execSQL(SQL_CREATE_INDEX)
+        createIndexes(db)
     }
 
     /**
      * 数据库升级。
-     * 目前只有一个版本，无需升级逻辑。
+     * Version 2 durable rows are migrated additively so pending telemetry is
+     * never discarded when event identity and claim ownership are introduced.
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < DATABASE_VERSION_OUTBOX) {
@@ -41,7 +42,24 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
             // cannot participate in acknowledged replay safely.
             db.execSQL(SQL_DROP_TABLE)
             onCreate(db)
+            return
         }
+        if (oldVersion < DATABASE_VERSION_LEASES && newVersion >= DATABASE_VERSION_LEASES) {
+            // SQLite requires a default while adding a NOT NULL column to a
+            // populated table. Every legacy row receives a deterministic ID.
+            db.execSQL(SQL_ADD_EVENT_ID)
+            db.execSQL(SQL_ADD_LEASE_OWNER)
+            db.execSQL(SQL_ADD_LEASE_EXPIRY)
+            db.execSQL(SQL_BACKFILL_EVENT_ID)
+            createIndexes(db)
+        }
+    }
+
+    /** Creates all indexes required by upload ordering and lease lookup. */
+    private fun createIndexes(db: SQLiteDatabase) {
+        db.execSQL(SQL_CREATE_PRIORITY_INDEX)
+        db.execSQL(SQL_CREATE_EVENT_ID_INDEX)
+        db.execSQL(SQL_CREATE_AVAILABILITY_INDEX)
     }
 
 
@@ -50,10 +68,13 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
         private const val DATABASE_NAME = "apm_events.db"
 
         /** 数据库版本。 */
-        private const val DATABASE_VERSION = 2
+        private const val DATABASE_VERSION = 3
 
         /** First schema version that contains the durable payload column. */
         private const val DATABASE_VERSION_OUTBOX = 2
+
+        /** First schema version that supports claim ownership and expiry. */
+        private const val DATABASE_VERSION_LEASES = 3
 
         /** 创建 events 表。 */
         private const val SQL_CREATE_TABLE = """
@@ -65,16 +86,47 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
                 severity TEXT NOT NULL,
                 data TEXT NOT NULL,
                 payload BLOB NOT NULL,
+                event_id TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
-                retry_count INTEGER NOT NULL DEFAULT 0
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                lease_owner TEXT,
+                lease_expires_at INTEGER NOT NULL DEFAULT 0
             )
         """
 
         /** 创建优先级+时间戳联合索引，用于按优先级取出和水位线淘汰。 */
-        private const val SQL_CREATE_INDEX = """
+        private const val SQL_CREATE_PRIORITY_INDEX = """
             CREATE INDEX IF NOT EXISTS idx_priority_ts
             ON events(priority ASC, timestamp ASC)
         """
+
+        /** Enforces one durable row per stable event identity. */
+        private const val SQL_CREATE_EVENT_ID_INDEX = """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_event_id
+            ON events(event_id)
+        """
+
+        /** Accelerates available-row scans performed by upload workers. */
+        private const val SQL_CREATE_AVAILABILITY_INDEX = """
+            CREATE INDEX IF NOT EXISTS idx_lease_expiry_priority_ts
+            ON events(lease_expires_at, priority DESC, timestamp ASC)
+        """
+
+        /** Adds stable event identity to schema version 2. */
+        private const val SQL_ADD_EVENT_ID =
+            "ALTER TABLE events ADD COLUMN event_id TEXT NOT NULL DEFAULT ''"
+
+        /** Adds nullable claim ownership to schema version 2. */
+        private const val SQL_ADD_LEASE_OWNER =
+            "ALTER TABLE events ADD COLUMN lease_owner TEXT"
+
+        /** Adds claim expiry to schema version 2. */
+        private const val SQL_ADD_LEASE_EXPIRY =
+            "ALTER TABLE events ADD COLUMN lease_expires_at INTEGER NOT NULL DEFAULT 0"
+
+        /** Assigns deterministic install-local identities to existing rows. */
+        private const val SQL_BACKFILL_EVENT_ID =
+            "UPDATE events SET event_id = 'legacy-' || id WHERE event_id = ''"
 
         /** Drops the legacy events table during the version 1 migration. */
         private const val SQL_DROP_TABLE = "DROP TABLE IF EXISTS events"
