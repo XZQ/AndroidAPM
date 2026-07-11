@@ -51,6 +51,10 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
     override fun onStart() {
         started = config.enableIpcMonitor
+        @Suppress("DEPRECATION")
+        if (config.enableBinderHook) {
+            apmContext?.logger?.w("enableBinderHook is deprecated and ignored; use traceBinderCall")
+        }
         apmContext?.logger?.d("IPC module started, binderThreshold=${config.binderThresholdMs}ms")
     }
 

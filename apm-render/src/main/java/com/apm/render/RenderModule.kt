@@ -53,6 +53,10 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
         if (!config.enableRenderMonitor) {
             return
         }
+        @Suppress("DEPRECATION")
+        if (config.detectOverdraw) {
+            apmContext?.logger?.w("detectOverdraw is deprecated and ignored; Android exposes no public GPU counter")
+        }
         monitoring = true
         apmContext?.application?.registerActivityLifecycleCallbacks(this)
         apmContext?.logger?.d("Render module started")

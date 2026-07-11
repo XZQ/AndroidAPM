@@ -67,6 +67,10 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
 
     override fun onStart() {
         started = config.enableWebviewMonitor
+        @Suppress("DEPRECATION")
+        if (config.enableAutoRegister) {
+            apmContext?.logger?.w("enableAutoRegister is deprecated and ignored; call install for each WebView")
+        }
         // 仅在启用时创建资源瀑布图追踪器
         if (config.enableResourceWaterfall) {
             resourceWaterfall = ResourceWaterfall(config)

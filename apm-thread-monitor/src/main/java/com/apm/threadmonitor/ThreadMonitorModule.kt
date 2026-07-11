@@ -46,6 +46,10 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         if (!config.enableThreadMonitor) {
             return
         }
+        @Suppress("DEPRECATION")
+        if (config.enableThreadLeakDetect) {
+            apmContext?.logger?.w("enableThreadLeakDetect is deprecated and ignored; register executors explicitly")
+        }
         monitoring = true
         // 周期性线程快照采集非时间敏感，使用最低优先级后台执行。
         scheduler = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME).apply {
