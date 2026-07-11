@@ -14,8 +14,15 @@ data class WebviewConfig(
     val whiteScreenThresholdMs: Long = DEFAULT_WHITE_SCREEN_THRESHOLD_MS,
     /** 最大 URL 长度。 */
     val maxUrlLength: Int = DEFAULT_MAX_URL_LENGTH,
-    /** 是否启用自动注册 WebViewClient。 */
-    val enableAutoRegister: Boolean = true,
+    /**
+     * Compatibility-only process-wide registration switch. Android exposes no
+     * supported global WebView registry; call [WebviewModule.install] explicitly.
+     */
+    @Deprecated(
+        message = "Global WebView auto-registration is unavailable; call WebviewModule.install explicitly",
+        replaceWith = ReplaceWith("false")
+    )
+    val enableAutoRegister: Boolean = false,
     /** 是否开启 JS Bridge 性能监控。 */
     val enableJsBridgeMonitor: Boolean = true,
     /** JS Bridge 调用超时阈值（毫秒）。 */

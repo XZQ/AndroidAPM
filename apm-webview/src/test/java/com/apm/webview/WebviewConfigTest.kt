@@ -15,6 +15,12 @@ class WebviewConfigTest {
         assertTrue(config.enableWebviewMonitor)
     }
 
+    /** 不存在进程级 WebView 注册入口，因此兼容字段默认关闭。 */
+    @Test
+    fun `default auto register is false`() {
+        assertFalse(WebviewConfig().enableAutoRegister)
+    }
+
     /** 默认页面加载阈值 5 秒。 */
     @Test
     fun `default pageLoadThresholdMs is 5 seconds`() {

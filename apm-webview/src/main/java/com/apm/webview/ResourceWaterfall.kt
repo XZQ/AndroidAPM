@@ -181,6 +181,16 @@ class ResourceWaterfall(private val config: WebviewConfig) {
     fun onPageComplete(url: String) {
         // 取出该页面的所有资源记录
         val records = pageResources.remove(url) ?: return
+        val pageCompletedAt = System.currentTimeMillis()
+        for (record in records) {
+            if (record.endTimeMs == 0L) {
+                // Public WebView callbacks do not expose network completion for
+                // non-intercepted resources. Page completion is the supported,
+                // conservative upper bound for those entries.
+                record.endTimeMs = pageCompletedAt
+                record.durationMs = (pageCompletedAt - record.startTimeMs).coerceAtLeast(0L)
+            }
+        }
         // 清理该页面相关的开始时间缓存
         cleanupStartTimes(records)
 

@@ -1,11 +1,21 @@
 package com.apm.webview
 
+import android.os.Build
+import android.webkit.WebChromeClient
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import com.apm.core.Apm
 import com.apm.core.ApmContext
+import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.WeakHashMap
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 
 /**
  * WebView 监控模块。
@@ -42,6 +52,15 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
     /** 资源加载瀑布图追踪器，仅在配置启用时创建。 */
     private var resourceWaterfall: ResourceWaterfall? = null
 
+    /** Explicit WebView installations retained weakly for reversible shutdown. */
+    private val installations = WeakHashMap<WebView, Installation>()
+
+    /** Scheduler for bounded page-visibility timeout checks. */
+    private var visibilityScheduler: ScheduledExecutorService? = null
+
+    /** Pending page visibility checks keyed by URL. */
+    private val visibilityChecks = ConcurrentHashMap<String, VisibilityCheck>()
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
@@ -52,15 +71,84 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (config.enableResourceWaterfall) {
             resourceWaterfall = ResourceWaterfall(config)
         }
+        if (started) {
+            visibilityScheduler = ApmExecutors.newSingleThreadScheduledExecutor(VISIBILITY_THREAD_NAME)
+        }
         apmContext?.logger?.d("WebView module started")
     }
 
     override fun onStop() {
         started = false
         pageLoadStartMap.clear()
+        visibilityChecks.values.forEach { check -> check.future?.cancel(false) }
+        visibilityChecks.clear()
+        visibilityScheduler?.shutdownNow()
+        visibilityScheduler = null
+        val installedViews = synchronized(installations) { installations.keys.toList() }
+        for (webView in installedViews) {
+            // Restore host clients before releasing installation metadata.
+            uninstall(webView)
+        }
         // 释放瀑布图追踪器
         resourceWaterfall = null
     }
+
+    /**
+     * Wraps and installs host clients on one explicit WebView instance.
+     * Call this after the host has created its delegates; [uninstall] restores
+     * the exact same objects.
+     *
+     * @param webView host-owned WebView
+     * @param webViewClient host navigation client
+     * @param webChromeClient host chrome client
+     */
+    fun install(
+        webView: WebView,
+        webViewClient: WebViewClient = WebViewClient(),
+        webChromeClient: WebChromeClient = WebChromeClient()
+    ) {
+        uninstall(webView)
+        val monitoringClient = MonitoringWebViewClient(this, webViewClient)
+        val monitoringChrome = MonitoringWebChromeClient(this, webChromeClient)
+        // Store metadata before assignment so an immediate stop can restore it.
+        synchronized(installations) {
+            installations[webView] = Installation(
+                hostClient = webViewClient,
+                hostChrome = webChromeClient,
+                monitoringClient = monitoringClient,
+                monitoringChrome = monitoringChrome
+            )
+        }
+        webView.webViewClient = monitoringClient
+        webView.webChromeClient = monitoringChrome
+    }
+
+    /**
+     * Restores host clients for one previously installed WebView.
+     *
+     * @param webView host-owned WebView
+     * @return true when an installation was removed
+     */
+    fun uninstall(webView: WebView): Boolean {
+        val installation = synchronized(installations) { installations.remove(webView) } ?: return false
+        // API 26+ can avoid overwriting a client the host replaced after
+        // installation. API 24-25 lacks public getters, so restore directly.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webViewClient === installation.monitoringClient) {
+            webView.webViewClient = installation.hostClient
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webChromeClient === installation.monitoringChrome) {
+            webView.webChromeClient = installation.hostChrome
+        }
+        return true
+    }
+
+    /** Creates a delegating navigation client without assigning it. */
+    fun wrapWebViewClient(delegate: WebViewClient = WebViewClient()): WebViewClient =
+        MonitoringWebViewClient(this, delegate)
+
+    /** Creates a delegating chrome client without assigning it. */
+    fun wrapWebChromeClient(delegate: WebChromeClient = WebChromeClient()): WebChromeClient =
+        MonitoringWebChromeClient(this, delegate)
 
     /**
      * 页面开始加载时调用。
@@ -74,6 +162,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         pageLoadStartMap[url] = System.currentTimeMillis()
         // 通知瀑布图追踪器当前活跃页面
         resourceWaterfall?.setActivePage(url)
+        scheduleVisibilityTimeout(url)
     }
 
     /**
@@ -85,26 +174,57 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
-        val startTime = pageLoadStartMap.remove(url) ?: return
-        val duration = System.currentTimeMillis() - startTime
+        val startTime = pageLoadStartMap.remove(url)
+        cancelVisibilityTimeout(url)
+        if (startTime != null) {
+            val duration = System.currentTimeMillis() - startTime
 
-        // 超过页面加载阈值时上报慢加载事件
-        if (duration >= config.pageLoadThresholdMs) {
-            Apm.emit(
-                module = MODULE_NAME,
-                name = EVENT_SLOW_PAGE_LOAD,
-                kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
-                fields = mapOf(
-                    FIELD_URL to url.take(config.maxUrlLength),
-                    FIELD_DURATION_MS to duration,
-                    FIELD_THRESHOLD to config.pageLoadThresholdMs
+            // 超过页面加载阈值时上报慢加载事件
+            if (duration >= config.pageLoadThresholdMs) {
+                Apm.emit(
+                    module = MODULE_NAME,
+                    name = EVENT_SLOW_PAGE_LOAD,
+                    kind = ApmEventKind.ALERT,
+                    severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
+                    fields = mapOf(
+                        FIELD_URL to url.take(config.maxUrlLength),
+                        FIELD_DURATION_MS to duration,
+                        FIELD_THRESHOLD to config.pageLoadThresholdMs
+                    )
                 )
-            )
+            }
         }
 
         // 触发瀑布图完成，输出资源加载统计数据
         resourceWaterfall?.onPageComplete(url)
+    }
+
+    /** Marks a page as visually committed and cancels its timeout alarm. */
+    fun onPageVisible(url: String) {
+        if (!started) {
+            return
+        }
+        cancelVisibilityTimeout(url)
+    }
+
+    /**
+     * Evaluates JavaScript through a measured, callback-preserving path.
+     *
+     * @param webView host WebView
+     * @param script JavaScript source
+     * @param callback optional host result callback
+     */
+    fun evaluateJavascript(
+        webView: WebView,
+        script: String,
+        callback: android.webkit.ValueCallback<String>? = null
+    ) {
+        val startedAtNanos = System.nanoTime()
+        webView.evaluateJavascript(script) { result ->
+            val durationMs = (System.nanoTime() - startedAtNanos).coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+            onJsEvalComplete(webView.url.orEmpty(), script, durationMs)
+            callback?.onReceiveValue(result)
+        }
     }
 
     /**
@@ -243,6 +363,49 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      */
     fun getResourceWaterfall(): ResourceWaterfall? = resourceWaterfall
 
+    /** Schedules one suspected-white-screen timeout for a started page. */
+    private fun scheduleVisibilityTimeout(url: String) {
+        cancelVisibilityTimeout(url)
+        val scheduler = visibilityScheduler ?: return
+        val check = VisibilityCheck()
+        visibilityChecks[url] = check
+        check.future = scheduler.schedule(
+            {
+                // Remove only the still-current task; replaced navigations must
+                // not emit stale white-screen events.
+                if (visibilityChecks.remove(url, check) && started) {
+                    onWhiteScreen(url, config.whiteScreenThresholdMs)
+                }
+            },
+            config.whiteScreenThresholdMs.coerceAtLeast(MIN_VISIBILITY_TIMEOUT_MS),
+            TimeUnit.MILLISECONDS
+        )
+    }
+
+    /** Cancels one pending page visibility timeout. */
+    private fun cancelVisibilityTimeout(url: String) {
+        visibilityChecks.remove(url)?.future?.cancel(false)
+    }
+
+    /** Mutable future holder inserted before scheduling to close fast-timeout races. */
+    private class VisibilityCheck {
+        /** Scheduled timeout once the scheduler accepts it. */
+        @Volatile
+        var future: ScheduledFuture<*>? = null
+    }
+
+    /** Clients associated with one explicit WebView installation. */
+    private data class Installation(
+        /** Original navigation client. */
+        val hostClient: WebViewClient,
+        /** Original chrome client. */
+        val hostChrome: WebChromeClient,
+        /** Assigned monitoring navigation client. */
+        val monitoringClient: MonitoringWebViewClient,
+        /** Assigned monitoring chrome client. */
+        val monitoringChrome: MonitoringWebChromeClient
+    )
+
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "webview"
@@ -300,5 +463,11 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
 
         /** 错误信息最大长度。 */
         private const val MAX_ERROR_MESSAGE_LENGTH = 500
+        /** Background thread used only for page-visibility deadlines. */
+        private const val VISIBILITY_THREAD_NAME = "apm-webview-visibility"
+        /** Lower bound preventing a hot-loop timeout configuration. */
+        private const val MIN_VISIBILITY_TIMEOUT_MS = 1L
+        /** Nanoseconds contained in one millisecond. */
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
     }
 }
