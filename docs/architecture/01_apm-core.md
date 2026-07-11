@@ -184,7 +184,11 @@ PII sanitization 默认关闭。内置规则覆盖手机号、邮箱、身份证
 
 当前限制：停用是本进程内单向动作，没有自动恢复；健康事件本身也经过同一 dispatcher。
 
-独立诊断默认使用 200 条内存环、256 条非阻塞写队列和 3 × 512 KiB app-private JSONL。普通日志调用线程不做文件 IO；ERROR 可挤出一条较旧的排队记录并计入 drop。文件失败进入冷却并保留内存/Logcat，不通过 `ApmLogger` 递归报告。`ApmDiagnostics.status/snapshot/exportTo/clear` 是宿主支持入口，导出同步执行且应由宿主工作线程调用。
+独立诊断默认使用 200 条 / 4 MiB 内存环、256 条 / 4 MiB 非阻塞写队列，以及每进程 3 × 512 KiB app-private JSONL。普通日志调用线程不做文件 IO；ERROR 只可挤出较旧的非 ERROR 排队记录并计入 drop。文件失败进入冷却时 writer 在出队前等待，已接受记录不会被静默结算；读/写失败独立计数，`status()` 使用缓存磁盘字节且不遍历文件。文件异常不通过 `ApmLogger` 递归报告。
+
+进程名安全前缀 + SHA-256 前缀形成稳定独立目录，避免子进程与主进程轮转同一文件。`exportTo` 聚合最近最多 16 个进程 journal、合并当前内存证据，并以 10,000 条 / 16 MiB 双上限约束未压缩 JSONL；目标不能覆盖任一源 segment，manifest 包含格式/SDK/session/process 及截断元数据。`snapshot/exportTo` 同步兼容接口要求工作线程，宿主应优先使用 `snapshotAsync/exportToAsync`；`clear` 仅清当前进程，`clearAllProcesses` 为显式跨进程清理。
+
+初始化资源先保存在局部 staged 状态，全部成功后才发布；失败时按 scheduler → coordinator → dispatcher（或 uploader/store）逆序回滚。停止阶段隔离各模块与基础设施异常，独立诊断最后关闭。`ApmLogger.withComponent` 为 uploader、dispatcher、aggregation、privacy 和具体监控模块保留真实归属。`sdk_health` 中诊断 drop/write failure 使用区间增量而非累计值。
 
 ## 12. ApmExecutors
 

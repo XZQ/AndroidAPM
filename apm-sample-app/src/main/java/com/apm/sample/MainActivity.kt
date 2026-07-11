@@ -150,17 +150,19 @@ class MainActivity : AppCompatActivity() {
                 R.string.diagnostics_status_result,
                 status.fileSinkHealthy,
                 status.droppedRecords,
-                status.writeFailures
+                status.writeFailures,
+                status.readFailures,
+                status.memoryBytes,
+                status.queueBytes
             )
         )
     }
 
     /** Exports an app-private support ZIP on a host-owned worker thread. */
     private fun exportDiagnostics() {
-        diagnosticsExecutor.execute {
-            val target = File(cacheDir, DIAGNOSTICS_EXPORT_FILE_NAME)
-            val result = ApmDiagnostics.exportTo(target)
-            // UI feedback is posted back after the synchronous export completes.
+        val target = File(cacheDir, DIAGNOSTICS_EXPORT_FILE_NAME)
+        ApmDiagnostics.exportToAsync(diagnosticsExecutor, target) { result ->
+            // UI feedback is posted back after the worker-thread export completes.
             runOnUiThread {
                 val message = if (result.success) {
                     getString(R.string.diagnostics_export_success, result.exportedRecords)

@@ -8,7 +8,7 @@
 
 - 同步日期：2026-07-11
 - 24 个构建单元：22 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 135 个主源码文件：130 Kotlin + 4 C + 1 proto
+- 136 个主源码文件：131 Kotlin + 4 C + 1 proto
 - 70 个测试文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
@@ -178,18 +178,22 @@ apmSlowMethod {
 
 APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同时进入 Logcat 与独立本地诊断 journal。该 journal 不依赖 `ApmDispatcher`、事件 SQLite outbox 或 uploader，因此这些组件异常时仍可保留本地证据。
 
-默认资源上限为：200 条内存记录、256 条非阻塞写队列、3 个 512 KiB app-private JSONL 文件。队列满时丢弃而不阻塞宿主；文件失败时降级为内存 + Logcat，且不会递归进入 APM logger。
+默认资源上限为：200 条 / 4 MiB 内存记录、256 条 / 4 MiB 非阻塞写队列、每个 Android 进程 3 个 512 KiB app-private JSONL 文件。进程目录由进程名和稳定哈希隔离；队列满时丢弃而不阻塞宿主，文件失败时先保留排队记录等待冷却重试，并降级为内存 + Logcat，且不会递归进入 APM logger。
 
 ```kotlin
 val status = ApmDiagnostics.status()
-val recent = ApmDiagnostics.snapshot(limit = 100)
-
-// 同步文件操作，请在宿主工作线程调用。
-val result = ApmDiagnostics.exportTo(File(cacheDir, "android-apm-diagnostics.zip"))
+// snapshot/export 会解析文件，推荐使用调用方提供的工作线程。
+ApmDiagnostics.snapshotAsync(executor, limit = 100) { recent -> /* render */ }
+ApmDiagnostics.exportToAsync(
+    executor,
+    File(cacheDir, "android-apm-diagnostics.zip")
+) { result -> /* share only after explicit user action */ }
 ApmDiagnostics.clear()
+// 多进程宿主需要显式清理所有进程证据时使用：
+ApmDiagnostics.clearAllProcesses()
 ```
 
-导出 ZIP 仅包含受控 SDK 字段和已脱敏、截断的异常信息，不复制事件 payload、业务上下文、请求正文或 SQL。SDK 默认不自动上传诊断包，分享与客服工单流程由接入方显式控制。
+导出会聚合最近的最多 16 个进程目录，合并结果受 10,000 条 / 16 MiB 双上限约束，并拒绝覆盖任一活动 journal。ZIP manifest 包含格式/SDK 版本、进程名、诊断 session、健康计数以及是否发生截断；正文仅包含受控 SDK 字段和已脱敏、截断的异常信息，不复制事件 payload、业务上下文、请求正文或 SQL。SDK 默认不自动上传诊断包，分享与客服工单流程由接入方显式控制。
 
 ## 构建与验证
 

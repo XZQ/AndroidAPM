@@ -17,15 +17,15 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 - Documentation synchronization date: `2026-07-11`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `7922c99 Feat: Integrate SDK self-diagnostics`
+- Latest runtime implementation commit before this documentation sync: `b423ad7 Refactor: Make APM lifecycle failure-safe`
 - Build units: `24`
 - Composition: `22` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `135` (`130` Kotlin + `4` C + `1` proto)
+- Main source files: `136` (`131` Kotlin + `4` C + `1` proto)
 - Test files: `70`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
-Fresh checks executed on `2026-07-11` against the completed self-diagnostics tip:
+Fresh checks executed on `2026-07-11` against the completed self-diagnostics hardening tip:
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -35,7 +35,7 @@ Fresh checks executed on `2026-07-11` against the completed self-diagnostics tip
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.11`. The generated XML reports contain `75` suites and `501` tests with `0` failures/errors/skips; lint produced `21` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,589,624` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM), and the isolated consumer resolved them successfully.
+All commands passed under JDK `21.0.11`. The generated XML reports contain `75` suites and `514` tests with `0` failures/errors/skips; lint produced `21` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,606,048` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM), and the isolated consumer resolved them successfully. The Android SDK was present but `adb devices` reported no connected target, so a live multi-process device matrix remains external validation rather than a completed local check.
 
 ## Project Boundary
 
@@ -76,7 +76,7 @@ Registration alone does not make every monitor automatic:
 
 Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
 
-SDK self-diagnostics are separate from event delivery. They are enabled by default and retain a 200-record memory ring plus up to three 512 KiB app-private JSONL segments through a bounded 256-record writer queue. `ApmDiagnostics` exposes status, snapshot, ZIP export, and clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
+SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated and aggregate export merges them. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
 
 ## Working Rules
 

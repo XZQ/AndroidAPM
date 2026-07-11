@@ -170,7 +170,7 @@ Construction validates positive limits and enforces documented upper bounds. The
 - record an `ERROR` diagnostic with the stable tag, exception class, message, and bounded stack;
 - avoid formatting the throwable into a debug-only message.
 
-The periodic `sdk_health` event must include the existing `internalErrorCount` plus `diagnosticDroppedCount` and `diagnosticWriteFailureCount`. These are aggregate health signals only. Detailed records remain in the independent journal.
+The periodic `sdk_health` event includes the existing interval-reset `internalErrorCount` plus interval deltas for `diagnosticDroppedCount` and `diagnosticWriteFailureCount`. Detailed cumulative totals remain available from `ApmDiagnostics.status()` and detailed records remain in the independent journal.
 
 The health event may still be lost when the normal event pipeline is unhealthy; that does not affect the local diagnostic journal.
 

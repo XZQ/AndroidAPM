@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-11｜24 个构建单元｜135 个主源码文件（130 Kotlin + 4 C + 1 proto）｜70 个测试文件
+> 文档同步：2026-07-11｜24 个构建单元｜136 个主源码文件（131 Kotlin + 4 C + 1 proto）｜70 个测试文件
 
 ## 一、项目结论
 
@@ -48,11 +48,11 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `7922c99 Feat: Integrate SDK self-diagnostics` |
+| 最新 runtime 实现提交（文档同步前） | `b423ad7 Refactor: Make APM lifecycle failure-safe` |
 | root Gradle subproject | 22 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 24 |
-| 主源码 | 135：130 Kotlin + 4 C + 1 proto |
+| 主源码 | 136：131 Kotlin + 4 C + 1 proto |
 | 测试文件 | 70 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
@@ -179,9 +179,9 @@ worker 单轮 drain 最多 32 条：
 
 ## 九、SDK 自诊断
 
-SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 Logcat，同时把受控记录写入 200 条内存环和 app-private 滚动 JSONL；文件写入通过容量 256 的非阻塞队列和 `apm-diagnostics-writer` 后台线程完成。默认保留 3 个 512 KiB 分片，总预算约 1.5 MiB。
+SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 Logcat，同时把受控记录写入 200 条 / 4 MiB 内存环和按进程隔离的 app-private 滚动 JSONL；文件写入通过 256 条 / 4 MiB 非阻塞队列和 `apm-diagnostics-writer` 后台线程完成。每个进程默认保留 3 个 512 KiB 分片，磁盘预算约 1.5 MiB。
 
-`ApmDiagnostics.status/snapshot/exportTo/clear` 支持现场状态、最近记录、ZIP 导出和清理。导出与 snapshot 可以读取本地文件；普通日志写入调用线程不做文件 IO。文件异常只更新本地 sink 状态并降级到内存 + 原始 Logcat，不重新进入 logger，避免递归。
+`ApmDiagnostics.status/snapshot/exportTo/clear` 及 `snapshotAsync/exportToAsync/clearAllProcesses` 支持现场状态、最近记录、聚合 ZIP 导出和明确范围的清理。每个 Android 进程拥有独立 journal 目录；内存环和写队列默认各有 4 MiB 字节预算，并保留原有条数预算。`status` 使用缓存资源计数，snapshot/导出读取文件时推荐异步 API。冷却期 writer 不提前出队，读/写故障独立计数；文件异常只更新本地状态并降级到内存 + 原始 Logcat，不重新进入 logger，避免递归。导出最多读取最近 16 个进程目录，合并结果受 10,000 条 / 16 MiB 双上限约束；目标不能覆盖活动 segment，manifest 带 SDK/process/session 与截断元数据。
 
 结构化记录包含时间、级别、组件、错误码、进程、线程、异常类型、有限堆栈与栈指纹。消息最大 4 KiB，异常栈最大 16 KiB/64 帧，并脱敏常见 token/password/Authorization。事件 payload、业务上下文、请求正文、SQL 不进入诊断 journal。SDK 不自动上传诊断包。
 
@@ -223,9 +223,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- 75 个 JUnit XML 测试套件、501 个测试，0 failures / 0 errors / 0 skipped；
+- 75 个 JUnit XML 测试套件、514 个测试，0 failures / 0 errors / 0 skipped；
 - 21 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,589,624 字节；
+- `apm-sample-app-release-unsigned.apk`，4,606,048 字节；
 - Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
 

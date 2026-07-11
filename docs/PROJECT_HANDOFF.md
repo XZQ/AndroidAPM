@@ -29,7 +29,7 @@
 | 基础模块 | 4 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
-| 主源码 | 135：130 Kotlin + 4 C + 1 proto |
+| 主源码 | 136：131 Kotlin + 4 C + 1 proto |
 | 测试文件 | 70 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -39,7 +39,7 @@
 最新 runtime 实现提交（文档同步前）为：
 
 ```text
-7922c99 Feat: Integrate SDK self-diagnostics
+b423ad7 Refactor: Make APM lifecycle failure-safe
 ```
 
 之后的提交可能是样式、文档或仓库跟踪调整；使用 Git 历史判断实际 tip。
@@ -70,7 +70,7 @@ Apm.emit
 - 网络完成不确定时可能重复，当前无 eventId/idempotency。
 - 当前 durable worker 是单 worker 所有者模型，无多 worker claim/lease。
 - FileEventStore 是非 durable 兼容路径。
-- SDK 自诊断使用独立内存环和 app-private 滚动文件，不经过 dispatcher/outbox/uploader。
+- SDK 自诊断使用条数 + 字节双预算内存环/队列和按进程隔离的 app-private 滚动文件，不经过 dispatcher/outbox/uploader；支持全进程聚合导出和 executor 异步读取。
 
 ## 接入现实
 
@@ -96,7 +96,7 @@ Apm.emit
 - aggregation：关闭
 - multi-process coordination：关闭
 - self-monitor/auto-throttle：开启
-- self-diagnostics：开启；200 条内存、256 队列、3 × 512 KiB 文件；不自动上传
+- self-diagnostics：开启；200 条 / 4 MiB 内存、256 条 / 4 MiB 队列、每进程 3 × 512 KiB 文件；不自动上传
 - native crash：关闭
 - Hprof/fork dump：关闭
 
@@ -104,7 +104,7 @@ Apm.emit
 
 ## 验证
 
-2026-07-11 已在 JDK 21.0.11 对完成 SDK 自诊断的当前 tip 执行：
+2026-07-11 已在 JDK 21.0.11 对完成 SDK 自诊断加固的当前 tip 执行：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -114,7 +114,7 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。XML 报告合计 75 个套件、501 个测试，0 failures / 0 errors / 0 skipped；生成 21 份 lint HTML、4,589,624 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。独立 consumer 已从本地制品清理重建成功。
+全部通过。XML 报告合计 75 个套件、514 个测试，0 failures / 0 errors / 0 skipped；生成 21 份 lint HTML、4,606,048 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机多进程矩阵仍属于外部验证项，未计入本地完成证明。
 
 ## 新电脑接手
 
