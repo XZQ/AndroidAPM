@@ -40,11 +40,17 @@ class RenderModuleTest {
         assertEquals(EXPECTED_COUNT_THRESHOLD, config.viewCountThreshold)
     }
 
-    /** 默认开启过度绘制检测。 */
+    /** 公共 API 无法读取 GPU overdraw，因此兼容字段默认关闭。 */
     @Test
-    fun `default detectOverdraw is true`() {
+    fun `default detectOverdraw is false`() {
         val config = RenderConfig()
-        assertTrue(config.detectOverdraw)
+        assertFalse(config.detectOverdraw)
+    }
+
+    /** 默认慢帧阈值为 32ms。 */
+    @Test
+    fun `default slow frame threshold is 32ms`() {
+        assertEquals(32L, RenderConfig().slowFrameThresholdMs)
     }
 
     /** 默认堆栈最大长度 4000。 */
@@ -63,7 +69,8 @@ class RenderModuleTest {
             viewDepthThreshold = CUSTOM_DEPTH_THRESHOLD,
             viewCountThreshold = CUSTOM_COUNT_THRESHOLD,
             detectOverdraw = false,
-            maxStackTraceLength = CUSTOM_STACK_LENGTH
+            maxStackTraceLength = CUSTOM_STACK_LENGTH,
+            slowFrameThresholdMs = 48L
         )
         // 验证所有自定义值已正确覆盖
         assertFalse(config.enableRenderMonitor)
@@ -72,6 +79,7 @@ class RenderModuleTest {
         assertEquals(CUSTOM_COUNT_THRESHOLD, config.viewCountThreshold)
         assertFalse(config.detectOverdraw)
         assertEquals(CUSTOM_STACK_LENGTH, config.maxStackTraceLength)
+        assertEquals(48L, config.slowFrameThresholdMs)
     }
 
     /** data class copy 仅修改指定字段。 */
