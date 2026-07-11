@@ -16,7 +16,9 @@ class DiagnosticsConfigTest {
 
         assertTrue(config.enabled)
         assertEquals(200, config.memoryRecordLimit)
+        assertEquals(4L * 1024L * 1024L, config.memoryByteLimit)
         assertEquals(256, config.writerQueueCapacity)
+        assertEquals(4L * 1024L * 1024L, config.writerQueueByteLimit)
         assertEquals(512L * 1024L, config.maxFileBytes)
         assertEquals(3, config.retainedFileCount)
         assertTrue(config.includeStackTraces)
@@ -32,5 +34,11 @@ class DiagnosticsConfigTest {
     @Test(expected = IllegalArgumentException::class)
     fun `non positive retained file count is rejected`() {
         DiagnosticsConfig(retainedFileCount = 0)
+    }
+
+    /** Variable-sized buffers must reject byte budgets above the documented hard bound. */
+    @Test(expected = IllegalArgumentException::class)
+    fun `memory byte limit above hard bound is rejected`() {
+        DiagnosticsConfig(memoryByteLimit = 8L * 1024L * 1024L + 1L)
     }
 }

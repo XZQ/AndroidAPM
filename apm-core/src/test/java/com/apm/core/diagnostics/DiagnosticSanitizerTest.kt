@@ -24,6 +24,18 @@ class DiagnosticSanitizerTest {
         assertTrue(output.endsWith("...[truncated]"))
     }
 
+    /** Common JSON, cookie, API-key, secret, and encoded query forms must all be redacted. */
+    @Test
+    fun `extended credential forms are redacted`() {
+        val input = "\"apiKey\":\"json-key\" client_secret=form-secret Cookie: sid=cookie-value " +
+            "Set-Cookie: auth=set-cookie-value api_key%3Dencoded-key secret=plain-secret"
+
+        val output = DiagnosticSanitizer.sanitizeMessage(input)
+
+        listOf("json-key", "form-secret", "cookie-value", "set-cookie-value", "encoded-key", "plain-secret")
+            .forEach { secret -> assertFalse(output.contains(secret)) }
+    }
+
     /** Exception stacks must be bounded and deterministically fingerprinted. */
     @Test
     fun `throwable stack is bounded and hash is stable`() {

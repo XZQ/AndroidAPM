@@ -10,12 +10,15 @@ internal object DiagnosticSanitizer {
     /** Sanitizes and bounds one diagnostic message. */
     fun sanitizeMessage(value: String): String {
         // Authorization headers are handled before generic key/value credentials so bearer payloads cannot leak.
-        val withoutAuthorization = AUTHORIZATION_PATTERN.replace(value) { match ->
+        val withoutHeaders = SENSITIVE_HEADER_PATTERN.replace(value) { match ->
             "${match.groupValues[1]}$REDACTED_VALUE"
         }
-        val withoutBearer = BEARER_PATTERN.replace(withoutAuthorization, "Bearer $REDACTED_VALUE")
-        val redacted = CREDENTIAL_PATTERN.replace(withoutBearer) { match ->
-            "${match.groupValues[1]}${match.groupValues[2]}$REDACTED_VALUE"
+        val withoutBearer = BEARER_PATTERN.replace(withoutHeaders, "Bearer $REDACTED_VALUE")
+        val withoutEncoded = ENCODED_CREDENTIAL_PATTERN.replace(withoutBearer) { match ->
+            "${match.groupValues[1]}%3D$REDACTED_VALUE"
+        }
+        val redacted = CREDENTIAL_PATTERN.replace(withoutEncoded) { match ->
+            "${match.groupValues[1]}${match.groupValues[2]}${match.groupValues[3]}$REDACTED_VALUE${match.groupValues[5]}"
         }
         return truncate(redacted, MAX_MESSAGE_CHARS)
     }
@@ -65,12 +68,18 @@ internal object DiagnosticSanitizer {
         return digest.take(HASH_PREFIX_BYTES).joinToString(separator = "") { byte -> "%02x".format(byte) }
     }
 
-    /** Generic credential-shaped key/value pairs. */
+    /** Generic credential-shaped JSON, query, and form key/value pairs. */
     private val CREDENTIAL_PATTERN = Regex(
-        pattern = "(?i)(token|access_token|refresh_token|password)(\\s*[:=]\\s*)([^&\\s]+)"
+        pattern = "(?i)([\"']?(?:token|access[_-]?token|refresh[_-]?token|password|api[_-]?key|client[_-]?secret|secret)[\"']?)(\\s*[:=]\\s*)([\"']?)([^\"'&;\\s,}]+)([\"']?)"
     )
-    /** HTTP Authorization header with an optional scheme. */
-    private val AUTHORIZATION_PATTERN = Regex("(?i)(Authorization\\s*:\\s*)(?:Bearer\\s+)?[^\\s&]+")
+    /** URL-encoded credential key/value pairs. */
+    private val ENCODED_CREDENTIAL_PATTERN = Regex(
+        pattern = "(?i)((?:token|access(?:_|%5F|-)?token|refresh(?:_|%5F|-)?token|password|api(?:_|%5F|-)?key|client(?:_|%5F|-)?secret|secret))%3D([^&%\\s]+)"
+    )
+    /** Sensitive HTTP headers whose entire value must be removed. */
+    private val SENSITIVE_HEADER_PATTERN = Regex(
+        "(?i)((?:Authorization|Cookie|Set-Cookie)\\s*:\\s*)(?:Bearer\\s+)?[^\\s,]+"
+    )
     /** Standalone bearer credentials. */
     private val BEARER_PATTERN = Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/=-]+")
     /** Maximum stored message characters. */

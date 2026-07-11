@@ -1,12 +1,8 @@
 package com.apm.core.diagnostics
 
-import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
-import java.util.zip.ZipEntry
-import java.util.zip.ZipOutputStream
-import org.json.JSONObject
 
 /** Storage contract used by the recorder and deterministic failure tests. */
 internal interface DiagnosticStore {
@@ -27,7 +23,11 @@ internal data class DiagnosticReadResult(
     /** Readable entries in persisted order. */
     val entries: List<DiagnosticEntry>,
     /** Corrupt lines skipped during the read. */
-    val corruptRecords: Long
+    val corruptRecords: Long,
+    /** Whether a higher-level aggregate export omitted older evidence to remain bounded. */
+    val truncated: Boolean = false,
+    /** Number of process directories omitted by the aggregate export bound. */
+    val omittedProcessCount: Int = 0
 )
 
 /**
@@ -77,32 +77,13 @@ internal class DiagnosticFileStore(
     /** Exports a stable manifest and merged readable JSONL journal. */
     override fun exportTo(target: File, status: DiagnosticStatus): DiagnosticExportResult {
         synchronized(lock) {
-            val temporary = File(target.parentFile ?: directory, target.name + EXPORT_TEMP_SUFFIX)
             return try {
                 ensureDirectory()
-                target.parentFile?.let(::ensureDirectory)
                 // Export only decoded entries so corrupt persisted tails never contaminate the support package.
                 val read = readAllLocked()
-                if (temporary.exists() && !temporary.delete()) {
-                    throw IOException("Unable to replace temporary diagnostics export")
-                }
-                ZipOutputStream(BufferedOutputStream(FileOutputStream(temporary))).use { zip ->
-                    writeZipEntry(zip, ZIP_MANIFEST_NAME, manifest(status, read).toString())
-                    val jsonl = read.entries.joinToString(separator = NEWLINE, postfix = if (read.entries.isEmpty()) "" else NEWLINE) {
-                        entry -> DiagnosticJsonCodec.encode(entry)
-                    }
-                    writeZipEntry(zip, ZIP_JOURNAL_NAME, jsonl)
-                }
-                replaceTarget(temporary, target)
-                DiagnosticExportResult(
-                    success = true,
-                    file = target,
-                    exportedRecords = read.entries.size,
-                    errorMessage = null
-                )
+                DiagnosticArchiveExporter.export(target, read, status, segmentFiles())
             } catch (error: Exception) {
                 // Export is an explicit host support action, but it still must return failure as data.
-                temporary.delete()
                 DiagnosticExportResult(
                     success = false,
                     file = null,
@@ -111,6 +92,11 @@ internal class DiagnosticFileStore(
                 )
             }
         }
+    }
+
+    /** Returns every possible journal segment path for export collision protection. */
+    internal fun segmentFiles(): List<File> {
+        return (0 until config.retainedFileCount).map(::segmentFile)
     }
 
     /** Deletes every known JSONL segment without touching exported ZIP packages. */
@@ -218,66 +204,10 @@ internal class DiagnosticFileStore(
         }
     }
 
-    /** Replaces the requested export target after the ZIP has closed successfully. */
-    private fun replaceTarget(temporary: File, target: File) {
-        deleteOrThrow(target)
-        if (temporary.renameTo(target)) {
-            return
-        }
-        temporary.copyTo(target, overwrite = true)
-        if (!temporary.delete()) {
-            throw IOException("Unable to remove temporary diagnostics export")
-        }
-    }
-
-    /** Writes one UTF-8 ZIP entry. */
-    private fun writeZipEntry(zip: ZipOutputStream, name: String, content: String) {
-        zip.putNextEntry(ZipEntry(name))
-        zip.write(content.toByteArray(Charsets.UTF_8))
-        zip.closeEntry()
-    }
-
-    /** Creates a controlled export manifest without host business context. */
-    private fun manifest(status: DiagnosticStatus, read: DiagnosticReadResult): JSONObject {
-        return JSONObject()
-            .put(MANIFEST_FORMAT_VERSION, EXPORT_FORMAT_VERSION)
-            .put(MANIFEST_EXPORTED_AT_MS, System.currentTimeMillis())
-            .put(MANIFEST_EXPORTED_RECORDS, read.entries.size)
-            .put(MANIFEST_CORRUPT_RECORDS, read.corruptRecords)
-            .put(MANIFEST_FILE_SINK_HEALTHY, status.fileSinkHealthy)
-            .put(MANIFEST_DROPPED_RECORDS, status.droppedRecords)
-            .put(MANIFEST_WRITE_FAILURES, status.writeFailures)
-            .put(MANIFEST_LAST_FAILURE, status.lastFailure ?: JSONObject.NULL)
-    }
-
     private companion object {
         /** Active JSONL segment name. */
         private const val ACTIVE_FILE_NAME = "diagnostics.jsonl"
-        /** ZIP entry containing export metadata. */
-        private const val ZIP_MANIFEST_NAME = "manifest.json"
-        /** ZIP entry containing merged readable records. */
-        private const val ZIP_JOURNAL_NAME = "diagnostics.jsonl"
-        /** Temporary export suffix. */
-        private const val EXPORT_TEMP_SUFFIX = ".tmp"
         /** Platform-independent JSONL separator. */
         private const val NEWLINE = "\n"
-        /** Export manifest format version. */
-        private const val EXPORT_FORMAT_VERSION = 1
-        /** Manifest field: format version. */
-        private const val MANIFEST_FORMAT_VERSION = "formatVersion"
-        /** Manifest field: export timestamp. */
-        private const val MANIFEST_EXPORTED_AT_MS = "exportedAtMs"
-        /** Manifest field: readable exported records. */
-        private const val MANIFEST_EXPORTED_RECORDS = "exportedRecords"
-        /** Manifest field: corrupt skipped records. */
-        private const val MANIFEST_CORRUPT_RECORDS = "corruptRecords"
-        /** Manifest field: file-sink health. */
-        private const val MANIFEST_FILE_SINK_HEALTHY = "fileSinkHealthy"
-        /** Manifest field: dropped records. */
-        private const val MANIFEST_DROPPED_RECORDS = "droppedRecords"
-        /** Manifest field: file write failures. */
-        private const val MANIFEST_WRITE_FAILURES = "writeFailures"
-        /** Manifest field: last sanitized sink failure. */
-        private const val MANIFEST_LAST_FAILURE = "lastFailure"
     }
 }

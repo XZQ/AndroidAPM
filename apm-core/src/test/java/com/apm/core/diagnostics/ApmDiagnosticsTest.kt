@@ -2,6 +2,10 @@ package com.apm.core.diagnostics
 
 import java.io.File
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.zip.ZipFile
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -87,5 +91,87 @@ class ApmDiagnosticsTest {
         val secondSession = ApmDiagnostics.snapshot(1).single().sessionId
 
         assertFalse(firstSession == secondSession)
+    }
+
+    /** Process directory names must be deterministic and collision-resistant after sanitization. */
+    @Test
+    fun `process directories are isolated`() {
+        val first = ApmDiagnostics.processDirectory(tempDir, "com.example:worker/a")
+        val repeat = ApmDiagnostics.processDirectory(tempDir, "com.example:worker/a")
+        val collision = ApmDiagnostics.processDirectory(tempDir, "com.example:worker?a")
+
+        assertEquals(first.canonicalPath, repeat.canonicalPath)
+        assertFalse(first.canonicalPath == collision.canonicalPath)
+        assertEquals(tempDir.canonicalPath, first.parentFile?.canonicalPath)
+    }
+
+    /** Aggregate export must retain journals written by different Android processes. */
+    @Test
+    fun `aggregate export includes every process directory`() {
+        ApmDiagnostics.initialize(tempDir, DiagnosticsConfig(), "com.example", "main", isolateProcess = true)
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", null, "main-record", null)
+        assertTrue(ApmDiagnostics.flush(1_000L))
+        ApmDiagnostics.initialize(tempDir, DiagnosticsConfig(), "com.example:worker", "worker", isolateProcess = true)
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", null, "worker-record", null)
+        assertTrue(ApmDiagnostics.flush(1_000L))
+
+        val target = File(tempDir.parentFile, "aggregate-${System.nanoTime()}.zip")
+        try {
+            val result = ApmDiagnostics.exportTo(target)
+
+            assertTrue(result.success)
+            assertEquals(2, result.exportedRecords)
+            ZipFile(target).use { zip ->
+                val journal = zip.getInputStream(zip.getEntry("diagnostics.jsonl")).bufferedReader().use { it.readText() }
+                assertTrue(journal.contains("main-record"))
+                assertTrue(journal.contains("worker-record"))
+            }
+        } finally {
+            target.delete()
+        }
+    }
+
+    /** Async snapshot must run on the caller-selected executor and deliver one result. */
+    @Test
+    fun `snapshot async invokes callback`() {
+        ApmDiagnostics.initialize(tempDir, DiagnosticsConfig(), "com.example", "async")
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", null, "async-record", null)
+        val executor = Executors.newSingleThreadExecutor()
+        val completed = CountDownLatch(1)
+        var messages = emptyList<String>()
+        try {
+            ApmDiagnostics.snapshotAsync(executor, 1) { entries ->
+                messages = entries.map(DiagnosticEntry::message)
+                completed.countDown()
+            }
+
+            assertTrue(completed.await(2L, TimeUnit.SECONDS))
+            assertEquals(listOf("async-record"), messages)
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    /** Async export must create the archive and deliver the result on the selected worker. */
+    @Test
+    fun `export async invokes callback`() {
+        ApmDiagnostics.initialize(tempDir, DiagnosticsConfig(), "com.example", "async-export")
+        ApmDiagnostics.record(DiagnosticLevel.INFO, "core", null, "export-record", null)
+        val executor = Executors.newSingleThreadExecutor()
+        val completed = CountDownLatch(1)
+        val target = File(tempDir, "async-support.zip")
+        var success = false
+        try {
+            ApmDiagnostics.exportToAsync(executor, target) { result ->
+                success = result.success
+                completed.countDown()
+            }
+
+            assertTrue(completed.await(2L, TimeUnit.SECONDS))
+            assertTrue(success)
+            assertTrue(target.exists())
+        } finally {
+            executor.shutdownNow()
+        }
     }
 }

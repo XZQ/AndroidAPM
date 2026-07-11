@@ -5,6 +5,7 @@ import java.io.IOException
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -92,20 +93,107 @@ class DiagnosticRecorderTest {
         assertFalse(recorder.status().fileSinkHealthy)
     }
 
+    /** Read-side failures must not inflate write-failure totals. */
+    @Test
+    fun `read failure has independent metric`() {
+        val recorder = recorder(store = ReadThrowingStore())
+
+        assertTrue(recorder.snapshot(1).isEmpty())
+        assertEquals(1L, recorder.status().readFailures)
+        assertEquals(0L, recorder.status().writeFailures)
+    }
+
+    /** Status must read cached disk usage rather than traversing the store on the caller thread. */
+    @Test
+    fun `status uses cached retained bytes`() {
+        val store = CountingStore()
+        val recorder = recorder(store = store)
+        recorder.record(DiagnosticLevel.INFO, "core", null, "cached", null)
+        assertTrue(recorder.flush(1_000L))
+        val callsAfterWriter = store.retainedCalls.get()
+
+        recorder.status()
+        recorder.status()
+
+        assertEquals(callsAfterWriter, store.retainedCalls.get())
+    }
+
+    /** Memory and queue buffers must obey byte budgets as well as record counts. */
+    @Test
+    fun `variable sized buffers remain byte bounded`() {
+        val store = BlockingStore()
+        val recorder = recorder(
+            memoryLimit = 100,
+            memoryByteLimit = MIN_TEST_BUFFER_BYTES,
+            queueCapacity = 100,
+            queueByteLimit = MIN_TEST_BUFFER_BYTES,
+            store = store
+        )
+        recorder.record(DiagnosticLevel.INFO, "core", null, "first", null)
+        assertTrue(store.appendStarted.await(1L, TimeUnit.SECONDS))
+
+        repeat(30) { index ->
+            recorder.record(DiagnosticLevel.INFO, "core", null, "$index-${"x".repeat(4_096)}", null)
+        }
+
+        val status = recorder.status()
+        assertTrue(status.memoryBytes <= MIN_TEST_BUFFER_BYTES)
+        assertTrue(status.queueBytes <= MIN_TEST_BUFFER_BYTES)
+        assertTrue(status.droppedRecords > 0L)
+        store.releaseAppend.countDown()
+    }
+
+    /** Cooldown must preserve queued evidence instead of silently settling it. */
+    @Test
+    fun `cooldown waits before dequeue`() {
+        val clock = AtomicLong(0L)
+        val cooldownStarted = CountDownLatch(1)
+        val releaseCooldown = CountDownLatch(1)
+        val store = FailOnceStore()
+        val recorder = recorder(
+            store = store,
+            clockMs = clock::get,
+            retryWait = {
+                cooldownStarted.countDown()
+                releaseCooldown.await(2L, TimeUnit.SECONDS)
+                clock.set(FILE_RETRY_COOLDOWN_MS)
+            }
+        )
+        recorder.record(DiagnosticLevel.INFO, "core", null, "fails", null)
+        assertTrue(recorder.flush(1_000L))
+        assertTrue(cooldownStarted.await(1L, TimeUnit.SECONDS))
+
+        recorder.record(DiagnosticLevel.INFO, "core", null, "retained", null)
+
+        assertEquals(1, recorder.status().queueDepth)
+        assertEquals(0L, recorder.status().droppedRecords)
+        releaseCooldown.countDown()
+        assertTrue(recorder.flush(1_000L))
+        assertEquals(listOf("retained"), store.entries.map(DiagnosticEntry::message))
+    }
+
     /** Builds and tracks one recorder with deterministic test identity. */
     private fun recorder(
         memoryLimit: Int = 20,
+        memoryByteLimit: Long = 4L * 1024L * 1024L,
         queueCapacity: Int = 20,
-        store: DiagnosticStore = RecordingStore()
+        queueByteLimit: Long = 4L * 1024L * 1024L,
+        store: DiagnosticStore = RecordingStore(),
+        clockMs: () -> Long = System::currentTimeMillis,
+        retryWait: (Long) -> Unit = Thread::sleep
     ): DiagnosticRecorder {
         return DiagnosticRecorder(
             config = DiagnosticsConfig(
                 memoryRecordLimit = memoryLimit,
-                writerQueueCapacity = queueCapacity
+                memoryByteLimit = memoryByteLimit,
+                writerQueueCapacity = queueCapacity,
+                writerQueueByteLimit = queueByteLimit
             ),
             processName = "com.example",
             sessionId = "session",
-            store = store
+            store = store,
+            clockMs = clockMs,
+            retryWait = retryWait
         ).also(recorders::add)
     }
 
@@ -158,5 +246,46 @@ class DiagnosticRecorderTest {
         override fun append(entry: DiagnosticEntry) {
             throw IOException("disk full")
         }
+    }
+
+    /** Store whose persisted reads fail while writes remain available. */
+    private class ReadThrowingStore : RecordingStore() {
+        /** Always fails the read boundary. */
+        override fun readAll(): DiagnosticReadResult {
+            throw IOException("read unavailable")
+        }
+    }
+
+    /** Store that fails the first append and accepts later retry evidence. */
+    private class FailOnceStore : RecordingStore() {
+        /** Number of append attempts. */
+        private val attempts = AtomicLong(0L)
+
+        /** Fails exactly the first append. */
+        override fun append(entry: DiagnosticEntry) {
+            if (attempts.incrementAndGet() == 1L) {
+                throw IOException("temporary failure")
+            }
+            super.append(entry)
+        }
+    }
+
+    /** Store that counts retained-byte queries across construction, writer, and status paths. */
+    private class CountingStore : RecordingStore() {
+        /** Number of retained-byte queries. */
+        val retainedCalls = AtomicLong(0L)
+
+        /** Counts and returns the in-memory store's zero disk usage. */
+        override fun retainedBytes(): Long {
+            retainedCalls.incrementAndGet()
+            return 0L
+        }
+    }
+
+    private companion object {
+        /** Minimum buffer byte budget accepted by production validation. */
+        private const val MIN_TEST_BUFFER_BYTES = 64L * 1024L
+        /** Production retry cooldown used by the deterministic fake clock. */
+        private const val FILE_RETRY_COOLDOWN_MS = 60_000L
     }
 }

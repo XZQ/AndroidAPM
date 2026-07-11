@@ -21,15 +21,25 @@ internal class DiagnosticRecorder(
     /** SDK session identity included in every record. */
     private val sessionId: String,
     /** Independent persistent store. */
-    private val store: DiagnosticStore
+    private val store: DiagnosticStore,
+    /** Wall-clock source used by retry scheduling. */
+    private val clockMs: () -> Long = System::currentTimeMillis,
+    /** Interruptible wait used during file-sink cooldown. */
+    private val retryWait: (Long) -> Unit = Thread::sleep
 ) {
 
     /** Monotonic record sequence. */
     private val sequence = AtomicLong(0L)
     /** Bounded persistence queue. */
-    private val queue = ArrayBlockingQueue<DiagnosticEntry>(config.writerQueueCapacity)
+    private val queue = ArrayBlockingQueue<SizedEntry>(config.writerQueueCapacity)
+    /** Short lock protecting queue admission and byte accounting. */
+    private val queueLock = Any()
+    /** Encoded bytes currently waiting in [queue]. */
+    private val queueBytes = AtomicLong(0L)
     /** In-memory newest-record ring. */
-    private val memory = ArrayDeque<DiagnosticEntry>(config.memoryRecordLimit)
+    private val memory = ArrayDeque<SizedEntry>(config.memoryRecordLimit)
+    /** Encoded bytes currently retained in [memory]. */
+    private var memoryBytes = 0L
     /** Short memory-ring lock. */
     private val memoryLock = Any()
     /** Monitor used by bounded flush calls. */
@@ -44,6 +54,8 @@ internal class DiagnosticRecorder(
     private val droppedRecords = AtomicLong(0L)
     /** File-sink failures. */
     private val writeFailures = AtomicLong(0L)
+    /** Persisted-journal read failures. */
+    private val readFailures = AtomicLong(0L)
     /** Current corrupt persisted-line count observed during a read. */
     private val corruptRecords = AtomicLong(0L)
     /** Current file-sink health. */
@@ -52,6 +64,18 @@ internal class DiagnosticRecorder(
     private val lastFailure = AtomicReference<String?>(null)
     /** Earliest wall-clock time at which file writes may be retried. */
     private val nextFileRetryAtMs = AtomicLong(0L)
+    /** Cached retained disk bytes; status reads never traverse the filesystem. */
+    private val retainedBytes = AtomicLong(0L)
+
+    init {
+        try {
+            retainedBytes.set(store.retainedBytes())
+        } catch (error: Exception) {
+            // Construction remains available in memory when existing journals cannot be inspected.
+            noteReadFailure(error)
+        }
+    }
+
     /** Dedicated low-priority diagnostics writer. */
     private val writerThread = ApmExecutors.startThread(
         name = WRITER_THREAD_NAME,
@@ -91,49 +115,52 @@ internal class DiagnosticRecorder(
             stackTrace = throwable.stackTrace,
             stackHash = throwable.stackHash
         )
-        addToMemory(entry)
+        val sizedEntry = SizedEntry(entry, encodedSizeBytes(entry))
+        addToMemory(sizedEntry)
         if (!accepting.get()) {
             // A stopped runtime preserves memory evidence but cannot promise persistence.
             droppedRecords.incrementAndGet()
             return
         }
-        enqueue(entry)
+        enqueue(sizedEntry)
     }
 
     /** Returns a newest-first snapshot merged from persisted and in-memory evidence. */
     fun snapshot(limit: Int): List<DiagnosticEntry> {
         val boundedLimit = limit.coerceIn(1, config.memoryRecordLimit)
-        val memorySnapshot = synchronized(memoryLock) { memory.toList() }
+        val memorySnapshot = memorySnapshot()
         val persisted = try {
             store.readAll().also { read -> corruptRecords.set(read.corruptRecords) }.entries
         } catch (error: Exception) {
             // Snapshot remains useful from memory when persisted reads are unavailable.
-            handleFileFailure(error)
+            noteReadFailure(error)
             emptyList()
         }
         return (persisted + memorySnapshot)
-            .distinctBy { entry -> entry.sessionId to entry.sequence }
+            .distinctBy { entry -> Triple(entry.processName, entry.sessionId, entry.sequence) }
             .sortedWith(compareBy<DiagnosticEntry> { entry -> entry.timestampMs }.thenBy { entry -> entry.sequence })
             .takeLast(boundedLimit)
             .asReversed()
     }
 
+    /** Returns a stable oldest-first copy of current memory evidence. */
+    internal fun memorySnapshot(): List<DiagnosticEntry> {
+        return synchronized(memoryLock) { memory.map(SizedEntry::entry) }
+    }
+
     /** Returns current diagnostics health without throwing into the host application. */
     fun status(): DiagnosticStatus {
-        val retainedBytes = try {
-            store.retainedBytes()
-        } catch (error: Exception) {
-            // Status remains available with a zero byte snapshot after a read-side file failure.
-            handleFileFailure(error)
-            0L
-        }
+        val currentMemoryBytes = synchronized(memoryLock) { memoryBytes }
         return DiagnosticStatus(
             enabled = true,
             fileSinkHealthy = fileSinkHealthy.get(),
             queueDepth = queue.size,
-            retainedBytes = retainedBytes,
+            queueBytes = queueBytes.get(),
+            memoryBytes = currentMemoryBytes,
+            retainedBytes = retainedBytes.get(),
             droppedRecords = droppedRecords.get(),
             writeFailures = writeFailures.get(),
+            readFailures = readFailures.get(),
             corruptRecords = corruptRecords.get(),
             lastFailure = lastFailure.get()
         )
@@ -168,13 +195,15 @@ internal class DiagnosticRecorder(
         val cleared = try {
             store.clear()
         } catch (error: Exception) {
-            handleFileFailure(error)
+            handleWriteFailure(error)
             false
         }
         if (cleared) {
             synchronized(memoryLock) {
                 memory.clear()
+                memoryBytes = 0L
             }
+            retainedBytes.set(0L)
             corruptRecords.set(0L)
         }
         return cleared
@@ -197,83 +226,164 @@ internal class DiagnosticRecorder(
     }
 
     /** Adds an entry to the bounded memory ring. */
-    private fun addToMemory(entry: DiagnosticEntry) {
+    private fun addToMemory(entry: SizedEntry) {
         synchronized(memoryLock) {
-            if (memory.size == config.memoryRecordLimit) {
-                memory.removeFirst()
+            if (entry.encodedBytes > config.memoryByteLimit) {
+                return
+            }
+            while (memory.isNotEmpty() &&
+                (memory.size >= config.memoryRecordLimit || memoryBytes + entry.encodedBytes > config.memoryByteLimit)
+            ) {
+                // Evict oldest evidence until both independent bounds admit the new record.
+                memoryBytes -= memory.removeFirst().encodedBytes
             }
             memory.addLast(entry)
+            memoryBytes += entry.encodedBytes
         }
     }
 
     /** Offers one entry to the bounded writer queue with ERROR preference. */
-    private fun enqueue(entry: DiagnosticEntry) {
-        pendingWrites.incrementAndGet()
-        if (queue.offer(entry)) {
+    private fun enqueue(entry: SizedEntry) {
+        if (offerQueued(entry)) {
             return
         }
-        settlePendingWrite()
-        if (entry.level == DiagnosticLevel.ERROR) {
-            val evicted = queue.poll()
+        if (entry.entry.level == DiagnosticLevel.ERROR) {
+            val evicted = synchronized(queueLock) {
+                val candidate = queue.firstOrNull { queued -> queued.entry.level != DiagnosticLevel.ERROR }
+                if (candidate != null && queue.remove(candidate)) {
+                    queueBytes.addAndGet(-candidate.encodedBytes)
+                    candidate
+                } else {
+                    null
+                }
+            }
             if (evicted != null) {
                 // The evicted queued record had already contributed to pendingWrites.
                 droppedRecords.incrementAndGet()
                 settlePendingWrite()
             }
-            pendingWrites.incrementAndGet()
-            if (queue.offer(entry)) {
+            if (offerQueued(entry)) {
                 return
             }
-            settlePendingWrite()
         }
         droppedRecords.incrementAndGet()
+    }
+
+    /** Offers a sized record only when both count and byte bounds admit it. */
+    private fun offerQueued(entry: SizedEntry): Boolean {
+        synchronized(queueLock) {
+            if (entry.encodedBytes > config.writerQueueByteLimit ||
+                queueBytes.get() + entry.encodedBytes > config.writerQueueByteLimit
+            ) {
+                return false
+            }
+            if (!queue.offer(entry)) {
+                return false
+            }
+            queueBytes.addAndGet(entry.encodedBytes)
+            pendingWrites.incrementAndGet()
+            return true
+        }
     }
 
     /** Runs file persistence until shutdown and queue drain complete. */
     private fun writerLoop() {
         while (running.get() || queue.isNotEmpty()) {
-            val entry = try {
-                queue.poll(WRITER_POLL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            } catch (_: InterruptedException) {
-                // Shutdown uses interruption only to wake the timed poll.
-                null
-            }
-            if (entry == null) {
+            waitForFileRetry()
+            val sizedEntry = pollQueued()
+            if (sizedEntry == null) {
                 continue
             }
-            persistIfAvailable(entry)
+            persist(sizedEntry.entry)
             settlePendingWrite()
         }
     }
 
-    /** Persists one entry unless the sink is inside its bounded failure cooldown. */
-    private fun persistIfAvailable(entry: DiagnosticEntry) {
-        val now = System.currentTimeMillis()
-        if (now < nextFileRetryAtMs.get()) {
-            return
+    /** Polls queue state and byte accounting atomically, then waits briefly when idle. */
+    private fun pollQueued(): SizedEntry? {
+        synchronized(queueLock) {
+            val entry = queue.poll()
+            if (entry != null) {
+                queueBytes.addAndGet(-entry.encodedBytes)
+                return entry
+            }
         }
+        try {
+            Thread.sleep(WRITER_POLL_TIMEOUT_MS)
+        } catch (_: InterruptedException) {
+            // Shutdown interruption wakes the idle writer.
+        }
+        return null
+    }
+
+    /** Waits before dequeueing so cooldown never silently consumes accepted records. */
+    private fun waitForFileRetry() {
+        while (running.get()) {
+            val remainingMs = nextFileRetryAtMs.get() - clockMs()
+            if (remainingMs <= 0L) {
+                return
+            }
+            try {
+                retryWait(remainingMs.coerceAtMost(WRITER_POLL_TIMEOUT_MS))
+            } catch (_: InterruptedException) {
+                // Shutdown interruption wakes the cooldown wait without consuming queued evidence.
+                return
+            }
+        }
+    }
+
+    /** Persists one dequeued entry and updates the disk-byte cache. */
+    private fun persist(entry: DiagnosticEntry) {
+        val now = clockMs()
         try {
             store.append(entry)
             fileSinkHealthy.set(true)
             nextFileRetryAtMs.set(0L)
+            try {
+                retainedBytes.set(store.retainedBytes())
+            } catch (error: Exception) {
+                // A successful append remains healthy even if the follow-up byte snapshot is unavailable.
+                noteReadFailure(error)
+            }
         } catch (error: Exception) {
             // File failures are isolated here and never re-enter ApmLogger or record().
-            handleFileFailure(error)
+            handleWriteFailure(error)
             nextFileRetryAtMs.set(now + FILE_RETRY_COOLDOWN_MS)
         }
     }
 
     /** Updates local sink health and reports through raw Logcat without recursion. */
-    private fun handleFileFailure(error: Exception) {
+    private fun handleWriteFailure(error: Exception) {
         writeFailures.incrementAndGet()
         fileSinkHealthy.set(false)
+        reportRawFailure(error, "write")
+    }
+
+    /** Records a mutation failure initiated by a process-aware facade operation. */
+    internal fun noteWriteFailure(error: Exception) {
+        handleWriteFailure(error)
+    }
+
+    /** Counts one persisted-journal read failure without mislabeling it as a write failure. */
+    internal fun noteReadFailure(error: Exception) {
+        readFailures.incrementAndGet()
+        reportRawFailure(error, "read")
+    }
+
+    /** Stores and emits one sanitized non-recursive raw failure summary. */
+    private fun reportRawFailure(error: Exception, operation: String) {
         val summary = DiagnosticSanitizer.sanitizeMessage(error.message ?: error.javaClass.name)
         lastFailure.set(summary)
         try {
-            Log.e(RAW_LOG_TAG, "Diagnostic file sink failed: $summary")
+            Log.e(RAW_LOG_TAG, "Diagnostic file $operation failed: $summary")
         } catch (_: RuntimeException) {
             // Plain JVM environments may not provide an Android Log implementation.
         }
+    }
+
+    /** Returns the UTF-8 JSONL footprint used for variable-sized buffer accounting. */
+    private fun encodedSizeBytes(entry: DiagnosticEntry): Long {
+        return (DiagnosticJsonCodec.encode(entry) + NEWLINE).toByteArray(Charsets.UTF_8).size.toLong()
     }
 
     /** Marks one accepted queue record as written, failed, skipped, or evicted. */
@@ -297,5 +407,15 @@ internal class DiagnosticRecorder(
         private const val SHUTDOWN_TIMEOUT_MS = 1_000L
         /** Raw non-recursive Android Log tag. */
         private const val RAW_LOG_TAG = "AndroidAPM"
+        /** JSONL delimiter included in buffer byte accounting. */
+        private const val NEWLINE = "\n"
     }
+
+    /** Entry paired with its immutable encoded JSONL footprint. */
+    private data class SizedEntry(
+        /** Structured diagnostic evidence. */
+        val entry: DiagnosticEntry,
+        /** UTF-8 JSONL bytes consumed by the entry. */
+        val encodedBytes: Long
+    )
 }

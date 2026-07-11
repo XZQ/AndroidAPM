@@ -61,7 +61,13 @@ data class DiagnosticStatus(
     /** Corrupt persisted lines skipped while reading. */
     val corruptRecords: Long,
     /** Last sanitized sink failure summary. */
-    val lastFailure: String?
+    val lastFailure: String?,
+    /** Current encoded bytes waiting in the writer queue. */
+    val queueBytes: Long = 0L,
+    /** Current encoded bytes retained by the memory ring. */
+    val memoryBytes: Long = 0L,
+    /** Persisted-journal read failures. */
+    val readFailures: Long = 0L
 ) {
     companion object {
         /** Status returned before diagnostics initialization. */
@@ -69,9 +75,12 @@ data class DiagnosticStatus(
             enabled = false,
             fileSinkHealthy = false,
             queueDepth = 0,
+            queueBytes = 0L,
+            memoryBytes = 0L,
             retainedBytes = 0L,
             droppedRecords = 0L,
             writeFailures = 0L,
+            readFailures = 0L,
             corruptRecords = 0L,
             lastFailure = null
         )

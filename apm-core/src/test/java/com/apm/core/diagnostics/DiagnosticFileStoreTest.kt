@@ -6,6 +6,7 @@ import java.util.zip.ZipFile
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -86,7 +87,25 @@ class DiagnosticFileStoreTest {
         ZipFile(target).use { zip ->
             assertNotNull(zip.getEntry("manifest.json"))
             assertNotNull(zip.getEntry("diagnostics.jsonl"))
+            val manifest = zip.getInputStream(zip.getEntry("manifest.json")).bufferedReader().use { it.readText() }
+            assertTrue(manifest.contains("\"sdkVersion\":\"0.1.0\""))
+            assertTrue(manifest.contains("\"processNames\":[\"com.example\"]"))
+            assertTrue(manifest.contains("\"sessionIds\":[\"session\"]"))
+            assertTrue(manifest.contains("\"truncated\":false"))
         }
+    }
+
+    /** An export target must never replace the active journal it is reading. */
+    @Test
+    fun `export rejects active journal target`() {
+        val store = fileStore()
+        store.append(diagnosticEntry(sequence = 1L))
+        val journal = File(tempDir, ACTIVE_FILE_NAME)
+
+        val result = store.exportTo(journal, DiagnosticStatus.INACTIVE)
+
+        assertFalse(result.success)
+        assertEquals(1, store.readAll().entries.size)
     }
 
     /** Clear must remove every persisted JSONL segment. */

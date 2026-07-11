@@ -15,7 +15,11 @@ data class DiagnosticsConfig(
     /** Number of JSONL segments retained including the active file. */
     val retainedFileCount: Int = DEFAULT_RETAINED_FILE_COUNT,
     /** Whether bounded exception stack traces are retained. */
-    val includeStackTraces: Boolean = true
+    val includeStackTraces: Boolean = true,
+    /** Maximum encoded bytes retained in the memory ring. */
+    val memoryByteLimit: Long = DEFAULT_MEMORY_BYTE_LIMIT,
+    /** Maximum encoded bytes waiting for file persistence. */
+    val writerQueueByteLimit: Long = DEFAULT_WRITER_QUEUE_BYTE_LIMIT
 ) {
     init {
         require(memoryRecordLimit in 1..MAX_MEMORY_RECORD_LIMIT) {
@@ -23,6 +27,12 @@ data class DiagnosticsConfig(
         }
         require(writerQueueCapacity in 1..MAX_WRITER_QUEUE_CAPACITY) {
             "writerQueueCapacity must be between 1 and $MAX_WRITER_QUEUE_CAPACITY"
+        }
+        require(memoryByteLimit in MIN_BUFFER_BYTES..MAX_BUFFER_BYTES) {
+            "memoryByteLimit must be between $MIN_BUFFER_BYTES and $MAX_BUFFER_BYTES"
+        }
+        require(writerQueueByteLimit in MIN_BUFFER_BYTES..MAX_BUFFER_BYTES) {
+            "writerQueueByteLimit must be between $MIN_BUFFER_BYTES and $MAX_BUFFER_BYTES"
         }
         require(maxFileBytes in MIN_FILE_BYTES..MAX_FILE_BYTES) {
             "maxFileBytes must be between $MIN_FILE_BYTES and $MAX_FILE_BYTES"
@@ -35,8 +45,12 @@ data class DiagnosticsConfig(
     private companion object {
         /** Default memory-ring size. */
         private const val DEFAULT_MEMORY_RECORD_LIMIT = 200
+        /** Default memory-ring byte budget. */
+        private const val DEFAULT_MEMORY_BYTE_LIMIT = 4L * 1024L * 1024L
         /** Default bounded writer-queue size. */
         private const val DEFAULT_WRITER_QUEUE_CAPACITY = 256
+        /** Default writer-queue byte budget. */
+        private const val DEFAULT_WRITER_QUEUE_BYTE_LIMIT = 4L * 1024L * 1024L
         /** Default per-segment byte budget. */
         private const val DEFAULT_MAX_FILE_BYTES = 512L * 1024L
         /** Default retained segment count. */
@@ -45,6 +59,10 @@ data class DiagnosticsConfig(
         private const val MAX_MEMORY_RECORD_LIMIT = 2_000
         /** Hard writer-queue limit. */
         private const val MAX_WRITER_QUEUE_CAPACITY = 4_096
+        /** Minimum useful variable-sized buffer budget. */
+        private const val MIN_BUFFER_BYTES = 64L * 1024L
+        /** Hard memory or writer-queue byte budget. */
+        private const val MAX_BUFFER_BYTES = 8L * 1024L * 1024L
         /** Minimum useful segment size. */
         private const val MIN_FILE_BYTES = 64L * 1024L
         /** Hard per-segment disk limit. */
