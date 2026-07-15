@@ -2,16 +2,27 @@
     <string name="app_name">Android APM Sample</string>
     <string name="title">Android APM Dashboard</string>
     <!-- Memory -->
+    <string name="memory_title">Memory</string>
     <string name="allocate_memory">Allocate 12MB</string>
     <string name="clear_memory">Clear Memory</string>
     <string name="capture_snapshot">Capture Snapshot</string>
     <string name="test_leak">Test Activity Leak</string>
     <!-- Crash -->
+    <string name="crash_network_title">Crash and Network</string>
     <string name="test_crash">Trigger Crash</string>
     <!-- Network -->
     <string name="test_network_ok">Simulate OK Request</string>
     <string name="test_network_slow">Simulate Slow Request</string>
     <string name="test_network_error">Simulate Error Request</string>
+    <!-- Explicit host integrations -->
+    <string name="explicit_integrations_title">Explicit Host Integrations</string>
+    <string name="test_io">Run IO</string>
+    <string name="test_sqlite">Run SQLite</string>
+    <string name="test_ipc">Run IPC</string>
+    <string name="test_thread_pool">Queue Threads</string>
+    <string name="test_battery">Battery Signals</string>
+    <string name="test_webview">Run WebView</string>
+    <string name="webview_description">Local monitored WebView demonstration</string>
     <!-- SDK self-diagnostics -->
     <string name="diagnostics_title">SDK Self-Diagnostics</string>
     <string name="diagnostics_status">Show Status</string>

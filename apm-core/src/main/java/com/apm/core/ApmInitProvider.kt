@@ -52,7 +52,8 @@ class ApmInitProvider : ContentProvider() {
         val configClassName = resolveConfigClassName(ctx)
         if (configClassName.isNullOrBlank()) {
             // 未配置 meta-data，跳过自动初始化
-            Log.w(TAG, "No meta-data 'com.apm.config_class' found, skip auto-init")
+            // Manual initialization is a supported mode, so absence of metadata is diagnostic only.
+            Log.d(TAG, "No meta-data 'com.apm.config_class' found, skip auto-init")
             return true
         }
 

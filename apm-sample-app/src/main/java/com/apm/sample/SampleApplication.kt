@@ -35,6 +35,7 @@ import com.apm.threadmonitor.ThreadMonitorModule
 import com.apm.webview.WebviewConfig
 import com.apm.webview.WebviewModule
 
+/** Application that demonstrates explicit registration of every SDK monitor. */
 class SampleApplication : Application() {
 
     /** 内存模块引用，供 MainActivity 调用 captureOnce。 */
@@ -59,6 +60,14 @@ class SampleApplication : Application() {
 
     /** IPC 模块引用，供 MainActivity 模拟 Binder 调用。 */
     lateinit var ipcModule: IpcModule
+        private set
+
+    /** Thread monitor exposed so the sample can register a real host executor. */
+    lateinit var threadMonitorModule: ThreadMonitorModule
+        private set
+
+    /** Battery monitor exposed for explicit WakeLock, GPS, and alarm callbacks. */
+    lateinit var batteryModule: BatteryModule
         private set
 
     override fun onCreate() {
@@ -119,25 +128,42 @@ class SampleApplication : Application() {
         Apm.register(SlowMethodModule(SlowMethodConfig()))
 
         // 9. 注册 IO 监控模块
-        ioModule = IoModule(IoConfig())
+        ioModule = IoModule(IoConfig(singleIoThresholdMs = 0L))
         Apm.register(ioModule)
 
         // 10. 注册线程监控模块
-        Apm.register(ThreadMonitorModule(ThreadMonitorConfig()))
+        threadMonitorModule = ThreadMonitorModule(
+            ThreadMonitorConfig(checkIntervalMs = 1_000L, queueBacklogThreshold = 3)
+        )
+        Apm.register(threadMonitorModule)
 
         // 11. 注册电量监控模块
-        Apm.register(BatteryModule(BatteryConfig()))
+        batteryModule = BatteryModule(
+            BatteryConfig(
+                wakeLockThresholdMs = 500L,
+                gpsThresholdMs = 500L,
+                checkIntervalMs = 1_000L,
+                alarmFloodThreshold = 3
+            )
+        )
+        Apm.register(batteryModule)
 
         // 12. 注册 SQLite 监控模块
-        sqliteModule = SqliteModule(SqliteConfig())
+        sqliteModule = SqliteModule(
+            SqliteConfig(slowQueryThresholdMs = 0L, queryPlanThresholdMs = 0L)
+        )
         Apm.register(sqliteModule)
 
         // 13. 注册 WebView 监控模块
-        webviewModule = WebviewModule(WebviewConfig())
+        webviewModule = WebviewModule(
+            WebviewConfig(pageLoadThresholdMs = 0L, jsExecutionThresholdMs = 0L)
+        )
         Apm.register(webviewModule)
 
         // 14. 注册 IPC 监控模块
-        ipcModule = IpcModule(IpcConfig())
+        ipcModule = IpcModule(
+            IpcConfig(binderThresholdMs = 20L, mainThreadBinderThresholdMs = 20L)
+        )
         Apm.register(ipcModule)
 
         // 15. 注册 GC 监控模块

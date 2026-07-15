@@ -1,8 +1,9 @@
 package com.apm.memory.oom
 
-import com.apm.core.Apm
-import com.apm.core.ApmLogger
+import com.apm.memory.ApmMemoryReportSink
 import com.apm.memory.MemoryConfig
+import com.apm.memory.MemoryReport
+import com.apm.memory.MemoryReportSink
 import com.apm.memory.MemorySnapshot
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
@@ -17,7 +18,14 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 线程安全：使用 Atomic 类型保证并发采样场景下的状态一致性。
  */
-internal class OomMonitor(private val config: MemoryConfig, private val hprofDumper: HprofDumper?) {
+internal class OomMonitor(
+    /** OOM thresholds and dump policy. */
+    private val config: MemoryConfig,
+    /** Optional heap-dump executor. */
+    private val hprofDumper: HprofDumper?,
+    /** Destination for classified OOM reports. */
+    private val reportSink: MemoryReportSink = ApmMemoryReportSink
+) {
     /** 上一次 dump 的时间戳，用于冷却控制。 */
     private val lastDumpTime = AtomicLong(0L)
     /** 是否已触发过 dump（首次不冷却）。 */
@@ -47,8 +55,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
         when {
             ratio >= config.javaHeapCriticalRatio -> {
                 // 危险级别：发送 ERROR 告警 + 触发 dump
-                Apm.emit(
-                    module = MODULE,
+                reportSink.emit(MemoryReport(
                     name = EVENT_OOM_CRITICAL,
                     kind = ApmEventKind.ALERT,
                     severity = ApmSeverity.ERROR, priority = ApmPriority.HIGH,
@@ -59,13 +66,12 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
                         "javaHeapUsedMb" to snapshot.javaHeapUsedMb,
                         "javaHeapMaxMb" to snapshot.javaHeapMaxMb
                     )
-                )
+                ))
                 triggerDump("java_heap_critical_${"%.2f".format(ratio)}")
             }
             ratio >= config.javaHeapWarnRatio -> {
                 // 警告级别：仅发送告警
-                Apm.emit(
-                    module = MODULE,
+                reportSink.emit(MemoryReport(
                     name = EVENT_OOM_WARN,
                     kind = ApmEventKind.ALERT,
                     severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -76,7 +82,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
                         "javaHeapUsedMb" to snapshot.javaHeapUsedMb,
                         "javaHeapMaxMb" to snapshot.javaHeapMaxMb
                     )
-                )
+                ))
             }
         }
     }
@@ -89,8 +95,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
     private fun checkSystemLowMemory(snapshot: MemorySnapshot) {
         // 系统已标记为低内存
         if (snapshot.isLowMemory) {
-            Apm.emit(
-                module = MODULE,
+            reportSink.emit(MemoryReport(
                 name = EVENT_SYSTEM_LOW_MEMORY,
                 kind = ApmEventKind.ALERT,
                 severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -100,15 +105,14 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
                     "systemAvailMemKb" to snapshot.systemAvailMemKb,
                     "lowMemThresholdKb" to snapshot.lowMemThresholdKb
                 )
-            )
+            ))
         }
         // 可用内存接近阈值（1.5 倍以内）
         if (snapshot.systemAvailMemKb > 0 &&
             snapshot.lowMemThresholdKb > 0 &&
             snapshot.systemAvailMemKb < snapshot.lowMemThresholdKb * SYSTEM_MEM_WARN_MULTIPLIER / SYSTEM_MEM_WARN_DIVISOR
         ) {
-            Apm.emit(
-                module = MODULE,
+            reportSink.emit(MemoryReport(
                 name = EVENT_SYSTEM_MEM_WARN,
                 kind = ApmEventKind.ALERT,
                 severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -118,7 +122,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
                     "systemAvailMemKb" to snapshot.systemAvailMemKb,
                     "lowMemThresholdKb" to snapshot.lowMemThresholdKb
                 )
-            )
+            ))
         }
     }
 
@@ -127,8 +131,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
      */
     private fun checkNativeHeapThreshold(snapshot: MemorySnapshot) {
         if (snapshot.nativeHeapAllocatedKb > config.nativeHeapWarnKb) {
-            Apm.emit(
-                module = MODULE,
+            reportSink.emit(MemoryReport(
                 name = EVENT_NATIVE_HEAP_WARN,
                 kind = ApmEventKind.ALERT,
                 severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -138,7 +141,7 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
                     "nativeHeapAllocatedKb" to snapshot.nativeHeapAllocatedKb,
                     "nativeHeapWarnKb" to config.nativeHeapWarnKb
                 )
-            )
+            ))
         }
     }
 
@@ -166,8 +169,6 @@ internal class OomMonitor(private val config: MemoryConfig, private val hprofDum
     }
 
     companion object {
-        /** 模块名。 */
-        private const val MODULE = "memory"
         /** OOM 危险事件名。 */
         private const val EVENT_OOM_CRITICAL = "oom_critical"
         /** OOM 预警事件名。 */

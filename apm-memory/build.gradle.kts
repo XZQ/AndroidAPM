@@ -29,4 +29,5 @@ dependencies {
     api(libs.lifecycle.process)
     api(libs.fragment.ktx)
     testImplementation(libs.junit)
+    testImplementation(libs.robolectric)
 }

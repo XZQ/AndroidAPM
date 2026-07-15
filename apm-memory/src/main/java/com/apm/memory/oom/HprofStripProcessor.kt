@@ -3,6 +3,7 @@ package com.apm.memory.oom
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
 import java.io.File
 import java.io.InputStream
 import java.io.OutputStream
@@ -71,7 +72,8 @@ internal class HprofStripProcessor {
         while (true) {
             val b = input.read()
             if (b < 0) {
-                break
+                // A valid Hprof header must terminate its format string explicitly.
+                throw EOFException("Hprof header is missing the format terminator")
             }
             output.write(b)
             headerBytes.add(b.toByte())
@@ -81,7 +83,8 @@ internal class HprofStripProcessor {
         }
         // identifier size (4 bytes) + timestamp (8 bytes) = 12 bytes
         val remaining = ByteArray(12)
-        input.read(remaining)
+        // Reject truncated headers instead of silently padding missing bytes with zeroes.
+        DataInputStream(input).readFully(remaining)
         output.write(remaining)
     }
 

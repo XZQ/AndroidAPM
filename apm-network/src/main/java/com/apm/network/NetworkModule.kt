@@ -1,12 +1,10 @@
 package com.apm.network
 
-import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
-import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -39,7 +37,13 @@ import java.util.concurrent.atomic.AtomicLong
  * }
  * ```
  */
-class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmModule {
+class NetworkModule internal constructor(
+    private val config: NetworkConfig,
+    private val reportSink: NetworkReportSink
+) : ApmModule {
+
+    /** Creates a network module that reports through the process-wide APM runtime. */
+    constructor(config: NetworkConfig = NetworkConfig()) : this(config, ApmNetworkReportSink)
 
     override val name: String = MODULE_NAME
 
@@ -60,7 +64,7 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
     /** 最大单次耗时（毫秒）。 */
     private val maxDurationMs = AtomicLong(0)
     /** 最近请求耗时队列，用于触发聚合。 */
-    private val recentDurations = ConcurrentLinkedQueue<Long>()
+    private val aggregateWindowCount = AtomicLong(0)
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
@@ -105,10 +109,7 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
         totalDurationMs.addAndGet(durationMs)
 
         // CAS 更新最大耗时
-        val prevMax = maxDurationMs.get()
-        if (durationMs > prevMax) {
-            maxDurationMs.compareAndSet(prevMax, durationMs)
-        }
+        maxDurationMs.accumulateAndGet(durationMs, ::maxOf)
 
         // 判断请求是否成功
         val isSuccess = statusCode in STATUS_CODE_SUCCESS_START..STATUS_CODE_SUCCESS_END && error == null
@@ -140,17 +141,18 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
             fields[FIELD_IS_SLOW] = true
         }
 
-        Apm.emit(
-            module = MODULE_NAME,
+        reportSink.emit(NetworkReport(
             name = eventName,
             kind = ApmEventKind.METRIC,
             severity = severity,
             fields = fields
-        )
+        ))
 
         // 累计到聚合窗口
-        recentDurations.add(durationMs)
-        if (recentDurations.size >= config.aggregateWindowSize) {
+        val windowCount = aggregateWindowCount.incrementAndGet()
+        if (windowCount >= config.aggregateWindowSize &&
+            aggregateWindowCount.compareAndSet(windowCount, 0)
+        ) {
             emitAggregate()
         }
     }
@@ -158,8 +160,7 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
     /** 发送聚合统计事件并重置窗口。 */
     private fun emitAggregate() {
         val stats = getStats()
-        Apm.emit(
-            module = MODULE_NAME,
+        reportSink.emit(NetworkReport(
             name = EVENT_NETWORK_AGGREGATE,
             kind = ApmEventKind.METRIC,
             severity = ApmSeverity.INFO, priority = ApmPriority.NORMAL,
@@ -170,8 +171,7 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
                 FIELD_AVG_DURATION_MS to stats.avgDurationMs,
                 FIELD_MAX_DURATION_MS to stats.maxDurationMs
             )
-        )
-        recentDurations.clear()
+        ))
     }
 
     /**
@@ -190,7 +190,7 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
         }
 
         val fields = mutableMapOf<String, Any?>(
-            FIELD_URL to stats.url,
+            FIELD_URL to stats.url.take(config.maxPayloadSize),
             FIELD_METHOD to stats.method,
             FIELD_STATUS_CODE to stats.statusCode,
             FIELD_DURATION_MS to stats.totalMs,
@@ -202,15 +202,14 @@ class NetworkModule(private val config: NetworkConfig = NetworkConfig()) : ApmMo
             FIELD_RESPONSE_BODY_MS to stats.responseBodyMs
         )
         if (stats.error != null) {
-            fields[FIELD_ERROR] = stats.error
+            fields[FIELD_ERROR] = stats.error.take(config.maxPayloadSize)
         }
-        Apm.emit(
-            module = MODULE_NAME,
+        reportSink.emit(NetworkReport(
             name = EVENT_NETWORK_PHASE,
             kind = ApmEventKind.METRIC,
             severity = if (stats.error != null) ApmSeverity.WARN else ApmSeverity.INFO,
             fields = fields
-        )
+        ))
     }
 
     /** 获取当前聚合统计数据。 */

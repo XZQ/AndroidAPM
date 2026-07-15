@@ -1,6 +1,5 @@
 package com.apm.memory
 
-import com.apm.core.Apm
 import com.apm.memory.leak.LeakResult
 import com.apm.memory.leak.LeakType
 import com.apm.model.ApmEventKind
@@ -11,7 +10,12 @@ import com.apm.model.ApmPriority
  * 内存事件上报器。
  * 负责将内存快照、告警、泄漏检测结果通过 APM 管道上报。
  */
-internal class MemoryReporter(private val config: MemoryConfig) {
+internal class MemoryReporter(
+    /** Memory thresholds and reporting switches. */
+    private val config: MemoryConfig,
+    /** Destination for classified memory reports. */
+    private val reportSink: MemoryReportSink = ApmMemoryReportSink
+) {
     /**
      * 处理一次内存快照。
      * 执行流程：
@@ -26,15 +30,14 @@ internal class MemoryReporter(private val config: MemoryConfig) {
 
         // 每条快照都上报
         if (config.reportEverySnapshot) {
-            Apm.emit(
-                module = MODULE,
+            reportSink.emit(MemoryReport(
                 name = SNAPSHOT_EVENT,
                 kind = ApmEventKind.METRIC,
                 severity = ApmSeverity.INFO, priority = ApmPriority.HIGH,
                 scene = snapshot.scene,
                 foreground = snapshot.foreground,
                 fields = snapshot.toFields(reason)
-            )
+            ))
         }
 
         // 收集告警原因
@@ -51,8 +54,7 @@ internal class MemoryReporter(private val config: MemoryConfig) {
 
         // 存在告警原因时发送 ALERT 事件
         if (alertReasons.isNotEmpty()) {
-            Apm.emit(
-                module = MODULE,
+            reportSink.emit(MemoryReport(
                 name = ALERT_EVENT,
                 kind = ApmEventKind.ALERT,
                 severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -62,7 +64,7 @@ internal class MemoryReporter(private val config: MemoryConfig) {
                     "alertReasons" to alertReasons.joinToString(","),
                     "javaHeapRatio" to "%.2f".format(heapRatio)
                 )
-            )
+            ))
         }
     }
 
@@ -72,8 +74,7 @@ internal class MemoryReporter(private val config: MemoryConfig) {
      * @param result 泄漏检测结果
      */
     fun onLeakFound(result: LeakResult) {
-        Apm.emit(
-            module = MODULE,
+        reportSink.emit(MemoryReport(
             name = LEAK_EVENT,
             kind = ApmEventKind.ALERT,
             severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
@@ -84,12 +85,10 @@ internal class MemoryReporter(private val config: MemoryConfig) {
                 "retainedCount" to result.retainedCount,
                 "suspectFields" to result.suspectFields.joinToString(",")
             )
-        )
+        ))
     }
 
     companion object {
-        /** 模块名。 */
-        private const val MODULE = "memory"
         /** 快照事件名。 */
         private const val SNAPSHOT_EVENT = "memory_snapshot"
         /** 告警事件名。 */
