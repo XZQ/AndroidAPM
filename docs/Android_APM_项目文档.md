@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-11｜25 个构建单元｜143 个主源码文件（138 Kotlin + 4 C + 1 proto）｜80 个测试/benchmark 文件
+> 文档同步：2026-07-16｜25 个构建单元｜145 个主源码文件（140 Kotlin + 4 C + 1 proto）｜87 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -48,12 +48,12 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `70a879d Fix: Close reliability review findings` |
+| 最新 runtime 实现提交（文档同步前） | `4f4e803 Fix: Complete monitoring integration coverage` |
 | root Gradle subproject | 23 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 25 |
-| 主源码 | 143：138 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 80 |
+| 主源码 | 145：140 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 87 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -102,7 +102,7 @@ monitor module
 | `apm-otel-exporter` | 输出 OTel-compatible Span/Metric/Log Map；不负责 SDK/网络发送 |
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
 | `build-logic` | Android library convention plugin |
-| `apm-sample-app` | 集成 15 个监控模块的演示应用，默认 Logcat 输出 |
+| `apm-sample-app` | 集成 15 个监控模块的演示应用；实际演示 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，默认 Logcat 输出 |
 | `apm-benchmark` | 非发布 AndroidX Microbenchmark，覆盖 codec 与 SQLite outbox 热路径 |
 
 ## 五、统一事件模型
@@ -220,7 +220,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
 
-2026-07-11 在 JDK 21.0.11 执行的开发验证：
+2026-07-16 在 JDK 21.0.9 执行的开发验证：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -238,18 +238,20 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- root Gradle 82 个 JUnit XML 测试套件、553 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
+- root Gradle 89 个 JUnit XML 测试套件、574 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
 - 22 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,687,968 字节；
+- `apm-sample-app-release-unsigned.apk`，4,692,488 字节；
 - Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
 - `apm-benchmark` 未进入 Maven Local publication，Release 与 AndroidTest Kotlin 均编译成功；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
+
+设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略
 
-80 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
+87 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 
@@ -261,7 +263,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、显式 Binder/WebView/线程池公共 API、FrameMetrics、自诊断和 benchmark harness 均已实现。
+仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、显式 Binder/WebView/线程池公共 API、FrameMetrics、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 

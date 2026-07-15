@@ -16,17 +16,17 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
-- Documentation synchronization date: `2026-07-11`
+- Documentation synchronization date: `2026-07-16`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `70a879d Fix: Close reliability review findings`
+- Latest runtime implementation commit before this documentation sync: `4f4e803 Fix: Complete monitoring integration coverage`
 - Build units: `25`
 - Composition: `23` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `143` (`138` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `80`
+- Main source files: `145` (`140` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `87`
 - Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
 
-Fresh checks executed on `2026-07-11` against the completed client-closure tip:
+Fresh checks executed on `2026-07-16` against the completed client-closure tip:
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -37,7 +37,7 @@ Fresh checks executed on `2026-07-11` against the completed client-closure tip:
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.11`. Root Gradle XML reports contain `82` suites and `553` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,687,968` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. The Android SDK was present but `adb devices` reported no connected target, so physical-device measurements remain external validation rather than fabricated local results.
+All commands passed under JDK `21.0.9`. Root Gradle XML reports contain `89` suites and `574` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,692,488` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. A Xiaomi `22041216UC` and Android 17 emulator were visible to ADB: physical benchmark installation was blocked by device policy (`INSTALL_FAILED_USER_RESTRICTED`), while the emulator completed all three benchmark methods and generated JSON/Perfetto output after suppressing the expected `EMULATOR` gate, but the task ended on an AndroidX `IsolationActivity` launch timeout. These emulator values are execution evidence, not physical performance claims; accepted physical measurements remain external validation.
 
 ## Project Boundary
 

@@ -14,8 +14,8 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-11"
-RUNTIME_COMMIT = "70a879d"
+REPORT_DATE = "2026-07-16"
+RUNTIME_COMMIT = "4f4e803"
 
 
 def set_cell_shading(cell, fill: str) -> None:
@@ -80,8 +80,8 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "25", "23 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "143", "138 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "80", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
+        ("主源码", "145", "140 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "87", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "JDK 21 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_COMMIT, "客户端收口后的当前实现"),

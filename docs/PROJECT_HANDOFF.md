@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-11｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-07-16｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -31,8 +31,8 @@
 | 基础模块 | 4 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
-| 主源码 | 143：138 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 80 |
+| 主源码 | 145：140 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 87 |
 | JDK | 21 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
@@ -41,7 +41,7 @@
 最新 runtime 实现提交（文档同步前）为：
 
 ```text
-70a879d Fix: Close reliability review findings
+4f4e803 Fix: Complete monitoring integration coverage
 ```
 
 之后的提交可能是样式、文档或仓库跟踪调整；使用 Git 历史判断实际 tip。
@@ -91,6 +91,8 @@ Apm.emit
 
 不宣称无法由公共 API 支撑的能力：通用 Binder hidden hook、进程级 WebView 自动接管、通用线程 leak 判断和 GPU overdraw 计数。对应旧字段已弃用并默认关闭，真实能力使用显式 API；FrameMetrics 和注册线程池 backlog 已实现。
 
+初始化方式也必须明确二选一：手动 `Apm.init` 的宿主从合并 manifest 移除 `ApmInitProvider`；自动模式保留 Provider 并配置 `com.apm.config_class`。Sample 使用手动模式，并为 IO wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册及 Battery 回调提供可运行入口。
+
 ## 默认配置注意
 
 - endpoint 空：Logcat，不会上送生产服务
@@ -107,7 +109,7 @@ Apm.emit
 
 ## 验证
 
-2026-07-11 已在 JDK 21.0.11 对客户端收口后的当前 tip 执行：
+2026-07-16 已在 JDK 21.0.9 对客户端收口后的当前 tip 执行：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
@@ -118,7 +120,9 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。Root Gradle XML 报告合计 82 个套件、553 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 22 份 lint HTML、4,687,968 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。Android SDK 可用，但本次 `adb devices` 没有连接目标，因此真机数值属于外部验证项，未计入本地完成证明。
+全部通过。Root Gradle XML 报告合计 89 个套件、574 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 22 份 lint HTML、4,692,488 字节的 sample unsigned Release APK，以及 Maven Local 中 20 个 AAR、22 个 JAR、21 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。
+
+设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
 ## 新电脑接手
 

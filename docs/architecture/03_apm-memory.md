@@ -1,6 +1,6 @@
 # apm-memory 模块
 
-> 同步日期：2026-07-10｜模块名：`memory`
+> 同步日期：2026-07-16｜模块名：`memory`
 
 ## 目的与入口
 
@@ -16,7 +16,7 @@
 - `ViewModelLeakDetector`：检查 Context/View 持有
 - `OomMonitor`：heap/PSS/native/system trim 阈值
 - `HprofDumper`：直接或可选 fork dump、可选 strip、最多保留 5 个文件
-- `HprofStripProcessor`：二进制 Hprof primitive array 清理
+- `HprofStripProcessor`：二进制 Hprof primitive array 清理；截断 header/record 返回失败并删除部分输出
 - `ReferenceChainAnalyzer`：Hprof 索引与 BFS 引用路径
 - `NativeHeapMonitor`：`Debug.getNativeHeapAllocatedSize`
 
@@ -54,4 +54,4 @@
 
 ## 测试
 
-配置默认值、采样/Reporter、泄漏组件、OOM/Hprof 边界和 JNI dump 路径由 module/JVM 测试覆盖；真机 ART dump 仍需设备验证。
+配置默认值、真实 Android/Robolectric 采样快照、Reporter 快照/告警/泄漏分类、ViewModel Context/View 引用、OOM warn/critical/system/native 边界、Hprof primitive array 清零与截断输入清理，以及 JNI dump 契约由 module/JVM 测试覆盖。报告逻辑通过内部 sink 验证字段和优先级，不依赖全局 `Apm` 状态；真机 ART dump 仍需设备验证。

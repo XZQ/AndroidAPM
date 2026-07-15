@@ -6,10 +6,10 @@
 
 ## 当前基线
 
-- 同步日期：2026-07-11
+- 同步日期：2026-07-16
 - 25 个构建单元：23 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 143 个主源码文件：138 Kotlin + 4 C + 1 proto
-- 80 个测试/benchmark 文件
+- 145 个主源码文件：140 Kotlin + 4 C + 1 proto
+- 87 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
 
@@ -76,7 +76,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-otel-exporter` | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
-| `apm-sample-app` | 15 个监控模块的本地演示；默认输出到 Logcat，不代表生产后台闭环 |
+| `apm-sample-app` | 15 个监控模块的本地演示；包含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，默认输出到 Logcat |
 | `apm-benchmark` | 非发布 AndroidX Microbenchmark；event codec 与 SQLite outbox 真机开销 harness |
 
 ## 快速接入
@@ -103,7 +103,39 @@ dependencies {
 
 当前仓库只验证过 `publishToMavenLocal` 和独立 Maven consumer；尚未发布 Maven Central 或外部私有制品库。
 
-### 初始化并注册
+### 选择一种初始化方式
+
+手动初始化适合需要在 `Application` 中明确控制配置和注册顺序的宿主，也是 sample 使用的方式。由于 `apm-core` 的 manifest 自带可选自动初始化 Provider，手动模式应在宿主 manifest 中显式移除它：
+
+```xml
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <application>
+        <provider
+            android:name="com.apm.core.ApmInitProvider"
+            tools:node="remove" />
+    </application>
+</manifest>
+```
+
+自动初始化模式不调用 `Apm.init`，而是在 manifest 提供一个有无参构造函数的 `ApmConfigProvider`：
+
+```xml
+<meta-data
+    android:name="com.apm.config_class"
+    android:value="com.example.MyApmConfigProvider" />
+```
+
+```kotlin
+class MyApmConfigProvider : ApmConfigProvider {
+    override fun provideConfig(context: Context): ApmConfig =
+        ApmConfig(endpoint = "https://collector.example.com/v1/events")
+}
+```
+
+没有该 metadata 时 Provider 只做 no-op，不会把手动模式记为告警。两种模式不要同时使用。
+
+### 手动初始化并注册
 
 ```kotlin
 class App : Application() {
@@ -205,7 +237,7 @@ apmSlowMethod {
 
 ## 与微信 Matrix、快手 KOOM 的定位对比
 
-比较日期：2026-07-11。依据当前仓库代码，以及 [Tencent/Matrix 官方 README](https://github.com/Tencent/matrix) 与 [KwaiAppTeam/KOOM 官方 README](https://github.com/KwaiAppTeam/KOOM)。`✅` 表示该项目官方资料中有对应客户端能力，`◐` 表示范围较窄、依赖显式接入或只覆盖其中一部分，`—` 表示官方资料未声明；这不是性能排名。
+比较日期：2026-07-16。依据当前仓库代码，以及 [Tencent/Matrix 官方 README](https://github.com/Tencent/matrix) 与 [KwaiAppTeam/KOOM 官方 README](https://github.com/KwaiAppTeam/KOOM)。`✅` 表示该项目官方资料中有对应客户端能力，`◐` 表示范围较窄、依赖显式接入或只覆盖其中一部分，`—` 表示官方资料未声明；这不是性能排名。
 
 | 客户端能力 | AndroidAPM | 微信 Matrix | 快手 KOOM |
 |---|:---:|:---:|:---:|
@@ -270,7 +302,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。
+仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在 [云端待建设清单](docs/云端待建设清单.md)。
 

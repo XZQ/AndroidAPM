@@ -1,12 +1,13 @@
 # apm-core 模块架构
 
-> 同步日期：2026-07-11
+> 同步日期：2026-07-16
 
 ## 1. 职责
 
 `apm-core` 是 SDK 控制面和数据面入口：
 
 - `Apm`：全局初始化、模块注册/停止、事件发射
+- `ApmInitProvider`：可选 manifest metadata 自动初始化；无 metadata 时 no-op
 - `ApmContext`：向模块暴露 Application/config/logger/emit
 - `ApmDispatcher`：有界异步管线
 - `PersistentUploadWorker`：durable outbox 单 worker 回放
@@ -40,6 +41,13 @@ Apm.init(application, config)
 ```
 
 `state` 只有基础设施组装完成后才发布。diagnostics 在 event store/uploader 之前创建，因此部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；`stop` 后可以重新初始化。
+
+初始化模式必须二选一：
+
+- 手动模式由宿主 `Application` 调用 `Apm.init`，并用 manifest merger 的 `tools:node="remove"` 移除 `ApmInitProvider`；sample 采用此模式。
+- 自动模式保留 `ApmInitProvider`，通过 `com.apm.config_class` metadata 反射创建无参 `ApmConfigProvider`，在 `Application.onCreate` 前调用 `Apm.init`。
+
+缺少 metadata 是受支持的手动/未配置状态，只记录 debug 日志；无效类、配置构造或初始化异常会被 Provider 隔离，不阻断宿主启动。Robolectric 生命周期测试覆盖 metadata 缺失、有效 provider 和无效 provider 三条路径。
 
 ## 3. 模块生命周期与过滤
 
@@ -225,6 +233,7 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 - PII sanitizer
 - SDK self-monitor
 - diagnostics config/sanitizer/JSONL/rotation/export/queue/failure isolation/lifecycle integration
+- `ApmInitProvider` no-op、成功初始化与错误隔离生命周期
 
 ## 15. 已知限制
 

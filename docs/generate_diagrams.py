@@ -111,7 +111,7 @@ def document(title: str, subtitle: str, elements: list[str]) -> str:
   <text x="70" y="70" class="title">{escape(title)}</text>
   <text x="70" y="108" class="subtitle">{escape(subtitle)}</text>
   <g filter="url(#shadow)">{''.join(elements)}</g>
-  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-11</text>
+  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-16</text>
 </svg>'''
 
 

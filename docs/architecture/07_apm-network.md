@@ -1,6 +1,6 @@
 # apm-network 模块
 
-> 同步日期：2026-07-10｜模块名：`network`
+> 同步日期：2026-07-16｜模块名：`network`
 
 ## 目的与接入
 
@@ -27,7 +27,7 @@ Interceptor 负责请求汇总；EventListener 默认 `reportSummary=false`，�
 - total duration
 - DNS/TCP/TLS/request headers/request body/response headers/response body
 - success/error/slow request
-- 固定窗口聚合：总数、失败率、慢请求、平均耗时等
+- 固定窗口聚合：累计总数、成功数、失败数、平均耗时和最大耗时
 
 事件：`network_request`, `network_error`, `network_aggregate`, `network_phase`。
 
@@ -42,7 +42,7 @@ Interceptor 负责请求汇总；EventListener 默认 `reportSummary=false`，�
 
 ## 依赖与线程
 
-OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调运行在 OkHttp 调用线程并快速调用 `Apm.emit`。聚合状态使用并发/同步保护。
+OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调运行在 OkHttp 调用线程并快速进入 report sink。最大耗时与窗口计数使用原子更新，窗口到达后只有一个并发调用者发出 aggregate。
 
 ## 边界
 
@@ -53,4 +53,4 @@ OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调�
 
 ## 测试
 
-Config、NetworkStats、手动入口和阶段计算有测试；真实 OkHttp/连接池/代理/TLS/OEM 网络行为仍需集成测试。
+Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override，以及请求与 phase URL/error 截断。内部 sink 使字段与 severity 可在 JVM 中直接断言；真实 OkHttp/连接池/代理/TLS/OEM 网络行为仍需集成测试。
