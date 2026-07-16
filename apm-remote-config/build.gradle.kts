@@ -1,10 +1,8 @@
 plugins {
-    // Remote configuration is an Android library because its durable cache uses SharedPreferences.
     id("com.apm.android-library")
 }
 
 android {
-    /** Module namespace for signed remote configuration APIs. */
     namespace = "com.apm.remoteconfig"
 }
 
