@@ -15,7 +15,7 @@ from docx.shared import Inches, Pt, RGBColor
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
 REPORT_DATE = "2026-07-16"
-RUNTIME_COMMIT = "4f4e803"
+RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
 def set_cell_shading(cell, fill: str) -> None:
@@ -79,12 +79,12 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
 def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
-        ("构建单元", "25", "23 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "145", "140 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "87", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
+        ("构建单元", "26", "24 个根子项目 + apm-plugin + build-logic"),
+        ("主源码", "154", "149 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "92", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
-        ("构建栈", "JDK 21 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21"),
-        ("运行时代码基线", RUNTIME_COMMIT, "客户端收口后的当前实现"),
+        ("构建栈", "JDK 17 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21 / Java 17 bytecode"),
+        ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
     ]
     table = document.add_table(rows=1, cols=3)
     table.style = "Table Grid"
@@ -277,7 +277,7 @@ def build_architecture_report() -> Document:
             "当前状态唯一主入口：docs/Android_APM_项目文档.md。",
             "便携交接入口：docs/PROJECT_HANDOFF.md。",
             "架构细节：docs/architecture/00_整体架构.md 与对应模块文档。",
-            "云端、发布和真机设备实验室清单：docs/云端待建设清单.md。",
+            "云端、发布和真机设备实验室清单由独立 AndroidAPM-Server 仓库的 docs/云端待建设清单.md 维护。",
             "DOCX、SVG 和 PNG 是派生产物；出现冲突时以源码和 Markdown 为准。",
             "记录.zip 与 绘制.jpeg 仅作为历史原始资料保留，不作为当前事实来源。",
         ],

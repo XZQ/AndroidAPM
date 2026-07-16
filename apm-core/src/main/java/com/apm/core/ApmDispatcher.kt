@@ -8,6 +8,8 @@ import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.storage.PendingEventStore
 import com.apm.core.throttle.RateLimiter
+import com.apm.core.throttle.DynamicEventPolicy
+import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
@@ -52,6 +54,8 @@ internal class ApmDispatcher(
     private val logger: ApmLogger,
     /** 可选限流器，null 表示不限流。 */
     private val rateLimiter: RateLimiter? = null,
+    /** Dynamic policy source used for sampling and rate-limit overrides. */
+    dynamicConfigProvider: DynamicConfigProvider = DynamicConfigProvider.NOOP,
     /** 可选事件聚合器，null 表示不聚合。 */
     private val aggregator: EventAggregator? = null,
     /** 可选 PII 脱敏器，null 表示不脱敏。 */
@@ -65,6 +69,11 @@ internal class ApmDispatcher(
     /** Duration for which one durable upload worker owns a claimed batch. */
     uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
 ) {
+    /** Fail-safe resolver for signed sampling and rate-limit configuration. */
+    private val dynamicEventPolicy = DynamicEventPolicy(dynamicConfigProvider) { error ->
+        Apm.recordInternalError(ERROR_DYNAMIC_EVENT_POLICY, error)
+    }
+
     /**
      * 队列元素：已构建事件或延迟构建工厂 + 是否已经过聚合处理。
      * 聚合器周期性刷出的聚合结果不能再次进入聚合器，需要打标跳过。
@@ -259,6 +268,9 @@ internal class ApmDispatcher(
             try {
                 // 延迟构建的事件在此线程完成构建（上下文合并等）
                 val resolved = queued.resolve()
+                if (!queued.preAggregated && !passesSampling(resolved)) {
+                    continue
+                }
                 // 聚合检查 — 可能吞入事件（返回空）或输出聚合结果
                 val expanded = if (aggregator != null && !queued.preAggregated) {
                     aggregator.process(resolved)
@@ -329,11 +341,26 @@ internal class ApmDispatcher(
             return true
         }
         val key = "${event.module}/${event.name}"
-        if (rateLimiter.tryAcquire(key)) {
+        val dynamicLimit = dynamicEventPolicy.rateLimitFor(
+            event = event,
+            defaultEventsPerWindow = rateLimiter.maxEventsPerWindow(),
+            defaultWindowMs = rateLimiter.windowMs()
+        )
+        if (rateLimiter.tryAcquire(key, dynamicLimit.eventsPerWindow, dynamicLimit.windowMs)) {
             return true
         }
         logger.d("Rate limited: $key")
         // 记录事件丢弃
+        selfMonitor?.recordDrop(event.priority)
+        return false
+    }
+
+    /** Applies deterministic dynamic sampling and records a policy drop. */
+    private fun passesSampling(event: ApmEvent): Boolean {
+        if (dynamicEventPolicy.shouldSample(event)) {
+            return true
+        }
+        logger.d("Sampled out: ${event.module}/${event.name}")
         selfMonitor?.recordDrop(event.priority)
         return false
     }
@@ -435,6 +462,9 @@ internal class ApmDispatcher(
 
         /** Internal-error tag for a failed periodic aggregation maintenance tick. */
         private const val ERROR_AGGREGATION_MAINTENANCE = "dispatcher_aggregation_maintenance"
+
+        /** Internal-error tag for a custom dynamic policy provider failure. */
+        private const val ERROR_DYNAMIC_EVENT_POLICY = "dispatcher_dynamic_event_policy"
 
         /** worker 单轮最多批量取出的事件数。 */
         private const val MAX_BATCH_DRAIN = 32

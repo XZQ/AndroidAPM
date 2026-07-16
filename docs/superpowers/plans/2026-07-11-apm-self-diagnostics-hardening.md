@@ -34,5 +34,5 @@
 
 - Update public docs, architecture docs, project handoff, sample usage, and repository baseline.
 - Run focused tests after each implementation slice.
-- Run the complete JDK 21 verification chain, docs checks, and `git diff --check`.
+- Run the complete JDK 17 verification chain, docs checks, and `git diff --check`.
 - Commit intentionally, push `develop`, and prove `HEAD == origin/develop == ls-remote`.

@@ -6,11 +6,11 @@
 
 **Architecture:** `ApmDiagnostics` owns a `DiagnosticRecorder` initialized before event storage and upload infrastructure. Callers write synchronously to Logcat and a bounded memory ring, then non-blockingly enqueue JSONL persistence to a dedicated `ApmExecutors` background thread; rolling files and ZIP export remain independent of `ApmDispatcher`, `EventStore`, and `ApmUploader`.
 
-**Tech Stack:** Kotlin 2.2.21, Android app-private files, `ArrayBlockingQueue`, `Atomic*`, `org.json`, `java.util.zip`, JUnit 4, Robolectric 4.14.1, Gradle 8.13, JDK 21.
+**Tech Stack:** Kotlin 2.2.21, Android app-private files, `ArrayBlockingQueue`, `Atomic*`, `org.json`, `java.util.zip`, JUnit 4, Robolectric 4.14.1, Gradle 8.13, JDK 17.
 
 ## Global Constraints
 
-- Preserve Java 11 bytecode and minSdk 24.
+- Preserve Java 17 bytecode and minSdk 24.
 - Add KDoc to every public, internal, and private property and method.
 - Add inline comments at branches, loops, exception handling, callbacks, and business-significant assignments.
 - Extract non-trivial numbers and strings into named constants.
@@ -22,7 +22,7 @@
 - Keep `apm-uploader` independent of `apm-core`; route uploader logs through the existing `UploaderLogger` adapter.
 - Do not add automatic diagnostics network upload.
 - Use English commit messages with an allowed repository prefix.
-- Use JDK `C:\Users\XZQ\.jdks\jbr-21.0.11` for Gradle verification.
+- Use JDK `C:\Users\XZQ\.jdks\jbr-17.0.14` for Gradle verification.
 
 ## File Map
 
@@ -849,7 +849,7 @@ git commit -m "Docs: Document SDK self-diagnostics"
 - Consumes: complete implementation.
 - Produces: current-tip build, test, lint, publish, consumer, and Git evidence.
 
-- [ ] **Step 1: Run fresh unit and debug build verification under JDK 21**
+- [ ] **Step 1: Run fresh unit and debug build verification under JDK 17**
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon

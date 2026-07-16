@@ -231,5 +231,5 @@ The feature is accepted when all of the following are true:
 5. Export produces a readable bounded package without event payloads or business context.
 6. Existing `ApmLogger` and uploader integration remain source-compatible.
 7. `sdk_health` exposes internal-error and diagnostic-sink aggregate counters.
-8. Relevant focused tests, full `testDebugUnitTest`, `assembleDebug`, plugin tests, documentation verification, and `git diff --check` pass under JDK 21.
+8. Relevant focused tests, full `testDebugUnitTest`, `assembleDebug`, plugin tests, documentation verification, and `git diff --check` pass under JDK 17.
 9. Repository documentation describes the implemented behavior and its limits without claiming automatic diagnostics upload.

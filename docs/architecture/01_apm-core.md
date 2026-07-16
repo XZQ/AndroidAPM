@@ -13,7 +13,7 @@
 - `PersistentUploadWorker`：durable outbox 单 worker 回放
 - `ProcessEventCoordinator`：可选多进程文件 hand-off
 - `UploaderFactory`：选择 custom/HTTP/Logcat 与 durable/non-durable 重试所有权
-- throttle/aggregation/privacy/selfmonitor：横切保护能力
+- throttle/aggregation/privacy/selfmonitor：签名动态采样/限流与横切保护能力
 - `ApmExecutors`：SDK 线程工厂和优先级策略
 - `ApmDiagnostics`：独立本地诊断状态、快照、ZIP 导出和清理
 
@@ -37,6 +37,7 @@ Apm.init(application, config)
   -> ApmDispatcher
   -> optional ProcessEventCoordinator
   -> ApmContext / State
+  -> start ManagedDynamicConfigProvider
   -> start registered modules
 ```
 
@@ -57,13 +58,14 @@ Apm.init(application, config)
 
 1. 已启动同名模块：跳过
 2. `ProcessModuleFilter`：MAIN/ALL/CUSTOM
-3. `dynamicConfigProvider.getBoolean("apm.module.<name>.enabled")`
-4. `GrayReleaseController.isEnabled("module.<name>")`
-5. `onInitialize(context)`
-6. `onStart()`
-7. 加入 `startedModules`
+3. 全局 `apm.enabled`
+4. `dynamicConfigProvider.getBoolean("apm.module.<name>.enabled")`
+5. `GrayReleaseController.isEnabled("module.<name>")`
+6. `onInitialize(context)`
+7. `onStart()`
+8. 加入 `startedModules`
 
-启动异常被记录，不向宿主抛出。`stop` 只停止真正启动成功的模块。
+启动异常被记录，不向宿主抛出。`stop` 只停止真正启动成功的模块。若 provider 实现 `ManagedDynamicConfigProvider`，core 在状态发布后启动轮询并接收“可信视图已变化”回调；回调与 register/init/stop 共用 `initLock`，会动态停止或恢复模块。provider 在模块和 dispatcher 之前停止，避免关闭过程中继续触发重配。
 
 ## 4. emit 路径
 
@@ -95,8 +97,9 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 ```text
 resolve lazy event
+  -> DynamicEventPolicy.sample (global -> module -> event)
   -> EventAggregator.process (when enabled and not already aggregated)
-  -> RateLimiter.tryAcquire
+  -> DynamicEventPolicy.rateLimit + RateLimiter.tryAcquire
        ERROR/FATAL bypass
   -> PiiSanitizer.sanitize (when enabled)
   -> EventStore.appendBatch
@@ -142,6 +145,8 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 
 非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。
 
+默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
+
 ## 8. 多进程协调
 
 `enableMultiProcessCoordination=false` 是默认值。
@@ -168,7 +173,16 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 - ERROR/FATAL bypass
 - bucket map 维护 LRU，上限 256
 
-`GrayReleaseController` 通过稳定 userId/sample rate 和 override 决定模块是否启用。`DynamicConfigProvider` 是接口，core 不绑定具体远程配置 SDK。
+`GrayReleaseController` 通过稳定 userId/sample rate 和 override 决定模块是否启用。`DynamicConfigProvider` 是接口，core 不绑定具体网络实现；`apm-remote-config` 提供生产实现。
+
+`DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。键按默认、模块、事件逐级覆盖：
+
+- `apm.sampling.default_basis_points`
+- `apm.sampling.<module>[.<event>].basis_points`
+- `apm.rate_limit.default_events_per_window` / `default_window_ms`
+- `apm.rate_limit.<module>[.<event>].events_per_window` / `window_ms`
+
+ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal error 记录并回退上一级/本地值，不让自定义控制面破坏宿主。
 
 ## 10. 聚合与隐私
 
@@ -213,12 +227,13 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 ## 13. Shutdown
 
 1. `state=null`，切断新 emit
-2. stop self-monitor/coordinator
-3. `module.onStop`
-4. dispatcher drain（3 秒）
-5. flush aggregator residue
-6. persistent worker shutdown 或 uploader shutdown
-7. store close
+2. stop managed dynamic config
+3. stop self-monitor/coordinator
+4. `module.onStop`
+5. dispatcher drain（3 秒）
+6. flush aggregator residue
+7. persistent worker shutdown 或 uploader shutdown
+8. store close
 
 这是有界优雅关闭，不承诺在系统强杀时运行；关键事件依赖同步 local hand-off 与下次进程重放。
 
@@ -229,6 +244,7 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 - `PersistentUploadWorkerTest`
 - `ProcessEventCoordinatorTest`
 - RateLimiter/Gray/DynamicConfig
+- managed kill switch、dynamic sampling/rate-limit、dynamic endpoint wiring
 - Aggregator/StackFingerprinter
 - PII sanitizer
 - SDK self-monitor

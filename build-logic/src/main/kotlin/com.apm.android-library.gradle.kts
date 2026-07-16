@@ -20,8 +20,8 @@ android {
     }
 
     compileOptions {
-        // 字节码目标保持 Java 11，与项目文档约定一致
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        // Java 与 Kotlin 产物统一生成 Java 17 字节码。
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }

@@ -3,6 +3,12 @@ plugins {
     `kotlin-dsl`
 }
 
+java {
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 dependencies {
     // AGP 与 KGP 需要出现在 convention plugin 的编译类路径上，版本取自共享 version catalog
     implementation("com.android.tools.build:gradle:${libs.versions.agp.get()}")

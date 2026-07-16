@@ -10,8 +10,8 @@
 3. **命名常量**：魔法数字/字符串提取为 `const val`（0/1/-1 除外）；禁止裸包名反射引入类
 
 ## 项目信息
-- Multi-module Gradle (Kotlin 2.2.21, AGP 8.13.2, Gradle 8.13, JDK 21, compileSdk 34, minSdk 24)
-- JVM 字节码目标保持 Java 11；构建与验证命令见 `AGENTS.md`
+- Multi-module Gradle (Kotlin 2.2.21, AGP 8.13.2, Gradle 8.13, JDK 17, compileSdk 34, minSdk 24)
+- JVM 字节码目标保持 Java 17；构建与验证命令见 `AGENTS.md`
 
 ## Git 提交
 英文，格式 `Type: Subject`。Type：Feat / Fix / Refactor / Perf / Style / Docs / Revert / Build。

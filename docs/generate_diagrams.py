@@ -121,7 +121,7 @@ def overview() -> str:
         box_svg(Box(70, 210, 250, 150, "宿主应用", ("Application", "显式 API / 配置"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(390, 175, 340, 220, "监控与扩展模块", ("15 monitoring modules", "apm-trace", "apm-otel-exporter"), "#157A6E", "#F0FAF7")),
         box_svg(Box(800, 175, 300, 220, "apm-core", ("配置与生命周期", "ApmDispatcher", "ApmExecutors / health"), "#1F5A94")),
-        box_svg(Box(1170, 175, 360, 220, "数据底座", ("apm-model", "apm-storage (SQLite outbox)", "apm-uploader"), "#B25D16", "#FFF8F1")),
+        box_svg(Box(1170, 175, 360, 220, "数据与控制面", ("apm-model / apm-storage", "apm-uploader", "apm-remote-config"), "#B25D16", "#FFF8F1")),
         arrow(320, 285, 390, 285, "初始化/埋点"),
         arrow(730, 285, 800, 285, "事件"),
         arrow(1100, 285, 1170, 285, "批处理"),
@@ -144,7 +144,7 @@ def module_dependencies() -> str:
         box_svg(Box(70, 185, 260, 140, "Sample / Benchmark", ("apm-sample-app", "apm-benchmark (不发布)"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(395, 165, 330, 180, "监控模块 × 15", ("自动生命周期采集", "显式 API 采集", "构建期慢方法"), "#157A6E", "#F0FAF7")),
         box_svg(Box(790, 165, 300, 180, "apm-core", ("Apm / Dispatcher", "配置 / 执行器", "内部健康"), "#1F5A94")),
-        box_svg(Box(1155, 145, 375, 220, "数据底座", ("apm-model", "apm-storage", "apm-uploader", "eventId + claim lease"), "#B25D16", "#FFF8F1")),
+        box_svg(Box(1155, 145, 375, 220, "基础与控制面", ("model / storage / uploader", "remote-config", "eventId + claim lease", "signed config + LKG"), "#B25D16", "#FFF8F1")),
         arrow(330, 255, 395, 255, "依赖/演示"),
         arrow(725, 255, 790, 255, "上报"),
         arrow(1090, 255, 1155, 255, "存储/上传"),
@@ -157,14 +157,14 @@ def module_dependencies() -> str:
         pill(70, 765, "箭头指向被调用/依赖侧"),
         pill(430, 765, "uploader 不反向依赖 core", "#B25D16"),
     ]
-    return document("AndroidAPM 模块依赖", "23 个根子项目 + 2 个 included builds", elements)
+    return document("AndroidAPM 模块依赖", "24 个根子项目 + 2 个 included builds", elements)
 
 
 def event_pipeline() -> str:
     """Build the durable event delivery diagram."""
     elements = [
         box_svg(Box(60, 220, 250, 170, "事件来源", ("监控回调", "显式 API", "插桩计时"), "#157A6E", "#F0FAF7")),
-        box_svg(Box(365, 220, 250, 170, "Dispatcher", ("有界队列", "批量出队", "调用方非阻塞"), "#1F5A94")),
+        box_svg(Box(365, 220, 250, 170, "Dispatcher", ("有界队列", "动态采样/限流", "批量出队"), "#1F5A94")),
         box_svg(Box(670, 220, 250, 170, "SQLite outbox", ("unique eventId", "claim / lease / expiry", "进程重启恢复"), "#B25D16", "#FFF8F1")),
         box_svg(Box(975, 220, 250, 170, "Upload worker", ("owner-aware ACK", "Retry-After", "非阻塞退避"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(1280, 220, 260, 170, "Transport", ("可注入实现", "外部 collector", "仓库外系统"), "#9B5C17", "#FFF8E8")),

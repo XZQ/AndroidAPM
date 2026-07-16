@@ -12,24 +12,26 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 4. `CLAUDE.md`
 5. `docs/architecture/00_整体架构.md`
 6. The matching module document under `docs/architecture/`
-7. `docs/云端待建设清单.md` for every external/cloud dependency
+7. The sibling `AndroidAPM-Server/docs/云端待建设清单.md` for every external/cloud dependency
 
 ## Current Verified Baseline
 
 - Documentation synchronization date: `2026-07-16`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
-- Latest runtime implementation commit before this documentation sync: `4f4e803 Fix: Complete monitoring integration coverage`
-- Build units: `25`
-- Composition: `23` root Gradle subprojects (`4` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `145` (`140` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `87`
-- Toolchain: JDK `21`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
-- Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `11`
+- Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
+- Build units: `26`
+- Composition: `24` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
+- Main source files: `154` (`149` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `92`
+- Toolchain: JDK `17`, Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
+- Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
+- The root build, both included builds, and the isolated Maven consumer reject Gradle runtimes other than JDK `17`; Java and Kotlin compilation targets Java `17` bytecode.
 
 Fresh checks executed on `2026-07-16` against the completed client-closure tip:
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
+./gradlew.bat :apm-model:test --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
 ./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
@@ -37,7 +39,7 @@ Fresh checks executed on `2026-07-16` against the completed client-closure tip:
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-All commands passed under JDK `21.0.9`. Root Gradle XML reports contain `89` suites and `574` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `22` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,692,488` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`20` AAR, `22` JAR, `21` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. A Xiaomi `22041216UC` and Android 17 emulator were visible to ADB: physical benchmark installation was blocked by device policy (`INSTALL_FAILED_USER_RESTRICTED`), while the emulator completed all three benchmark methods and generated JSON/Perfetto output after suppressing the expected `EMULATOR` gate, but the task ended on an AndroidX `IsolationActivity` launch timeout. These emulator values are execution evidence, not physical performance claims; accepted physical measurements remain external validation.
+All commands passed under JDK `17.0.14`. Root Gradle XML reports contain `94` suites and `595` tests with `0` failures/errors/skips; the included `apm-plugin` build separately passed `18` tests. Lint produced `23` HTML reports; the sample Release artifact is `apm-sample-app-release-unsigned.apk` (`4,708,872` bytes). Maven Local contains the current `com.apm:*-0.1.0` publications (`21` AAR, `23` JAR, `22` POM); `apm-benchmark` is absent from Maven Local, and the isolated consumer resolved the published SDK modules successfully. Representative model, Android library, Gradle plugin, and sample classes all report class-file major version `61` (Java 17). A Xiaomi `22041216UC` and Android 17 emulator were visible to ADB: physical benchmark installation was blocked by device policy (`INSTALL_FAILED_USER_RESTRICTED`), while the emulator completed all three benchmark methods and generated JSON/Perfetto output after suppressing the expected `EMULATOR` gate, but the task ended on an AndroidX `IsolationActivity` launch timeout. These emulator values are execution evidence, not physical performance claims; accepted physical measurements remain external validation.
 
 ## Project Boundary
 
@@ -49,7 +51,7 @@ The default runtime path is:
 monitor module
   -> Apm.emit (caller captures timestamp/thread/context snapshot)
   -> bounded dispatcher queue (2048; overflow drops instead of blocking)
-  -> optional aggregation, rate limiting, and PII sanitization
+  -> signed dynamic sampling, optional aggregation, dynamic rate limiting, and PII sanitization
   -> appendBatch (up to 32 drained events)
   -> SQLite durable outbox v3 (50,000 rows; unique eventId)
   -> claim(owner, lease, expiry) -> PersistentUploadWorker
@@ -77,8 +79,9 @@ Registration alone does not make every monitor automatic:
 - GC count/time/allocation/reclaim analysis consumes monotonic ART cumulative counters on an `ApmExecutors` background sampler; missing/reset counters invalidate only that dimension/window, invalid intervals clamp to one second, and available heap dimensions continue.
 - Reliability priority is host safety, then telemetry durability, then diagnostic completeness. Recoverable `Exception` failures are isolated at dispatcher/store/uploader/diagnostics boundaries; fatal VM errors are not converted into drops or retries. Retry hints are bounded to 60 seconds, cached outbox deletion counts cannot become negative, and diagnostics export failures return failure data.
 - `apm-otel-exporter` maps data only; it does not depend on or send through the OTel SDK.
+- `apm-remote-config` polls authenticated HTTPS with ETag, verifies canonical JSON with pinned Ed25519/Tink keys, durably records the highest revision and LKG, and publishes only non-expired verified values. It drives global/module kill switches and event sampling/rate limits; endpoint rotation is separately opt-in and accepts only HTTPS.
 
-Important defaults: endpoint fallback is Logcat; aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in.
+Important defaults: endpoint fallback is Logcat; dynamic endpoint rotation, aggregation, PII sanitization, multi-process coordination, native crash, Hprof dump, and fork dump are opt-in. Static HTTP headers and the per-request credential provider are empty.
 
 SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated; aggregate export selects up to 16 recent process directories and is bounded to 10,000 records / 16 MiB of uncompressed JSONL. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics never use the event dispatcher/outbox/uploader and are not automatically uploaded.
 
@@ -108,7 +111,7 @@ SDK self-diagnostics are separate from event delivery. They are enabled by defau
 ## Required Finish Checks
 
 1. `git status --short --branch`
-2. Relevant Gradle tests/builds under JDK 21
+2. Relevant Gradle tests/builds under JDK 17
 3. `python docs/verify_docs.py` plus documentation stale-claim checks
 4. `git diff --check`
 5. After push: exact equality among `HEAD`, `origin/develop`, and `git ls-remote origin refs/heads/develop`

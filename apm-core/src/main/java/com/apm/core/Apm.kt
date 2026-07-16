@@ -13,6 +13,7 @@ import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.throttle.RateLimiter
+import com.apm.core.throttle.ManagedDynamicConfigProvider
 import com.apm.core.selfmonitor.AutoThrottle
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.core.diagnostics.ApmDiagnostics
@@ -219,6 +220,7 @@ object Apm {
             uploader = uploader,
             logger = logger.withComponent(DISPATCHER_MODULE),
             rateLimiter = rateLimiter,
+            dynamicConfigProvider = config.dynamicConfigProvider,
             aggregator = aggregator,
             piiSanitizer = piiSanitizer,
             selfMonitor = selfMonitor,
@@ -261,6 +263,16 @@ object Apm {
             selfMonitorExecutor = monitoringExecutor
         )
         state = newState
+
+        // A managed provider refreshes asynchronously. Cached verified values are already visible
+        // to the initial module pass; later changes reconcile module lifecycle through the callback.
+        val managedDynamicConfig = config.dynamicConfigProvider as? ManagedDynamicConfigProvider
+        if (managedDynamicConfig != null) {
+            runRecoverableBoundary(
+                block = { managedDynamicConfig.start(::reconcileDynamicModules) },
+                onFailure = { error -> recordInternalError(ERROR_TAG_DYNAMIC_CONFIG_START, error) }
+            )
+        }
 
         // 启动所有已注册的模块
         modules.forEach(::startModule)
@@ -311,6 +323,9 @@ object Apm {
             // 先切断新的事件入口，避免 stop 过程中继续接收上报。
             state = null
             active
+        }
+        cleanupSafely(ERROR_TAG_STOP_DYNAMIC_CONFIG) {
+            (currentState.context.config.dynamicConfigProvider as? ManagedDynamicConfigProvider)?.stop()
         }
         cleanupSafely(ERROR_TAG_STOP_MONITOR) { currentState.selfMonitorExecutor?.shutdownNow() }
         cleanupSafely(ERROR_TAG_STOP_COORDINATOR) { currentState.processCoordinator?.stop() }
@@ -456,35 +471,10 @@ object Apm {
         if (currentState.startedModules.any { it.name == module.name }) {
             return
         }
-        val config = currentState.context.config
-        val shouldRun = ProcessModuleFilter.shouldRunInCurrentProcess(
-            moduleName = module.name,
-            processName = currentState.context.processName,
-            strategy = config.processStrategy,
-            customMapping = config.customProcessModules
-        )
-        if (!shouldRun) {
+        if (!shouldModuleRun(currentState, module)) {
             currentState.context.logger.d(
-                "Skip module=${module.name} in process=${currentState.context.processName} strategy=${config.processStrategy}"
+                "Skip module=${module.name}: excluded by process or dynamic configuration"
             )
-            return
-        }
-        val dynamicEnabled = config.dynamicConfigProvider.getBoolean(
-            "apm.module.${module.name}.enabled",
-            true
-        )
-        if (!dynamicEnabled) {
-            currentState.context.logger.d("Skip module=${module.name}: disabled by dynamic config")
-            return
-        }
-        val userId = config.defaultContext[CONTEXT_USER_ID]
-        val grayEnabled = config.grayController?.isEnabled(
-            feature = "module.${module.name}",
-            userId = userId,
-            defaultValue = true
-        ) ?: true
-        if (!grayEnabled) {
-            currentState.context.logger.d("Skip module=${module.name}: excluded by gray release")
             return
         }
         runRecoverableBoundary(
@@ -499,6 +489,77 @@ object Apm {
             },
             onFailure = { error -> currentState.context.logger.e("Failed to start module=${module.name}", error) }
         )
+    }
+
+    /**
+     * Reconciles already registered modules after a verified dynamic-config view changes.
+     *
+     * The provider callback may run on a background thread, so the same init lock serializes it
+     * with register/init/stop. Modules excluded by the emergency `apm.enabled` switch or their
+     * individual flag are stopped; newly enabled modules are initialized and started.
+     */
+    private fun reconcileDynamicModules() {
+        synchronized(initLock) {
+            val currentState = state ?: return
+            for (module in modules) {
+                val started = currentState.startedModules.any { startedModule ->
+                    startedModule.name == module.name
+                }
+                val shouldRun = shouldModuleRun(currentState, module)
+                if (shouldRun && !started) {
+                    startModule(module)
+                } else if (!shouldRun && started) {
+                    val stopped = runRecoverableBoundary(
+                        block = { module.onStop() },
+                        onFailure = { error ->
+                            currentState.context.logger.e(
+                                "Failed to apply dynamic stop module=${module.name}",
+                                error
+                            )
+                        }
+                    )
+                    if (stopped) {
+                        currentState.startedModules.remove(module)
+                        currentState.context.logger.w("Dynamic config stopped module=${module.name}")
+                    }
+                }
+            }
+        }
+    }
+
+    /** Resolves process, global kill switch, module flag, and gray-release eligibility. */
+    private fun shouldModuleRun(currentState: State, module: ApmModule): Boolean {
+        val config = currentState.context.config
+        val processAllowed = ProcessModuleFilter.shouldRunInCurrentProcess(
+            moduleName = module.name,
+            processName = currentState.context.processName,
+            strategy = config.processStrategy,
+            customMapping = config.customProcessModules
+        )
+        if (!processAllowed) {
+            return false
+        }
+        return try {
+            val globallyEnabled = config.dynamicConfigProvider.getBoolean(
+                DYNAMIC_KEY_APM_ENABLED,
+                true
+            )
+            val moduleEnabled = config.dynamicConfigProvider.getBoolean(
+                "apm.module.${module.name}.enabled",
+                true
+            )
+            val userId = config.defaultContext[CONTEXT_USER_ID]
+            val grayEnabled = config.grayController?.isEnabled(
+                feature = "module.${module.name}",
+                userId = userId,
+                defaultValue = true
+            ) ?: true
+            globallyEnabled && moduleEnabled && grayEnabled
+        } catch (error: Exception) {
+            // A custom provider cannot break host initialization; preserve prior default behavior.
+            recordInternalError(ERROR_TAG_DYNAMIC_CONFIG_READ, error)
+            true
+        }
     }
 
     /**
@@ -704,6 +765,9 @@ object Apm {
     /** Conventional context key used for stable gray-release assignment. */
     private const val CONTEXT_USER_ID = "userId"
 
+    /** Signed remote configuration key used as the emergency APM module kill switch. */
+    private const val DYNAMIC_KEY_APM_ENABLED = "apm.enabled"
+
     /** Init rollback tag for the self-monitor executor. */
     private const val ERROR_TAG_INIT_MONITOR = "init_cleanup_monitor"
     /** Init rollback tag for the process coordinator. */
@@ -716,10 +780,16 @@ object Apm {
     private const val ERROR_TAG_INIT_STORE = "init_cleanup_store"
     /** Shutdown tag for the self-monitor executor. */
     private const val ERROR_TAG_STOP_MONITOR = "stop_monitor"
+    /** Shutdown tag for a managed dynamic-config provider. */
+    private const val ERROR_TAG_STOP_DYNAMIC_CONFIG = "stop_dynamic_config"
     /** Shutdown tag for the process coordinator. */
     private const val ERROR_TAG_STOP_COORDINATOR = "stop_coordinator"
     /** Shutdown tag prefix for monitoring modules. */
     private const val ERROR_TAG_STOP_MODULE_PREFIX = "stop_module_"
     /** Shutdown tag for the dispatcher. */
     private const val ERROR_TAG_STOP_DISPATCHER = "stop_dispatcher"
+    /** Startup tag for a managed dynamic-config provider. */
+    private const val ERROR_TAG_DYNAMIC_CONFIG_START = "dynamic_config_start"
+    /** Read tag for a dynamic-config provider failure. */
+    private const val ERROR_TAG_DYNAMIC_CONFIG_READ = "dynamic_config_read"
 }

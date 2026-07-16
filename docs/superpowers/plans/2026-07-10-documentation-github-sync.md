@@ -6,7 +6,7 @@
 
 **Architecture:** Derive one repository inventory from source/build/test evidence, propagate it through canonical handoff documents and per-module architecture documents, then regenerate derived diagrams and reports from those synchronized sources. Git changes remain documentation-only apart from the approved `.gitignore` policy change.
 
-**Tech Stack:** PowerShell, Git, Gradle 8.13, AGP 8.13.2, Kotlin 2.2.21, JDK 21, Markdown, Python/report generation, SVG/PNG, DOCX.
+**Tech Stack:** PowerShell, Git, Gradle 8.13, AGP 8.13.2, Kotlin 2.2.21, JDK 17, Markdown, Python/report generation, SVG/PNG, DOCX.
 
 ## Global Constraints
 
@@ -14,7 +14,7 @@
 - Keep `.workbuddy/` ignored and untracked.
 - Keep `.github/` ignored and untracked.
 - Track every other current file under `docs/`.
-- Preserve JDK 21 as the verification runtime and Java 11 as the produced JVM bytecode target.
+- Preserve JDK 17 as the verification runtime and Java 17 as the produced JVM bytecode target.
 - Keep the current project composition at 22 root Gradle subprojects plus 2 included builds unless live inventory proves otherwise.
 - Separate implemented capability, default-enabled behavior, manual integration, and future work.
 - Use `apply_patch` for text edits.
@@ -107,8 +107,8 @@ Use `2026-07-10` as the documentation synchronization date. State exactly:
 24 build units = 22 root subprojects + 2 included builds
 128 main source files = 123 Kotlin + 4 C + 1 proto
 63 test files
-JDK 21 / Gradle 8.13 / AGP 8.13.2 / Kotlin 2.2.21
-Java 11 bytecode / compileSdk 34 / minSdk 24 / targetSdk 34
+JDK 17 / Gradle 8.13 / AGP 8.13.2 / Kotlin 2.2.21
+Java 17 bytecode / compileSdk 34 / minSdk 24 / targetSdk 34
 ```
 
 Do not identify a documentation commit as the latest implementation commit. Use `git log --oneline -n 10` for the live tip and identify `3c27ff9` as the latest runtime implementation commit only if history still confirms it.
@@ -334,19 +334,19 @@ Run repository-wide searches for old counts, FileEventStore-as-primary diagrams,
 
 Enumerate every file under `docs/`, parse every relative Markdown link, and require each local target to exist. Expected: zero missing local link targets.
 
-- [ ] **Step 3: Force-run root unit tests under JDK 21**
+- [ ] **Step 3: Force-run root unit tests under JDK 17**
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-21.0.11','Process'); & '.\gradlew.bat' testDebugUnitTest --rerun-tasks --no-daemon"
+rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-17.0.14','Process'); & '.\gradlew.bat' testDebugUnitTest --rerun-tasks --no-daemon"
 ```
 
 Expected: `BUILD SUCCESSFUL` with every root test task executed.
 
-- [ ] **Step 4: Run Debug build and plugin tests under JDK 21**
+- [ ] **Step 4: Run Debug build and plugin tests under JDK 17**
 
 ```powershell
-rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-21.0.11','Process'); & '.\gradlew.bat' assembleDebug --no-daemon"
-rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-21.0.11','Process'); & '.\gradlew.bat' -p apm-plugin test --rerun-tasks --no-daemon"
+rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-17.0.14','Process'); & '.\gradlew.bat' assembleDebug --no-daemon"
+rtk proxy powershell -NoProfile -Command "[Environment]::SetEnvironmentVariable('JAVA_HOME','C:\Users\XZQ\.jdks\jbr-17.0.14','Process'); & '.\gradlew.bat' -p apm-plugin test --rerun-tasks --no-daemon"
 ```
 
 Expected: both commands finish with `BUILD SUCCESSFUL`.

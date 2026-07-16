@@ -1,3 +1,7 @@
+check(JavaVersion.current() == JavaVersion.VERSION_17) {
+    "AndroidAPM requires JDK 17 to run Gradle; current runtime is ${JavaVersion.current()}."
+}
+
 pluginManagement {
     // 共享构建约定（convention plugin）所在的 included build
     includeBuild("build-logic")
@@ -41,6 +45,7 @@ include(
     ":apm-render",
     ":apm-trace",
     ":apm-otel-exporter",
+    ":apm-remote-config",
     ":apm-benchmark",
     ":apm-sample-app"
 )

@@ -6,7 +6,7 @@
 
 **Architecture:** Add deterministic fault injection at existing interfaces, then make only local fixes where a test exposes an invariant violation. Preserve the current dispatcher/outbox/worker/diagnostics boundaries; do not add a central coordinator or public fault-injection switch.
 
-**Tech Stack:** Kotlin 2.2.21, Android SQLite/Robolectric, JUnit 4, Gradle 8.13, JDK 21.
+**Tech Stack:** Kotlin 2.2.21, Android SQLite/Robolectric, JUnit 4, Gradle 8.13, JDK 17.
 
 ## Global Constraints
 
@@ -320,7 +320,7 @@ git commit -m "Fix: Exercise outbox failure sequences"
 
 Document the host-safety priority, recoverable `Exception` boundary, fatal-error policy, bounded retry hint, cross-process cached-count correction, custom synchronous uploader limitation, and diagnostics export failure-as-data behavior. Update source/test counts and verification totals from fresh artifacts only.
 
-- [ ] **Step 2: Run complete verification under JDK 21**
+- [ ] **Step 2: Run complete verification under JDK 17**
 
 Run every command from the design specification. Expected: all builds/tests pass, lint has no fatal issue, Maven Local publications resolve in the isolated consumer, docs verification passes, and `git diff --check` is clean.
 

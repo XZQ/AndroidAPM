@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-07-10
+> 同步日期：2026-07-16
 
 ## 1. 分层关系
 
@@ -180,13 +180,16 @@ interface BatchApmUploader : ApmUploader {
 - Line Protocol：`text/plain; charset=utf-8`
 - Protobuf：`application/x-protobuf`
 - 默认 core endpoint path 开启 Gzip
+- 静态 Header 与逐请求 `HttpHeaderProvider` 合并，动态短期 Token 可刷新/撤销
+- Header 名/值拒绝控制字符，且不能覆盖 Content-Type/Encoding/Length、Host 等 transport 语义
+- 可选逐请求 endpoint；远程覆盖只接受无 user-info 的 HTTPS URL，异常回退 bootstrap 地址
 - 所有 header 在获取 output stream 前设置
 - 2xx 为成功
 - 429/503 解析 `Retry-After` 秒数或 HTTP-date
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。
+每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。
 
 ## 9. Durable retry
 
@@ -233,7 +236,7 @@ claimPending(owner, lease)
 
 - exactly-once server protocol and server-side eventId deduplication
 - typed durable field schema
-- authentication/tenant protocol
+- Token 签发/刷新/撤销与租户授权服务（客户端逐请求注入已完成）
 - collector compatibility/version negotiation
 
 ## 12. 测试
@@ -242,6 +245,6 @@ claimPending(owner, lease)
 
 `apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
-`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After。
+`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护与 HTTPS endpoint 轮换。
 
 `apm-core`：PersistentUploadWorker success/failure/fallback 与 UploaderFactory retry ownership。

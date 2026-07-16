@@ -29,6 +29,26 @@ interface DynamicConfigProvider {
 }
 
 /**
+ * Optional lifecycle contract for a [DynamicConfigProvider] backed by a polling control plane.
+ *
+ * Core starts this provider after publishing a valid APM runtime state and stops it before module
+ * teardown. The callback may run on a provider worker thread and must only signal that getters now
+ * expose a new verified snapshot.
+ */
+interface ManagedDynamicConfigProvider : DynamicConfigProvider {
+
+    /**
+     * Starts background refresh and reports each effective verified snapshot change.
+     *
+     * @param onConfigChanged callback invoked after the provider atomically publishes a new view
+     */
+    fun start(onConfigChanged: () -> Unit)
+
+    /** Stops background refresh and releases provider-owned threads. */
+    fun stop()
+}
+
+/**
  * 灰度发布控制器。
  * 按功能开关、用户 ID、百分比控制 APM 功能的开启/关闭。
  */

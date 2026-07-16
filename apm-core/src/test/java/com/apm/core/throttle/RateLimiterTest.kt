@@ -9,6 +9,18 @@ import org.junit.Test
  */
 class RateLimiterTest {
 
+    /** Reconfiguring a bucket replaces its capacity without retaining stale exhaustion state. */
+    @Test
+    fun `dynamic policy change replaces affected bucket`() {
+        val limiter = RateLimiter(maxEventsPerWindow = 1, windowMs = 60_000L)
+
+        assertTrue(limiter.tryAcquire("network/request"))
+        assertFalse(limiter.tryAcquire("network/request"))
+        assertTrue(limiter.tryAcquire("network/request", eventsPerWindow = 2, refillWindowMs = 5_000L))
+        assertTrue(limiter.tryAcquire("network/request", eventsPerWindow = 2, refillWindowMs = 5_000L))
+        assertFalse(limiter.tryAcquire("network/request", eventsPerWindow = 2, refillWindowMs = 5_000L))
+    }
+
     /** 窗口内未超出配额时应全部通过。 */
     @Test
     fun `allows requests within limit`() {

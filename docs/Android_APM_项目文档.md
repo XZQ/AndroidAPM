@@ -1,10 +1,10 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-16｜25 个构建单元｜145 个主源码文件（140 Kotlin + 4 C + 1 proto）｜87 个测试/benchmark 文件
+> 文档同步：2026-07-16｜26 个构建单元｜154 个主源码文件（149 Kotlin + 4 C + 1 proto）｜92 个测试/benchmark 文件
 
 ## 一、项目结论
 
-AndroidAPM 是模块化 Android 端 APM SDK。它覆盖采集、统一事件、开销保护、持久化、跨进程交接和上传；生产 Collector、查询聚合、告警、Dashboard、Native 符号化及托管服务不在仓库内。
+AndroidAPM 是模块化 Android 端 APM SDK。它覆盖采集、统一事件、开销保护、持久化、跨进程交接、动态短期鉴权、签名远程配置和上传；生产 Collector、查询聚合、告警、Dashboard、Native 符号化及托管服务不在仓库内。
 
 当前最成熟的部分不是单个监控算法，而是所有模块共享的可靠事件管线：
 
@@ -12,7 +12,7 @@ AndroidAPM 是模块化 Android 端 APM SDK。它覆盖采集、统一事件、�
 monitor module
   -> Apm.emit
   -> bounded queue (2048)
-  -> optional aggregation / rate limit / PII sanitization
+  -> signed dynamic sampling / optional aggregation / dynamic rate limit / PII sanitization
   -> appendBatch (up to 32)
   -> SQLite durable outbox v3 (50,000, unique eventId)
   -> claim(owner, lease, expiry) -> PersistentUploadWorker
@@ -48,17 +48,17 @@ monitor module
 | 项目 | 当前值 |
 |---|---|
 | 分支 | `develop` |
-| 最新 runtime 实现提交（文档同步前） | `4f4e803 Fix: Complete monitoring integration coverage` |
-| root Gradle subproject | 23 |
+| runtime tip | 使用 `git log --oneline -n 10` 查看；远程配置实现与本文档同一交付提交 |
+| root Gradle subproject | 24 |
 | included build | 2：`apm-plugin`、`build-logic` |
-| 总构建单元 | 25 |
-| 主源码 | 145：140 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 87 |
+| 总构建单元 | 26 |
+| 主源码 | 154：149 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 92 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
-| JDK | 21 |
-| JVM bytecode | Java 11 |
+| JDK | 17 |
+| JVM bytecode | Java 17 |
 | Android SDK | compileSdk 34 / minSdk 24 / targetSdk 34 |
 
 不要在文档中维护“最新文档提交号”；文档提交本身会让该值立即过期。使用 `git log --oneline -n 10` 查看实际 tip。
@@ -72,7 +72,8 @@ monitor module
 | `apm-model` | 统一事件、优先级、Line Protocol、Protobuf、持久化 codec | `ApmEvent`, `ApmEventCodec`, `ProtobufSerializer` |
 | `apm-core` | 初始化、生命周期、分发、限流、聚合、脱敏、多进程、自监控、独立诊断日志 | `Apm`, `ApmDispatcher`, `ApmDiagnostics`, `PersistentUploadWorker` |
 | `apm-storage` | SQLite outbox 与 File 兼容存储 | `SQLiteEventStore`, `FileEventStore`, `PendingEventStore` |
-| `apm-uploader` | HTTP/Logcat/自定义传输和非 durable 重试兼容路径 | `HttpApmUploader`, `RetryingApmUploader` |
+| `apm-uploader` | HTTP/Logcat/自定义传输、逐请求 Header/endpoint 和非 durable 重试兼容路径 | `HttpApmUploader`, `HttpHeaderProvider`, `RetryingApmUploader` |
+| `apm-remote-config` | HTTPS/ETag 拉取、Ed25519 验签、LKG、过期/回滚/同 revision 篡改保护 | `SignedRemoteConfigProvider`, `TinkEd25519SignatureVerifier` |
 
 ### 4.2 监控模块
 
@@ -134,11 +135,12 @@ monitor module
 worker 单轮 drain 最多 32 条：
 
 1. 解析 lazy event
-2. 可选聚合
-3. rate limit；ERROR/FATAL 绕过
-4. 可选 PII 脱敏
-5. `appendBatch` 单事务落盘
-6. 唤醒 persistent uploader
+2. 签名动态采样；按全局→模块→事件覆盖，ERROR/FATAL 绕过
+3. 可选聚合
+4. 动态 rate limit；按全局→模块→事件覆盖，ERROR/FATAL 绕过
+5. 可选 PII 脱敏
+6. `appendBatch` 单事务落盘
+7. 唤醒 persistent uploader
 
 停止顺序：先切断新事件入口，再停止模块，排空 dispatcher，处理聚合残留，停止 uploader，关闭 store。排空均有超时上限。
 
@@ -168,6 +170,10 @@ worker 单轮 drain 最多 32 条：
 可靠性优先级是宿主安全、telemetry durability、diagnostic completeness。dispatcher 对单个 lazy factory/聚合/限流/脱敏的 recoverable `Exception` 单独降级，后续事件继续；fatal VM error 不转换成 drop。SQLite 的进程本地缓存计数在跨 store 删除后下限为 0，避免负缓存绕过容量淘汰。自定义同步 uploader 必须自行配置有界 IO，SDK 不尝试强杀任意宿主代码。
 
 `StorageType.FILE` 是 500 行 ring buffer 兼容路径，不提供成功确认、重启重放等 durable 语义，初始化会输出降级警告。
+
+默认 HTTP uploader 支持静态协议身份 Header 和逐请求 `HttpHeaderProvider`。动态 provider 用于短期 Token，每次网络请求重新取值；provider 异常、Header 控制字符或覆盖 Content-Type/Content-Length/Host 等 transport Header 时请求失败，durable 行保留。`enableDynamicHttpEndpoint=true` 后才读取签名键 `apm.upload.endpoint`，且远程值只接受无 user-info 的 HTTPS URL；非法值或 provider 异常回退 APK 内置 endpoint。
+
+`apm-remote-config` 通过认证 GET `/v1/config` 拉取配置，发送 app/environment/installation 身份与 ETag。响应按服务端 canonical JSON 规则重建签名字节，并用 APK 固定的 32 字节原始 Ed25519 公钥通过 Tink 验签。只有验签、revision 单调、同 revision 签名一致且 app-private 缓存同步提交成功后才发布；204 主动停用，304 更新可信时间锚点，网络失败沿用未过期 LKG。最高 revision 即使配置过期或停用也不会回退。Android 平台原生 Ed25519 保证从 API 33 才开始，因此 minSdk 24 使用官方支持 Android 24+ 的 Tink 实现。
 
 ## 八、多进程
 
@@ -208,6 +214,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `diagnostics.enabled` | true | 独立本地诊断 journal |
 | `enableMultiProcessCoordination` | false | 子进程 hand-off 关闭 |
 | `enableHttpGzip` | true | 默认 endpoint HTTP 压缩 |
+| `enableDynamicHttpEndpoint` | false | 远程 endpoint 覆盖默认关闭；开启后仍只接受 HTTPS |
+| `httpHeaders` | 空 | 静态协议身份，不应包含长期密钥 |
+| `httpHeaderProvider` | 空 | 每请求短期 Token/动态 Header |
 | `IpcConfig.enableBinderHook` | false / deprecated | 无公共全局 Hook；使用显式 tracing |
 | `WebviewConfig.enableAutoRegister` | false / deprecated | 无全局 WebView 注册；按实例 install |
 | `ThreadMonitorConfig.enableThreadLeakDetect` | false / deprecated | 通用 leak 判断不可靠；显式注册线程池 |
@@ -218,12 +227,13 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十一、构建与发布
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均在 settings 阶段强制 JDK 17；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
 
-2026-07-16 在 JDK 21.0.9 执行的开发验证：
+2026-07-16 在 JDK 17.0.14 执行的开发验证：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
+./gradlew.bat :apm-model:test --rerun-tasks --no-daemon
 ./gradlew.bat assembleDebug --no-daemon
 ./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
@@ -238,12 +248,14 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 全部命令通过。现场产物与报告为：
 
-- root Gradle 89 个 JUnit XML 测试套件、574 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
-- 22 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,692,488 字节；
-- Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 20 个 AAR、22 个 JAR、21 个 POM；
+- root Gradle 94 个 JUnit XML 测试套件、595 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
+- 23 份 `lint-results-debug.html`；
+- `apm-sample-app-release-unsigned.apk`，4,708,872 字节；
+- Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 21 个 AAR、23 个 JAR、22 个 POM；
 - `apm-benchmark` 未进入 Maven Local publication，Release 与 AndroidTest Kotlin 均编译成功；
 - 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
+
+`apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
 
@@ -251,7 +263,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-87 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界、PII、聚合/指纹、限流、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、HTTP socket/Gzip/Retry-After、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
+92 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView/FrameMetrics 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 
@@ -263,11 +275,11 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、显式 Binder/WebView/线程池公共 API、FrameMetrics、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、显式 Binder/WebView/线程池公共 API、FrameMetrics、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 CI，以及真机 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件见 [`docs/云端待建设清单.md`](云端待建设清单.md)。
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 CI，以及真机 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 

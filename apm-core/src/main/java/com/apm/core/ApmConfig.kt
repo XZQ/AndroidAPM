@@ -5,6 +5,7 @@ import com.apm.core.throttle.GrayReleaseController
 import com.apm.core.diagnostics.DiagnosticsConfig
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
+import com.apm.uploader.HttpHeaderProvider
 
 /** 进程策略：控制 APM 在哪些进程中初始化。 */
 enum class ProcessStrategy {
@@ -109,6 +110,12 @@ data class ApmConfig(
     val enableMultiProcessCoordination: Boolean = false,
     /** 默认 HTTP uploader 是否启用 Gzip 压缩。 */
     val enableHttpGzip: Boolean = true,
+    /** 是否允许动态配置通过 `apm.upload.endpoint` 覆盖内置 HTTPS 地址。 */
+    val enableDynamicHttpEndpoint: Boolean = false,
+    /** 默认 HTTP uploader 的静态请求头；不得放入长期密钥。 */
+    val httpHeaders: Map<String, String> = emptyMap(),
+    /** 默认 HTTP uploader 每次请求调用的动态 Header 提供者，用于短期 Token。 */
+    val httpHeaderProvider: HttpHeaderProvider = HttpHeaderProvider.EMPTY,
     /** Durable row lease duration for one upload attempt. */
     val uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
 ) {

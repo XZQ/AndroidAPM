@@ -33,10 +33,22 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
      * @param key 分桶键，通常为 "module/eventName"
      * @return true 表示通过，false 表示被限流
      */
-    fun tryAcquire(key: String): Boolean {
+    fun tryAcquire(
+        key: String,
+        eventsPerWindow: Int = maxEventsPerWindow,
+        refillWindowMs: Long = windowMs
+    ): Boolean {
         // 同步保护 LinkedHashMap 的访问顺序调整与 LRU 逐出
         val bucket = synchronized(buckets) {
-            buckets.getOrPut(key) { TokenBucket(maxEventsPerWindow, windowMs) }
+            val existing = buckets[key]
+            if (existing != null && existing.matches(eventsPerWindow, refillWindowMs)) {
+                existing
+            } else {
+                // A verified dynamic policy change replaces only the affected bucket.
+                TokenBucket(eventsPerWindow, refillWindowMs).also { replacement ->
+                    buckets[key] = replacement
+                }
+            }
         }
         return bucket.tryAcquire()
     }
@@ -47,6 +59,12 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
      * @return 活跃桶数
      */
     fun bucketCount(): Int = synchronized(buckets) { buckets.size }
+
+    /** Returns the application-bundled default capacity. */
+    internal fun maxEventsPerWindow(): Int = maxEventsPerWindow
+
+    /** Returns the application-bundled default refill window. */
+    internal fun windowMs(): Long = windowMs
 
     /** 清除所有桶，重置限流状态。 */
     fun reset() {
@@ -62,6 +80,11 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
         private val tokens = AtomicLong(capacity.toLong())
         /** 上一次补充令牌的时间戳。 */
         private val lastRefill = AtomicLong(System.currentTimeMillis())
+
+        /** Returns whether this bucket already represents the effective dynamic policy. */
+        fun matches(capacity: Int, windowMs: Long): Boolean {
+            return this.capacity == capacity && this.windowMs == windowMs
+        }
 
         /**
          * 尝试消耗一个令牌。CAS 循环保证无锁并发安全。

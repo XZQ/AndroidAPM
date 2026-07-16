@@ -8,6 +8,7 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Locale
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -17,6 +18,7 @@ import java.util.zip.GZIPOutputStream
  * 支持能力：
  * - Line Protocol 格式批量上报
  * - 自定义 Headers（鉴权、设备信息等）
+ * - 每请求动态 Headers（短期 Token、撤销与刷新）
  * - 连接超时/读取超时配置
  * - Gzip 压缩上传（可选）
  * - 自动重试（由 [RetryingApmUploader] 外层处理）
@@ -27,7 +29,9 @@ import java.util.zip.GZIPOutputStream
  *     endpoint = "https://apm.example.com/api/v1/events",
  *     uploader = HttpApmUploader(
  *         endpoint = "https://apm.example.com/api/v1/events",
- *         headers = mapOf("Authorization" to "Bearer xxx")
+ *         headerProvider = HttpHeaderProvider {
+ *             mapOf("Authorization" to "Bearer ${'$'}{tokenManager.currentToken()}")
+ *         }
  *     )
  * ))
  * ```
@@ -35,8 +39,12 @@ import java.util.zip.GZIPOutputStream
 class HttpApmUploader(
     /** 上传目标地址（HTTP/HTTPS）。 */
     private val endpoint: String,
+    /** 每次请求解析上传地址；远程覆盖仅接受 HTTPS。 */
+    private val endpointProvider: HttpEndpointProvider = HttpEndpointProvider.DEFAULT,
     /** 自定义 HTTP Headers（如鉴权 Token、设备信息）。 */
     private val headers: Map<String, String> = emptyMap(),
+    /** 每次请求动态获取的 Headers；同名项覆盖静态 [headers]。 */
+    private val headerProvider: HttpHeaderProvider = HttpHeaderProvider.EMPTY,
     /** HTTP 连接超时（毫秒）。 */
     private val connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
     /** HTTP 读取超时（毫秒）。 */
@@ -99,8 +107,12 @@ class HttpApmUploader(
     private fun sendHttpPost(payload: ByteArray): Boolean {
         var connection: HttpURLConnection? = null
         try {
+            // Resolve credentials before opening the connection. Provider failures keep durable
+            // rows pending instead of reusing a stale token retained by this uploader.
+            val requestHeaders = resolveRequestHeaders()
+            val requestEndpoint = resolveRequestEndpoint()
             // 建立 HTTP 连接
-            val url = URL(endpoint)
+            val url = URL(requestEndpoint)
             connection = (url.openConnection() as HttpURLConnection).apply {
                 requestMethod = METHOD_POST
                 connectTimeout = connectTimeoutMs
@@ -118,7 +130,7 @@ class HttpApmUploader(
             }
 
             // 设置自定义 Headers（鉴权、设备信息等）
-            for ((key, value) in headers) {
+            for ((key, value) in requestHeaders) {
                 connection.setRequestProperty(key, value)
             }
             // All headers must be set before outputStream establishes the connection.
@@ -189,6 +201,71 @@ class HttpApmUploader(
             return false
         }
         // 正常完成的交换不调用 disconnect()，让底层连接回到 keep-alive 池复用
+    }
+
+    /**
+     * Merges static and per-request headers and rejects unsafe transport overrides.
+     *
+     * @return validated header snapshot for one request
+     */
+    private fun resolveRequestHeaders(): Map<String, String> {
+        val merged = LinkedHashMap<String, String>(headers.size + DEFAULT_DYNAMIC_HEADER_CAPACITY)
+        merged.putAll(headers)
+        // A fresh snapshot on every call allows token rotation without rebuilding the SDK.
+        merged.putAll(headerProvider.currentHeaders())
+        for ((name, value) in merged) {
+            require(isValidHeaderName(name)) { "Invalid HTTP header name" }
+            require(isValidHeaderValue(value)) { "Invalid HTTP header value" }
+            require(name.lowercase(Locale.US) !in RESERVED_HEADER_NAMES) {
+                "Transport header cannot be overridden: $name"
+            }
+        }
+        return merged
+    }
+
+    /**
+     * Resolves one upload destination and falls back to the bundled endpoint on unsafe overrides.
+     *
+     * Remote endpoint rotation is deliberately stricter than the bootstrap endpoint: only HTTPS
+     * URLs with a host and without embedded credentials are accepted. Provider failures also retain
+     * the bootstrap endpoint so a control-plane outage cannot disable telemetry delivery.
+     */
+    private fun resolveRequestEndpoint(): String {
+        val candidate = try {
+            endpointProvider.currentEndpoint(endpoint).trim()
+        } catch (error: Exception) {
+            logger.w("HTTP endpoint provider failed; retaining bootstrap endpoint")
+            return endpoint
+        }
+        if (candidate == endpoint) {
+            return endpoint
+        }
+        val parsed = try {
+            URL(candidate)
+        } catch (error: Exception) {
+            logger.w("Rejected invalid remote HTTP endpoint; retaining bootstrap endpoint")
+            return endpoint
+        }
+        if (parsed.protocol != HTTPS_SCHEME || parsed.host.isNullOrBlank() || parsed.userInfo != null) {
+            logger.w("Rejected unsafe remote HTTP endpoint; retaining bootstrap endpoint")
+            return endpoint
+        }
+        return parsed.toExternalForm()
+    }
+
+    /** Returns whether a header name is a conservative RFC token accepted by HttpURLConnection. */
+    private fun isValidHeaderName(name: String): Boolean {
+        return name.isNotEmpty() && name.all { character ->
+            character.code in HEADER_VISIBLE_ASCII_MIN..HEADER_VISIBLE_ASCII_MAX &&
+                character !in HEADER_NAME_SEPARATORS
+        }
+    }
+
+    /** Returns whether a header value is free of CR/LF and other control characters. */
+    private fun isValidHeaderValue(value: String): Boolean {
+        return value.all { character ->
+            character == '\t' || character.code >= HEADER_VALUE_VISIBLE_MIN
+        }
     }
 
     /**
@@ -304,5 +381,34 @@ class HttpApmUploader(
 
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
+
+        /** Small initial capacity added for a typical Authorization-only provider. */
+        private const val DEFAULT_DYNAMIC_HEADER_CAPACITY = 2
+
+        /** Only secure transport is accepted for a remotely supplied upload endpoint. */
+        private const val HTTPS_SCHEME = "https"
+
+        /** Lowest visible ASCII code allowed in a header name. */
+        private const val HEADER_VISIBLE_ASCII_MIN = 0x21
+
+        /** Highest visible ASCII code allowed in a header name. */
+        private const val HEADER_VISIBLE_ASCII_MAX = 0x7E
+
+        /** Lowest non-control code allowed in a header value. */
+        private const val HEADER_VALUE_VISIBLE_MIN = 0x20
+
+        /** RFC separators excluded from the conservative header-name token subset. */
+        private const val HEADER_NAME_SEPARATORS = "()<>@,;:\\\"/[]?={} \t"
+
+        /** Transport-owned headers whose semantics must match the encoded request body. */
+        private val RESERVED_HEADER_NAMES = setOf(
+            HEADER_CONTENT_TYPE.lowercase(Locale.US),
+            HEADER_CONTENT_ENCODING.lowercase(Locale.US),
+            HEADER_ACCEPT.lowercase(Locale.US),
+            "content-length",
+            "transfer-encoding",
+            "connection",
+            "host"
+        )
     }
 }

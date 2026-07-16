@@ -70,8 +70,8 @@ The synchronized documentation is accepted only after all of the following pass:
 2. Searches find no stale module totals, stale build-unit totals, obsolete primary FileEventStore flow, legacy Transform claims, or claims that `.github` CI is tracked.
 3. Every Markdown link to a local file resolves.
 4. Generated diagrams and DOCX files can be opened or parsed after regeneration.
-5. `testDebugUnitTest --rerun-tasks` passes under JDK 21.
-6. `assembleDebug` and `./gradlew -p apm-plugin test` pass under JDK 21.
+5. `testDebugUnitTest --rerun-tasks` passes under JDK 17.
+6. `assembleDebug` and `./gradlew -p apm-plugin test` pass under JDK 17.
 7. Documentation-only changes leave source compilation behavior unchanged.
 8. `git status`, staged-file review, and diff inspection show only the approved documentation, generated artifacts, `.gitignore`, and required top-level documentation changes.
 9. After push, local `HEAD`, `origin/develop`, and `git ls-remote origin refs/heads/develop` are identical.

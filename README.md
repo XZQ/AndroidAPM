@@ -1,19 +1,19 @@
 # Android APM Framework
 
-模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、稳定事件身份、SQLite 持久化出箱、并发上传租约、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、稳定事件身份、SQLite 持久化出箱、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
 ## 当前基线
 
 - 同步日期：2026-07-16
-- 25 个构建单元：23 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 145 个主源码文件：140 Kotlin + 4 C + 1 proto
-- 87 个测试/benchmark 文件
-- Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 21
-- compileSdk 34 / minSdk 24 / targetSdk 34 / Java 11 字节码
+- 26 个构建单元：24 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
+- 154 个主源码文件：149 Kotlin + 4 C + 1 proto
+- 92 个测试/benchmark 文件
+- Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 17
+- compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
-详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，所有云端事项统一见 [云端待建设清单](docs/云端待建设清单.md)。
+详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)。所有云端事项统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 第一性原理架构
 
@@ -39,14 +39,15 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 
 ## 模块组成
 
-### 4 个基础模块
+### 5 个基础模块
 
 | 模块 | 职责 |
 |---|---|
 | `apm-model` | `ApmEvent`、priority/severity、Line Protocol、Protobuf、持久化 codec |
 | `apm-core` | 初始化、模块生命周期、分发、限流、聚合、脱敏、多进程、自监控、独立本地诊断日志 |
 | `apm-storage` | SQLite durable outbox；FileEventStore 兼容路径 |
-| `apm-uploader` | HTTP/Logcat/自定义上传、批量、Gzip、Retry-After、内存重试兼容路径 |
+| `apm-uploader` | HTTP/Logcat/自定义上传、逐请求动态 Header/endpoint、批量、Gzip、Retry-After、内存重试兼容路径 |
+| `apm-remote-config` | HTTPS 拉取、ETag、Ed25519/Tink 验签、回滚/同 revision 篡改保护、可信过期和 app-private LKG 缓存 |
 
 ### 15 个监控模块
 
@@ -89,6 +90,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 dependencies {
     implementation(project(":apm-memory"))
     implementation(project(":apm-network"))
+    implementation(project(":apm-remote-config"))
 }
 ```
 
@@ -98,6 +100,7 @@ dependencies {
 dependencies {
     implementation("com.apm:apm-memory:0.1.0")
     implementation("com.apm:apm-network:0.1.0")
+    implementation("com.apm:apm-remote-config:0.1.0")
 }
 ```
 
@@ -159,6 +162,64 @@ class App : Application() {
     }
 }
 ```
+
+### 生产鉴权与签名远程配置
+
+长期密钥不要写进 APK。`HttpHeaderProvider` 在每次上传和配置拉取前重新读取短期 Token；provider 失败或 Header 非法时上传返回失败，SQLite outbox 保留事件等待后续重试。Collector 协议身份使用静态非密钥 Header：
+
+```kotlin
+val authHeaders = HttpHeaderProvider {
+    tokenStore.currentAccessToken()?.let { token ->
+        mapOf("Authorization" to "Bearer $token")
+    } ?: emptyMap()
+}
+
+val remoteConfig = SignedRemoteConfigProvider(
+    context = this,
+    config = RemoteConfigClientConfig(
+        endpoint = "https://collector.example.com/v1/config",
+        appId = packageName,
+        environment = "production",
+        installationId = installationIds.anonymousStableId()
+    ),
+    publicKeysBase64 = mapOf(
+        "key-2026" to BuildConfig.APM_CONFIG_ED25519_PUBLIC_KEY
+    ),
+    headerProvider = authHeaders
+)
+
+Apm.init(
+    this,
+    ApmConfig(
+        endpoint = "https://collector.example.com/v1/events",
+        dynamicConfigProvider = remoteConfig,
+        httpHeaders = mapOf(
+            "X-APM-Schema-Version" to "1",
+            "X-APM-App-Id" to packageName,
+            "X-APM-Environment" to "production",
+            "X-APM-SDK-Version" to "0.1.0"
+        ),
+        httpHeaderProvider = authHeaders,
+        enableDynamicHttpEndpoint = true
+    )
+)
+```
+
+公钥值是标准 Base64 编码的 32 字节原始 Ed25519 公钥，应通过受审计的构建配置固定，不能随远程响应下发。配置客户端默认 15 分钟轮询，支持 ETag/304、256 KiB 响应上限、服务端时间锚点、过期回退、最高 revision 持久化和 204 主动停用；生产只接受 HTTPS。
+
+运行时自动消费以下签名键：
+
+| 键 | 作用 |
+|---|---|
+| `apm.enabled` | 全局紧急 kill switch，动态停止/恢复已注册模块 |
+| `apm.module.<module>.enabled` | 单模块动态停止/恢复 |
+| `apm.sampling.default_basis_points` | 默认事件采样率，0–10000 |
+| `apm.sampling.<module>[.<event>].basis_points` | 模块/事件级采样覆盖 |
+| `apm.rate_limit.default_events_per_window` / `default_window_ms` | 默认动态限流 |
+| `apm.rate_limit.<module>[.<event>].events_per_window` / `window_ms` | 模块/事件级限流覆盖 |
+| `apm.upload.endpoint` | 上传地址轮换；仅在 `enableDynamicHttpEndpoint=true` 时接受无凭据 HTTPS URL |
+
+ERROR/FATAL 事件绕过采样和限流。服务端 rollout 先按匿名 `installationId` 稳定分流，客户端再使用上述精细策略；配置缺失、过期、验签失败、降 revision、同 revision 不同签名或持久化失败时都不会发布未可信值。
 
 ### 网络监控
 
@@ -229,6 +290,9 @@ apmSlowMethod {
 | `enableMultiProcessCoordination` | `false` | 不转发子进程事件 |
 | `enableSelfMonitoring` | `true` | 周期上报 SDK 健康事件 |
 | `enableAutoThrottle` | `true` | 健康恶化时可停用低优先级模块 |
+| `enableDynamicHttpEndpoint` | `false` | 不允许远程配置改变上传目的地 |
+| `httpHeaders` | 空 | 仅放协议身份等非密钥静态 Header |
+| `httpHeaderProvider` | 空 | 每次请求动态获取短期凭据 |
 | `diagnostics.enabled` | `true` | 独立本地诊断日志，不依赖事件上传管线 |
 | Native Crash | `false` | 避免默认启用高风险信号能力 |
 | Hprof/fork dump | `false` | 避免默认产生大文件或依赖设备兼容性 |
@@ -282,10 +346,11 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 构建与验证
 
-必须使用 JDK 21：
+必须使用 JDK 17；settings 会拒绝其他 JDK 版本：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest
+./gradlew.bat :apm-model:test
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
@@ -302,9 +367,9 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在 [云端待建设清单](docs/云端待建设清单.md)。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 

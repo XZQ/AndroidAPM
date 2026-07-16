@@ -2,6 +2,7 @@ package com.apm.core
 
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.HttpApmUploader
+import com.apm.uploader.HttpEndpointProvider
 import com.apm.uploader.LogcatApmUploader
 import com.apm.uploader.RetryPolicy
 import com.apm.uploader.RetryingApmUploader
@@ -77,6 +78,9 @@ internal object UploaderFactory {
         return if (endpoint.startsWith(HTTP_PREFIX) || endpoint.startsWith(HTTPS_PREFIX)) {
             HttpApmUploader(
                 endpoint = endpoint,
+                endpointProvider = createEndpointProvider(config),
+                headers = config.httpHeaders,
+                headerProvider = config.httpHeaderProvider,
                 enableGzip = config.enableHttpGzip,
                 serializationFormat = config.serializationFormat,
                 logger = uploaderLogger
@@ -86,9 +90,22 @@ internal object UploaderFactory {
         }
     }
 
+    /** Creates the opt-in bridge from verified dynamic configuration to the HTTP uploader. */
+    private fun createEndpointProvider(config: ApmConfig): HttpEndpointProvider {
+        if (!config.enableDynamicHttpEndpoint) {
+            return HttpEndpointProvider.DEFAULT
+        }
+        return HttpEndpointProvider { defaultEndpoint ->
+            config.dynamicConfigProvider.getString(DYNAMIC_HTTP_ENDPOINT_KEY, defaultEndpoint)
+        }
+    }
+
     /** HTTP endpoint 前缀。 */
     private const val HTTP_PREFIX = "http://"
 
     /** HTTPS endpoint 前缀。 */
     private const val HTTPS_PREFIX = "https://"
+
+    /** Signed dynamic-config key used for upload endpoint rotation. */
+    private const val DYNAMIC_HTTP_ENDPOINT_KEY = "apm.upload.endpoint"
 }

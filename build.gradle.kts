@@ -87,7 +87,7 @@ subprojects {
     pluginManager.withPlugin("org.jetbrains.kotlin.android") {
         extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
             compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_11)
+                jvmTarget.set(JvmTarget.JVM_17)
             }
         }
     }

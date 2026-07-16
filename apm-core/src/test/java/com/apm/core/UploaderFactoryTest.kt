@@ -3,6 +3,8 @@ package com.apm.core
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.core.throttle.DynamicConfigProvider
+import com.apm.uploader.HttpEndpointProvider
 import com.apm.uploader.HttpApmUploader
 import com.apm.uploader.LogcatApmUploader
 import com.apm.uploader.RetryingApmUploader
@@ -74,6 +76,28 @@ class UploaderFactoryTest {
         assertFalse(readGzipFlag(uploader as HttpApmUploader))
     }
 
+    /** Opt-in endpoint rotation reads the signed dynamic-config key through the HTTP provider. */
+    @Test
+    fun `dynamic endpoint opt in wires config provider`() {
+        val config = ApmConfig(
+            endpoint = "https://bootstrap.example/v1/events",
+            enableRetry = false,
+            enableDynamicHttpEndpoint = true,
+            dynamicConfigProvider = FixedDynamicConfigProvider(
+                "https://collector.example/v1/events"
+            )
+        )
+
+        val uploader = UploaderFactory.create(config) as HttpApmUploader
+        val field = HttpApmUploader::class.java.getDeclaredField("endpointProvider")
+        field.isAccessible = true
+        val provider = field.get(uploader) as HttpEndpointProvider
+
+        assertTrue(
+            provider.currentEndpoint(config.endpoint) == "https://collector.example/v1/events"
+        )
+    }
+
     /** 空 endpoint 应回落到 Logcat uploader。 */
     @Test
     fun `blank endpoint uses logcat uploader`() {
@@ -120,6 +144,24 @@ class UploaderFactoryTest {
             events += event
             return true
         }
+    }
+
+    /** Dynamic provider returning one fixed string and defaults for unrelated value types. */
+    private class FixedDynamicConfigProvider(
+        /** Endpoint returned for the uploader key. */
+        private val endpoint: String
+    ) : DynamicConfigProvider {
+        /** Returns the supplied default. */
+        override fun getBoolean(key: String, defaultValue: Boolean): Boolean = defaultValue
+
+        /** Returns the supplied default. */
+        override fun getLongValue(key: String, defaultValue: Long): Long = defaultValue
+
+        /** Returns the supplied default. */
+        override fun getFloatValue(key: String, defaultValue: Float): Float = defaultValue
+
+        /** Returns the fixed endpoint. */
+        override fun getString(key: String, defaultValue: String): String = endpoint
     }
 
     /**

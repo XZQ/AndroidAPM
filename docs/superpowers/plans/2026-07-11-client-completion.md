@@ -6,7 +6,7 @@
 
 **Architecture:** Event identity is added append-only across model and wire formats; SQLite schema v3 introduces transactional lease ownership; monitoring modules expose public-API integrations and deprecate unsupported automatic switches; a non-published benchmark test module targets the sample app. Documentation uses one canonical cloud boundary and a source-backed Matrix/KOOM comparison.
 
-**Tech Stack:** Kotlin 2.2.21, Android API 24-34, SQLiteOpenHelper, JUnit 4, Robolectric 4.14.1, AndroidX Benchmark/Macrobenchmark, Gradle 8.13, AGP 8.13.2, JDK 21.
+**Tech Stack:** Kotlin 2.2.21, Android API 24-34, SQLiteOpenHelper, JUnit 4, Robolectric 4.14.1, AndroidX Benchmark/Macrobenchmark, Gradle 8.13, AGP 8.13.2, JDK 17.
 
 ## Global Constraints
 
@@ -448,7 +448,7 @@ Commit: `Build: Add client benchmark harness`
 ### Task 12: Create the canonical cloud backlog and restore README comparison
 
 **Files:**
-- Create: `docs/云端待建设清单.md`
+- Create: `docs/云端待建设清单.md` (historical step; the canonical file was later moved to `AndroidAPM-Server/docs/云端待建设清单.md` and removed from this client repository)
 - Modify: `README.md`
 - Modify: `AGENTS.md`
 - Modify: `docs/Android_APM_项目文档.md`
@@ -486,7 +486,7 @@ Commit: `Docs: Separate cloud work from client scope`
 - Modify: `docs/Android_APM_项目文档.md`
 - Modify: `docs/PROJECT_HANDOFF.md`
 
-- [ ] **Step 1: Run fresh JDK 21 verification**
+- [ ] **Step 1: Run fresh JDK 17 verification**
 
 ```powershell
 ./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon

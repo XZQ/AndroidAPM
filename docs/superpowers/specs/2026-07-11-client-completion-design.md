@@ -14,7 +14,7 @@ The client is complete when:
 4. supported Binder, WebView, thread-pool, and render integrations have concrete APIs and tests;
 5. a reproducible Android benchmark harness exists for device execution, while device-farm execution and published reports are identified as external work;
 6. README restores a source-backed, qualified comparison with WeChat Matrix and Kuaishou KOOM;
-7. cloud-only work is defined once in `docs/云端待建设清单.md`, and other maintained documents link to it instead of duplicating drifting lists.
+7. cloud-only work is defined once in the independent `AndroidAPM-Server/docs/云端待建设清单.md`; the client copy created by this historical plan was removed after ownership moved to the server repository.
 
 The client is not required to implement a production collector, authentication, tenant isolation, server-side deduplication, query/aggregation, alerting, dashboards, a symbol server, Maven Central credentials, GitHub-hosted CI, or a physical-device laboratory.
 
@@ -113,7 +113,7 @@ The harness records wall time, CPU time where available, Java heap delta, SQLite
 
 ## Cloud Work Document
 
-`docs/云端待建设清单.md` is the single canonical backlog for:
+`AndroidAPM-Server/docs/云端待建设清单.md` is now the single canonical backlog for:
 
 - collector ingestion and acknowledgement contract;
 - authentication, tenant isolation, quotas, and abuse controls;
@@ -172,4 +172,4 @@ Test-first coverage includes:
 - benchmark module compilation and scenario metadata;
 - README/cloud-document link verification.
 
-Final verification remains the repository JDK 21 unit-test, Debug, lint, Release, Maven Local, plugin-test, isolated consumer, documentation, diff, push, and exact remote-equality chain.
+Final verification remains the repository JDK 17 unit-test, Debug, lint, Release, Maven Local, plugin-test, isolated consumer, documentation, diff, push, and exact remote-equality chain.

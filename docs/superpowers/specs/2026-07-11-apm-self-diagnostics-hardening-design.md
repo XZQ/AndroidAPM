@@ -54,4 +54,4 @@ Sanitization covers authorization and bearer credentials, token/password variant
 
 ## Verification
 
-Unit tests cover deterministic process directories, aggregation, collision protection, cooldown behavior, byte budgets, read/write metric semantics, async APIs, sanitizer variants, manifest metadata, lifecycle rollback, shutdown continuation, scoped attribution, and sustained queue pressure. The normal JDK 21 full build, lint, release, Maven publication, plugin tests, consumer smoke build, documentation verification, and exact remote equality checks remain required.
+Unit tests cover deterministic process directories, aggregation, collision protection, cooldown behavior, byte budgets, read/write metric semantics, async APIs, sanitizer variants, manifest metadata, lifecycle rollback, shutdown continuation, scoped attribution, and sustained queue pressure. The normal JDK 17 full build, lint, release, Maven publication, plugin tests, consumer smoke build, documentation verification, and exact remote equality checks remain required.

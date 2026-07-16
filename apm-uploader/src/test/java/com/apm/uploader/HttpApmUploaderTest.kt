@@ -104,6 +104,96 @@ class HttpApmUploaderTest {
         }
     }
 
+    /** Dynamic headers are resolved for every request so token rotation takes effect immediately. */
+    @Test
+    fun `dynamic header provider refreshes authorization for every request`() {
+        ServerSocket(0).use { server ->
+            val authorizations = mutableListOf<String?>()
+            val providerCalls = AtomicInteger(0)
+            val serverThread = Thread {
+                repeat(EXPECTED_DYNAMIC_REQUESTS) {
+                    server.accept().use { socket ->
+                        val input = BufferedInputStream(socket.getInputStream())
+                        val requestHeaders = readHeaders(input)
+                        val length = requestHeaders["content-length"]?.toInt() ?: 0
+                        input.readNBytes(length)
+                        authorizations += requestHeaders["authorization"]
+                        socket.getOutputStream().use { output ->
+                            output.write(SUCCESS_RESPONSE.toByteArray(Charsets.ISO_8859_1))
+                            output.flush()
+                        }
+                    }
+                }
+            }.apply {
+                name = "http-apm-dynamic-header-test"
+                start()
+            }
+            val uploader = HttpApmUploader(
+                endpoint = "http://127.0.0.1:${server.localPort}/events",
+                headerProvider = HttpHeaderProvider {
+                    mapOf("Authorization" to "Bearer token-${providerCalls.incrementAndGet()}")
+                },
+                logger = SILENT_LOGGER
+            )
+
+            assertTrue(uploader.uploadBatch(listOf(event("first"))))
+            assertTrue(uploader.uploadBatch(listOf(event("second"))))
+            serverThread.join(TimeUnit.SECONDS.toMillis(TEST_TIMEOUT_SECONDS))
+
+            assertEquals(EXPECTED_DYNAMIC_REQUESTS, providerCalls.get())
+            assertEquals(listOf("Bearer token-1", "Bearer token-2"), authorizations)
+        }
+    }
+
+    /** Unsafe provider output fails the upload without sending the injected value. */
+    @Test
+    fun `dynamic header provider rejects response splitting`() {
+        val uploader = HttpApmUploader(
+            endpoint = "http://127.0.0.1:1/events",
+            headerProvider = HttpHeaderProvider {
+                mapOf("Authorization" to "Bearer valid\r\nX-Injected: value")
+            },
+            logger = SILENT_LOGGER
+        )
+
+        assertFalse(uploader.uploadBatch(listOf(event("unsafe"))))
+    }
+
+    /** Endpoint providers are evaluated per request and valid HTTPS rotation is accepted. */
+    @Test
+    fun `dynamic endpoint provider resolves secure destination for every request`() {
+        val providerCalls = AtomicInteger(0)
+        val uploader = HttpApmUploader(
+            endpoint = "https://bootstrap.example/v1/events",
+            endpointProvider = HttpEndpointProvider {
+                providerCalls.incrementAndGet()
+                "https://collector.example/v1/events"
+            },
+            logger = SILENT_LOGGER
+        )
+        val resolver = HttpApmUploader::class.java.getDeclaredMethod("resolveRequestEndpoint")
+        resolver.isAccessible = true
+
+        assertEquals("https://collector.example/v1/events", resolver.invoke(uploader))
+        assertEquals("https://collector.example/v1/events", resolver.invoke(uploader))
+        assertEquals(EXPECTED_DYNAMIC_REQUESTS, providerCalls.get())
+    }
+
+    /** Insecure remote endpoint values retain the application-bundled destination. */
+    @Test
+    fun `dynamic endpoint rejects insecure override`() {
+        val bootstrap = "https://bootstrap.example/v1/events"
+        val uploader = HttpApmUploader(
+            endpoint = bootstrap,
+            endpointProvider = HttpEndpointProvider { "http://collector.example/v1/events" },
+            logger = SILENT_LOGGER
+        )
+        val resolver = HttpApmUploader::class.java.getDeclaredMethod("resolveRequestEndpoint")
+        resolver.isAccessible = true
+
+        assertEquals(bootstrap, resolver.invoke(uploader))
+    }
+
     /**
      * 单个预置 HTTP 响应的描述。
      *
@@ -233,5 +323,12 @@ class HttpApmUploaderTest {
             override fun w(message: String) = Unit
             override fun e(message: String, throwable: Throwable?) = Unit
         }
+
+        /** Number of requests used to prove per-request provider evaluation. */
+        private const val EXPECTED_DYNAMIC_REQUESTS = 2
+
+        /** Minimal successful HTTP response returned by the dynamic-header test server. */
+        private const val SUCCESS_RESPONSE =
+            "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
     }
 }

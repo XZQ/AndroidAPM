@@ -78,6 +78,15 @@ class ApmConfigTest {
         assertTrue(config.enableHttpGzip)
     }
 
+    /** 默认 HTTP Headers 和动态 provider 都不注入宿主凭据。 */
+    @Test
+    fun `default http authentication inputs are empty`() {
+        val config = ApmConfig()
+        assertTrue(config.httpHeaders.isEmpty())
+        assertTrue(config.httpHeaderProvider.currentHeaders().isEmpty())
+        assertFalse(config.enableDynamicHttpEndpoint)
+    }
+
     /** 默认上传租约为两分钟。 */
     @Test
     fun `default upload lease is two minutes`() {

@@ -2,12 +2,15 @@
 
 > 同步日期：2026-07-16。当前源码与测试优先于历史文档。
 
+构建基线统一为 JDK 17 和 Java 17 字节码；主构建、included builds 与独立 Maven consumer 均在 settings 阶段校验运行 JDK。
+
 ## 推荐阅读顺序
 
 1. [整体架构](00_整体架构.md)
 2. [apm-core](01_apm-core.md)
 3. [model / storage / uploader](02_apm-model-storage-uploader.md)
-4. 当前任务对应的监控或扩展模块
+4. [签名远程配置](20_apm-remote-config.md)
+5. 当前任务对应的监控或扩展模块
 
 ## 基础架构
 
@@ -16,6 +19,7 @@
 | [00_整体架构](00_整体架构.md) | 产品边界、模块依赖、事件管线、生命周期、线程与交付语义 |
 | [01_apm-core](01_apm-core.md) | 初始化、模块生命周期、dispatcher、多进程、自监控、降级 |
 | [02_model-storage-uploader](02_apm-model-storage-uploader.md) | 事件模型、codec、SQLite outbox、HTTP、重试和确认 |
+| [20_apm-remote-config](20_apm-remote-config.md) | 短期鉴权、HTTPS/ETag、Ed25519、LKG、kill switch、采样/限流/endpoint |
 
 ## 15 个监控模块
 
