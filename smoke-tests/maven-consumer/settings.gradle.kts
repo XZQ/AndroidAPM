@@ -1,7 +1,3 @@
-check(JavaVersion.current() == JavaVersion.VERSION_17) {
-    "Maven consumer smoke build requires JDK 17; current runtime is ${JavaVersion.current()}."
-}
-
 pluginManagement {
     repositories {
         google()

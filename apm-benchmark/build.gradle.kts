@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.androidx.benchmark)
 }
 
+java {
+    // Benchmark 与 SDK 模块使用相同的 Java 17 编译/测试工具链。
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 android {
     namespace = "com.apm.benchmark"
     compileSdk = 34

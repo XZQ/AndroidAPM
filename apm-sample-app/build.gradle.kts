@@ -5,6 +5,13 @@ plugins {
     id("com.apm.slow-method")
 }
 
+java {
+    // Gradle 可由兼容的新 JDK 启动，应用编译仍固定使用 Java 17 toolchain。
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 android {
     namespace = "com.apm.sample"
     compileSdk = 34

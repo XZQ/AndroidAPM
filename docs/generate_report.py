@@ -83,7 +83,7 @@ def add_summary_table(document: Document) -> None:
         ("主源码", "154", "149 Kotlin + 4 C + 1 proto"),
         ("测试文件", "92", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
-        ("构建栈", "JDK 17 / Gradle 8.13", "AGP 8.13.2 / Kotlin 2.2.21 / Java 17 bytecode"),
+        ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
     ]
     table = document.add_table(rows=1, cols=3)

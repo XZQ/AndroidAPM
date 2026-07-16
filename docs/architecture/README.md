@@ -2,7 +2,7 @@
 
 > 同步日期：2026-07-16。当前源码与测试优先于历史文档。
 
-构建基线统一为 JDK 17 和 Java 17 字节码；主构建、included builds 与独立 Maven consumer 均在 settings 阶段校验运行 JDK。
+构建基线统一为 Java 17 toolchain 和 Java 17 字节码；主构建、included builds 与独立 Maven consumer 允许使用 Gradle/AGP 支持的 JDK 17+ runtime。
 
 ## 推荐阅读顺序
 

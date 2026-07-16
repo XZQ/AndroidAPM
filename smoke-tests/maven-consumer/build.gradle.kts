@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.kotlin.android)
 }
 
+java {
+    // consumer 验证固定使用 Java 17 toolchain，同时允许兼容的 Gradle 运行 JDK。
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 android {
     namespace = "com.apm.consumer.smoke"
     compileSdk = 34

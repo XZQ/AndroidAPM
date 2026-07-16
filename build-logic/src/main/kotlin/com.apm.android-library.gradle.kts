@@ -12,6 +12,13 @@ val apmCompileSdk = 34
 /** 统一最低支持 SDK 版本。 */
 val apmMinSdk = 24
 
+java {
+    // 编译器和测试运行时统一使用 Java 17，不受启动 Gradle 的兼容 JDK 版本影响。
+    toolchain {
+        languageVersion.set(JavaLanguageVersion.of(17))
+    }
+}
+
 android {
     compileSdk = apmCompileSdk
 

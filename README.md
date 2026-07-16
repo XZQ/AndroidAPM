@@ -10,7 +10,7 @@
 - 26 个构建单元：24 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 154 个主源码文件：149 Kotlin + 4 C + 1 proto
 - 92 个测试/benchmark 文件
-- Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / JDK 17
+- Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
 详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)。所有云端事项统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
@@ -346,7 +346,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 构建与验证
 
-必须使用 JDK 17；settings 会拒绝其他 JDK 版本：
+推荐直接使用 JDK 17。Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest

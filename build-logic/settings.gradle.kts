@@ -1,7 +1,3 @@
-check(JavaVersion.current() == JavaVersion.VERSION_17) {
-    "build-logic requires JDK 17 to run Gradle; current runtime is ${JavaVersion.current()}."
-}
-
 // build-logic 是仓库内共享构建约定的 included build，只承载 convention plugin，不发布产物。
 pluginManagement {
     // kotlin-dsl 等构建插件的解析仓库

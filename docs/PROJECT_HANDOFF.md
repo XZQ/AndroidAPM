@@ -33,12 +33,13 @@
 | 扩展模块 | 2 |
 | 主源码 | 154：149 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 92 |
-| JDK | 17 |
+| Gradle runtime | JDK 17+ |
+| Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
 | Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
 | JVM bytecode | Java 17 |
 
-主构建、两个 included build 和独立 Maven consumer 都会在 settings 阶段拒绝非 JDK 17 运行时；Java/Kotlin 编译与发布制品统一为 Java 17 字节码。
+主构建、两个 included build 和独立 Maven consumer 都使用 Java 17 toolchain，并允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Java/Kotlin 编译与发布制品统一为 Java 17 字节码。
 
 远程配置里程碑的源码和文档位于同一交付提交；不要在交接文档内固化会立即过期的“最新提交号”，使用 Git 历史判断实际 tip。
 
@@ -119,14 +120,14 @@ Apm.emit
 ./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
 ```
 
-全部通过。Root Gradle XML 报告合计 94 个套件、595 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 23 份 lint HTML、4,708,872 字节的 sample unsigned Release APK，以及 Maven Local 中 21 个 AAR、23 个 JAR、22 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。model、Android library、Gradle plugin 与 sample 的代表性 class 文件均为 major version 61（Java 17）。
+全部通过。Root Gradle XML 报告合计 94 个套件、595 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过。生成 23 份 lint HTML、4,708,872 字节的 sample unsigned Release APK，以及 Maven Local 中 21 个 AAR、23 个 JAR、22 个 POM。`apm-benchmark` 未发布，Release 与 AndroidTest Kotlin 已编译；独立 consumer 已从本地制品清理重建成功。model、Android library、Gradle plugin 与 sample 的代表性 class 文件均为 major version 61（Java 17）。另用 JDK 21.0.11 启动 Gradle 后，根构建配置和 `:apm-model:test` 成功，model class 仍为 major version 61。
 
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
-2. 确认 `JAVA_HOME` 指向 JDK 17；settings 会拒绝使用其他 JDK 版本。
+2. 推荐 `JAVA_HOME` 指向 JDK 17；也可使用 Gradle/AGP 支持的更新 JDK，实际编译与测试仍由 Java 17 toolchain 执行。
 3. 安装 Android SDK 34 和项目需要的 NDK/CMake。
 4. 按 AGENTS 读序阅读。
 5. 执行：
