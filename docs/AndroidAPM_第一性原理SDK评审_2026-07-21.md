@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，162 个主源码文件，100 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；最新 critical-handoff/loss-attribution 定向验证为 core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个模块 lint 均无问题。定向结果不把旧全根结论自动外推到新源码。
+> 当前基线：`develop` 分支，27 个构建单元，163 个主源码文件，100 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 630 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 676 tests，plugin 独立报告。time-semantics/event-snapshot 定向验证另覆盖 core 与 15 个监控/扩展模块，共 77 suites / 527 tests，根 lint 通过。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -34,7 +34,7 @@
 | P1 观察者效应 | 4.6 | 固定 time/allocation 预算门 + 模块高水位隔离已落地；单 worker 吞吐上限仍明确存在 |
 | P2 投递可靠性 | 4.8 | outbox claim/lease 教科书级，几乎挑不出毛病 |
 | P3 隐私安全 | 4.8 | PII 默认开启，并覆盖文本规则与高置信敏感字段名；自定义业务字段仍需接入方治理 |
-| P4 测量方法学 | 4.7 | FPS 改为单调时间窗口，FrameMetrics 使用 primitive rolling accumulator；真机方法学仍需设备矩阵 |
+| P4 测量方法学 | 4.8 | epoch/单调职责分离；FPS 按真实 interval/elapsed time 计算并按刷新率封顶；真机方法学仍需设备矩阵 |
 | P5 资源有界 | 4.9 | 队列、payload、存储总量、大数解析与诊断均有明确上限，溢出受控 |
 | P6 宿主安全 | 4.9 | fail-safe 边界近乎最佳实践 |
 | P7 模块化 | 4.8 | 内部分层保持独立，`apm-bundle` 提供单依赖分发入口 |
@@ -124,7 +124,7 @@ format v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Cha
 ### P2（可优化，非紧急）
 
 **R7. FPS 时间窗口——已完成**
-`reportIntervalMs=1000` 默认使用单调时钟决定报告边界；deprecated `windowSize` 仅保留源码兼容，不再控制 cadence。无帧时没有伪造 FPS 事件，有帧时窗口语义不再随帧数/设备刷新率漂移。
+`reportIntervalMs=1000` 默认使用单调时钟决定报告边界；deprecated `windowSize` 仅保留源码兼容，不再控制 cadence。FPS 使用相邻回调形成的真实 interval 数除以实际单调耗时，并按 refresh rate 封顶，同时输出 `windowDurationMs`；无帧时没有伪造 FPS 事件。
 
 **R8. FrameMetrics 主线程逐帧分配——已完成 primitive rolling accumulator**
 listener 只把 primitive long 写入固定容量 rolling accumulator；窗口快照时才构造报告对象。测试覆盖滚动淘汰、聚合结果与 API 26 delayed-frame 门禁，避免 120Hz 路径上的逐帧 report-object allocation。
@@ -160,13 +160,14 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 11 | 单依赖消费者入口（R11） | P2 | 已实现 transitives-only `apm-bundle` |
 | 12 | HttpURLConnection 接入（R12） | P2 | 已实现显式 wrapper 与异常边界测试 |
 | 13 | 关键事件 hand-off + loss reason/priority | P1 | Crash/ANR 同步本地接管；drop 三维计数并显式保留 unknown |
+| 14 | 时间语义 + 直接事件快照 | P1 | epoch/单调职责分离；异步 hand-off 冻结 fields/context/extras |
 
 ---
 
 ## 5. 闭环验证与局限
 
-- **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 92 suites / 605 tests；`apm-model:test` 通过 4 suites / 40 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：最近 critical-handoff/loss-attribution 源码在 JDK 17.0.14 下通过 core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均 0 failures/errors/skips，三个 lint 均 `No issues found`；此前 R1 host gate、R5、R11 publication/consumer、R12 network 与 wire V2 证据仍分别保留在项目/交接文档。
+- **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 630 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
+- **定向测试/构建**：最新 time-semantics/event-snapshot 源码在 JDK 17.0.14 下通过 core 与 15 个监控/扩展模块共 77 suites / 527 tests，均 0 failures/errors/skips；根 `lintDebug --rerun-tasks` 通过。此前 R1 host gate、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 47 个本地链接。
 - **仍需真机/外部系统**：接受物理设备上的预算 gate、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵、生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。模拟器 benchmark 只证明 instrumentation/parser 链路，不能替代物理性能结论。
 

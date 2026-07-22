@@ -1,6 +1,7 @@
 package com.apm.crash
 
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
@@ -31,7 +32,7 @@ object NativeCrashMonitor {
     private var signalHandlerInstalled = false
 
     /** 最近一次 tombstone 检查时间。 */
-    private var lastCheckTime: Long = 0L
+    private var lastCheckElapsedTime: Long = 0L
 
     // --- 常量 ---
     /** 模块名。 */
@@ -172,12 +173,14 @@ object NativeCrashMonitor {
      * 这是 JNI 层不可用时的降级方案。
      */
     fun checkRecentTombstone() {
-        val now = System.currentTimeMillis()
+        val nowElapsedMs = ApmClock.monotonicTimeMillis()
         // 限制检查频率
-        if (now - lastCheckTime < TOMBSTONE_CHECK_INTERVAL_MS) {
+        if (lastCheckElapsedTime > 0L &&
+            nowElapsedMs - lastCheckElapsedTime < TOMBSTONE_CHECK_INTERVAL_MS
+        ) {
             return
         }
-        lastCheckTime = now
+        lastCheckElapsedTime = nowElapsedMs
 
         try {
             val tombstoneDir = File(TOMBSTONE_DIR)
@@ -192,7 +195,8 @@ object NativeCrashMonitor {
                 ?: return
 
             // 检查是否是上次之后的新 crash
-            if (recentFile.lastModified() > lastCheckTime - TOMBSTONE_CHECK_INTERVAL_MS) {
+            val oldestAcceptedModifiedAt = ApmClock.wallTimeMillis() - TOMBSTONE_CHECK_INTERVAL_MS
+            if (recentFile.lastModified() > oldestAcceptedModifiedAt) {
                 val content = recentFile.readText().take(MAX_BACKTRACE_LENGTH)
                 parseAndReportTombstone(content)
             }

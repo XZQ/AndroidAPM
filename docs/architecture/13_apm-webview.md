@@ -55,3 +55,7 @@ Android 没有进程级 WebView 注册表。`WebviewModule` 对宿主明确指�
 ## 测试
 
 Config、module callback、页面隔离/资源 waterfall 状态，以及 Robolectric install/uninstall 和 delegate preservation 有测试；真实 WebView/OEM 内核/JS 执行仍需设备矩阵。
+
+## 时间语义
+
+页面、资源和显式 JavaScript duration 使用 `ApmClock` 单调时间；page/resource 事件 timestamp 保持 epoch，系统时间跳变不会制造负 waterfall。

@@ -5,6 +5,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
@@ -163,7 +164,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             return
         }
         // 记录页面加载起始时间
-        pageLoadStartMap[url] = System.currentTimeMillis()
+        pageLoadStartMap[url] = ApmClock.monotonicTimeMillis()
         // 通知瀑布图追踪器当前活跃页面
         resourceWaterfall?.setActivePage(url)
         scheduleVisibilityTimeout(url)
@@ -181,7 +182,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         val startTime = pageLoadStartMap.remove(url)
         cancelVisibilityTimeout(url)
         if (startTime != null) {
-            val duration = System.currentTimeMillis() - startTime
+            val duration = ApmClock.elapsedMillisSince(startTime)
 
             // 超过页面加载阈值时上报慢加载事件
             if (duration >= config.pageLoadThresholdMs) {
@@ -223,9 +224,10 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         script: String,
         callback: android.webkit.ValueCallback<String>? = null
     ) {
-        val startedAtNanos = System.nanoTime()
+        val startedAtNanos = ApmClock.monotonicTimeNanos()
         webView.evaluateJavascript(script) { result ->
-            val durationMs = (System.nanoTime() - startedAtNanos).coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+            val durationMs = (ApmClock.monotonicTimeNanos() - startedAtNanos)
+                .coerceAtLeast(0L) / NANOS_PER_MILLISECOND
             onJsEvalComplete(webView.url.orEmpty(), script, durationMs)
             callback?.onReceiveValue(result)
         }

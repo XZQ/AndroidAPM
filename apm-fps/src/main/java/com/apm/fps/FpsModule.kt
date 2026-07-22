@@ -149,6 +149,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
             FIELD_JANK_COUNT to stats.jankCount,
             FIELD_FROZEN_COUNT to stats.frozenCount,
             FIELD_FRAME_COUNT to stats.frameCount,
+            FIELD_WINDOW_DURATION_MS to stats.windowDurationMs,
             FIELD_REFRESH_RATE to stats.refreshRate,
             FIELD_DROP_SEVERITY to stats.dropSeverity
         )
@@ -207,6 +208,9 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
 
         /** 字段：总帧数。 */
         private const val FIELD_FRAME_COUNT = "frameCount"
+
+        /** Field: actual monotonic duration covered by frame intervals. */
+        private const val FIELD_WINDOW_DURATION_MS = "windowDurationMs"
 
         /** 字段：场景名。 */
         private const val FIELD_SCENE = "scene"

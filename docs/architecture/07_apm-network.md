@@ -74,3 +74,7 @@ OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调�
 ## 测试
 
 Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override、请求与 phase URL/error 截断，以及 HttpURLConnection 成功/HTTP error/transport exception/宿主异常/report failure/fatal 边界。内部 sink 和假 connection 使字段、severity、执行次数与异常身份可在 JVM 中直接断言；真实 OkHttp/HttpURLConnection/连接池/代理/TLS/重定向/OEM 网络行为仍需集成测试。
+
+## 时间语义
+
+OkHttp interceptor/EventListener 和 HttpURLConnection helper 的总耗时、DNS/connect/TLS/request/response phase 使用 `ApmClock` 单调时间；HTTP-date 与 collector timestamp 仍遵守 epoch/协议语义。

@@ -43,3 +43,7 @@
 ## 测试
 
 Config、GcStats 与 reset-safe 分配/回收窗口差分有 JVM 测试；真实 ART stat、后台限制和长时间准确性需真机验证。
+
+## 时间语义
+
+GC/分配/回收窗口的采样 timestamp 与 interval 使用单调时间；最终事件 timestamp 仍由 core 生成 epoch。ART 累计计数 reset 继续只使对应维度失效。

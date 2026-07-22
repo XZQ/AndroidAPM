@@ -5,7 +5,7 @@ package com.apm.fps
  * 一个统计窗口内的帧率汇总，包含丢帧严重程度分级。
  */
 data class FrameStats(
-    /** 当前窗口 FPS。 */
+    /** Rendered callback rate over actual measured frame intervals, not display refresh rate. */
     val fps: Int,
     /** 掉帧总数。 */
     val droppedFrames: Int,
@@ -15,6 +15,8 @@ data class FrameStats(
     val frozenCount: Int,
     /** 窗口内总帧数。 */
     val frameCount: Int,
+    /** Actual monotonic duration covered by measured frame intervals. */
+    val windowDurationMs: Long = 0L,
     /** 设备刷新率（Hz），用于计算理论帧时间。 */
     val refreshRate: Float = DEFAULT_REFRESH_RATE,
     /** 丢帧严重程度：Level 0-3，参考 Matrix 分级。 */
@@ -39,6 +41,27 @@ data class FrameStats(
         const val DROP_SEVERITY_SEVERE = 3
     }
 }
+
+/**
+ * Calculates rendered frames per second from actual monotonic Choreographer intervals.
+ *
+ * The interval count is used rather than callback count because N callbacks contain N-1 measured
+ * intervals. The result is capped only by the active display refresh rate supplied by the caller.
+ */
+internal fun calculateRenderedFps(
+    measuredIntervalCount: Int,
+    totalIntervalNanos: Long,
+    maximumFps: Int
+): Int {
+    if (measuredIntervalCount <= 0 || totalIntervalNanos <= 0L || maximumFps <= 0) {
+        return 0
+    }
+    val renderedRate = (measuredIntervalCount.toLong() * NANOS_PER_SECOND_FOR_RATE) / totalIntervalNanos
+    return renderedRate.coerceIn(0L, maximumFps.toLong()).toInt()
+}
+
+/** Nanoseconds per second used by rendered-frame-rate calculation. */
+private const val NANOS_PER_SECOND_FOR_RATE = 1_000_000_000L
 
 /**
  * FrameMetrics 各阶段耗时拆分（API 24+）。

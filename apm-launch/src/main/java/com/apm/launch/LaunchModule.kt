@@ -5,8 +5,8 @@ import android.app.Application
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
-import android.os.SystemClock
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
@@ -29,7 +29,7 @@ import com.apm.model.ApmPriority
  * - **热启动**：所有 Activity stop 后短时间恢复（Activity 仍在内存）
  * - **温启动**：所有 Activity stop 后长时间恢复（Activity 被回收，进程仍在）
  *
- * 使用 SystemClock.elapsedRealtime() 确保不受系统时钟调整影响。
+ * Uses the shared monotonic SDK clock so launch durations ignore wall-clock adjustments.
  */
 class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModule, Application.ActivityLifecycleCallbacks {
 
@@ -98,7 +98,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
             android.os.Process.getStartElapsedRealtime()
         } catch (e: Exception) {
             // 防御性回退：以模块初始化时间近似 attachBaseContext
-            SystemClock.elapsedRealtime()
+            ApmClock.monotonicTimeMillis()
         }
     }
 
@@ -131,7 +131,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
             return
         }
         // 记录开始时间到 ThreadLocal 避免并发问题
-        providerStartTimes[providerName] = SystemClock.elapsedRealtime()
+        providerStartTimes[providerName] = ApmClock.monotonicTimeMillis()
     }
 
     /**
@@ -144,7 +144,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
             return
         }
         val startTime = providerStartTimes.remove(providerName) ?: return
-        val duration = SystemClock.elapsedRealtime() - startTime
+        val duration = ApmClock.elapsedMillisSince(startTime)
         contentProviderTotalMs += duration
         contentProviderCount++
     }
@@ -157,7 +157,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         if (!config.enablePhaseTracking) {
             return
         }
-        appOnCreateStartMs = SystemClock.elapsedRealtime()
+        appOnCreateStartMs = ApmClock.monotonicTimeMillis()
     }
 
     /**
@@ -168,7 +168,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         if (!config.enablePhaseTracking) {
             return
         }
-        appOnCreateEndMs = SystemClock.elapsedRealtime()
+        appOnCreateEndMs = ApmClock.monotonicTimeMillis()
     }
 
     // --- ActivityLifecycleCallbacks ---
@@ -184,7 +184,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
 
         if (config.enablePhaseTracking) {
             // 记录 Phase 4: firstActivity.onCreate 开始
-            firstActivityOnCreateMs = SystemClock.elapsedRealtime()
+            firstActivityOnCreateMs = ApmClock.monotonicTimeMillis()
         }
 
         if (!config.enableColdStart) {
@@ -192,7 +192,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         }
         firstActivityCreated = true
 
-        val now = SystemClock.elapsedRealtime()
+        val now = ApmClock.monotonicTimeMillis()
         val coldStartMs = now - processStartMs
 
         // 超时阈值内的才算有效冷启动
@@ -249,7 +249,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
     override fun onActivityResumed(activity: Activity) {
         if (firstActivityCreated && firstActivityOnResumeMs <= 0L && config.enablePhaseTracking) {
             // 记录 Phase 5: firstActivity.onResume
-            firstActivityOnResumeMs = SystemClock.elapsedRealtime()
+            firstActivityOnResumeMs = ApmClock.monotonicTimeMillis()
         }
 
         // 热/温启动的恢复耗时以 resumed 结束，避免把后台停留时间当成启动耗时。
@@ -262,7 +262,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
      */
     override fun onActivityStarted(activity: Activity) {
         startedActivityCount++
-        val now = SystemClock.elapsedRealtime()
+        val now = ApmClock.monotonicTimeMillis()
         relaunchTracker.onActivityStarted(now)
 
         // 热启动/温启动判定：之前处于 stopped 状态，且这是第一个重新 start 的。
@@ -280,7 +280,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         if (startedActivityCount <= 0) {
             startedActivityCount = 0
             isStopped = true
-            activityStoppedTime = SystemClock.elapsedRealtime()
+            activityStoppedTime = ApmClock.monotonicTimeMillis()
             relaunchTracker.onAllActivitiesStopped(activityStoppedTime)
         }
     }
@@ -291,7 +291,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
      * @param activity 当前恢复到前台的 Activity
      */
     private fun reportRelaunchIfNeeded(activity: Activity) {
-        val measurement = relaunchTracker.onActivityResumed(SystemClock.elapsedRealtime()) ?: return
+        val measurement = relaunchTracker.onActivityResumed(ApmClock.monotonicTimeMillis()) ?: return
         val eventName = when (measurement.launchType) {
             RelaunchTracker.LAUNCH_TYPE_HOT -> {
                 if (!config.enableHotStart) {
@@ -343,7 +343,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
                         return
                     }
                     firstFrameRendered = true
-                    firstFrameRenderedMs = SystemClock.elapsedRealtime()
+                    firstFrameRenderedMs = ApmClock.monotonicTimeMillis()
                     reportFirstFrame()
                 }
             })
@@ -361,7 +361,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         mainHandler.post {
             if (!firstFrameRendered) {
                 firstFrameRendered = true
-                firstFrameRenderedMs = SystemClock.elapsedRealtime()
+                firstFrameRenderedMs = ApmClock.monotonicTimeMillis()
                 reportFirstFrame()
             }
         }

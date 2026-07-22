@@ -58,3 +58,7 @@ Native target 具备 16 KiB page-size linker alignment。
 ## 测试
 
 `CrashConfigTest`, `NativeCrashMonitorJniContractTest`, `ExitReasonCollectorTest` 覆盖配置、JNI 名称/绑定和退出原因映射；真实 signal/tombstone/symbolization 需真机验证。
+
+## 时间语义
+
+tombstone 文件 `lastModified` 与事件 timestamp 保持 epoch，以便与文件系统和 collector 对齐；轮询节流使用单调时间。Native SIGQUIT/ANR marker 同样使用 `CLOCK_MONOTONIC` 计算进程内间隔。

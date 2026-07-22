@@ -9,6 +9,15 @@ import org.junit.Test
 /** Deterministic tests for FPS time windows and the allocation-free FrameMetrics accumulator. */
 class FrameWindowPolicyTest {
 
+    /** FPS is based on measured intervals, not callback count or the configured refresh rate. */
+    @Test
+    fun `rendered fps uses actual interval duration`() {
+        assertEquals(60, calculateRenderedFps(60, 1_000_000_000L, maximumFps = 120))
+        assertEquals(30, calculateRenderedFps(30, 1_000_000_000L, maximumFps = 120))
+        assertEquals(120, calculateRenderedFps(240, 1_000_000_000L, maximumFps = 120))
+        assertEquals(0, calculateRenderedFps(0, 0L, maximumFps = 120))
+    }
+
     /** Report cadence follows elapsed time rather than the number of frames observed. */
     @Test
     fun `report window triggers after elapsed wall clock time`() {

@@ -47,3 +47,7 @@ module.onBinderCallComplete(interfaceName, methodName, durationMs)
 ## 测试
 
 Config、显式 wrapper 返回/异常语义和固定窗口 accumulator 有单元测试；真实 AIDL 场景纳入设备集成测试。
+
+## 时间语义
+
+Binder 调用 duration 使用 `ApmClock` 单调时间；事件 timestamp 和 IPC 文件协议中的事件数据继续保持 epoch/既有 wire 语义。

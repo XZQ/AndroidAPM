@@ -20,7 +20,7 @@ internal class FrameReportWindow(reportIntervalMs: Long) {
     }
 
     /**
-     * Records one frame timestamp and returns true exactly when the wall-clock window has elapsed.
+     * Records one frame timestamp and returns true exactly when the monotonic window has elapsed.
      *
      * A regressing timestamp starts a fresh window instead of producing a negative or overflowing
      * duration.

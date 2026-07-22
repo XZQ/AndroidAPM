@@ -46,3 +46,7 @@ Choreographer、Activity lifecycle 与传入主线程 Handler 的 FrameMetrics l
 ## 测试
 
 Config、FrameStats、单调时间窗口、timestamp 回退、FrameMetrics primitive rolling accumulator 和 module lifecycle/计算有单元测试；真实 refresh-rate 切换、多窗口、主线程微开销和设备掉帧仍需要 instrumented/performance 测试。
+
+## FPS 定义与时间语义
+
+报告边界使用单调时间。Rendered FPS = 相邻 Choreographer 回调形成的实际 interval 数 / 这些 interval 的真实 elapsed nanoseconds，并按当前 refresh rate 封顶；事件同时输出 `windowDurationMs`。回调数不会再被当成完整 interval 数，collector timestamp 仍为 epoch。

@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜27 个构建单元｜162 个主源码文件（157 Kotlin + 4 C + 1 proto）｜100 个测试/benchmark 文件
+> 文档同步：2026-07-22｜27 个构建单元｜163 个主源码文件（158 Kotlin + 4 C + 1 proto）｜100 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -53,7 +53,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 162：157 Kotlin + 4 C + 1 proto |
+| 主源码 | 163：158 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 100 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
@@ -86,7 +86,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | ANR | SIGQUIT flag、Watchdog、堆栈采样、traces、分类/去重、同步 critical hand-off | 注册自动；Native 失败降级 Watchdog |
 | Launch | 真实进程启动基线、冷/热/温、首帧、阶段 | Activity 自动；ContentProvider/App 阶段手动 |
 | Network | OkHttp 全阶段、HttpURLConnection 总耗时、慢/错请求、聚合 | Interceptor/EventListener、显式 `traceHttpUrlConnection` 或手动回调 |
-| FPS | Choreographer 单调时间窗口、FrameMetrics 原始类型滚动累计、掉帧等级 | Activity 生命周期自动 |
+| FPS | Choreographer 单调时间窗口、按实际回调区间计算并按刷新率封顶、FrameMetrics 原始类型滚动累计、掉帧等级 | Activity 生命周期自动 |
 | Slow Method | Looper Hook、栈采样、ASM | ASM 必须由宿主应用 Gradle 插件 |
 | IO | 流代理、慢/主线程 IO、FD/Closeable、去重吞吐窗口、PLT Hook | 显式包装流；Native 依赖运行时 xhook；回调 no-throw |
 | Battery | 电量、CPU、WakeLock/GPS/Alarm | 后三类为宿主回调 |
@@ -135,7 +135,9 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 
 ## 六、分发与宿主开销
 
-`Apm.init` 先执行 runtime profile 校验，再创建 diagnostics/store/thread。默认 `COMPATIBILITY` 保留历史接入；`PRODUCTION_STRICT` 必须显式 `CollectionConsent.GRANTED`、SQLite durable outbox、PII 脱敏、关闭 debug logging，并使用精确 HTTPS endpoint 或显式非 Logcat custom uploader。`DENIED` 在所有 profile 下拒绝初始化。校验通过后 SDK 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。业务上下文默认采用 `SYNCHRONOUS` 精确事件时刻快照，兼容既有语义，但 provider 必须 O(1)、无 IO、无等待锁。可能阻塞的 provider 应使用 `ASYNC_CACHED`：`apm-biz-context` 后台线程按 100 ms–24 h 有界周期刷新，emit 只原子读取最近一次成功的不可变快照；失败保留 LKG，首次成功前为空。登录、退出或租户切换可调用 `Apm.refreshBizContext()` 合并式触发后台刷新，重复调用不无界积压。两种模式都会复制宿主 map，后续修改不会改写已发生事件，recoverable provider 异常记录 internal error 而不向业务调用栈外泄。
+`Apm.init` 先执行 runtime profile 校验，再创建 diagnostics/store/thread。默认 `COMPATIBILITY` 保留历史接入；`PRODUCTION_STRICT` 必须显式 `CollectionConsent.GRANTED`、SQLite durable outbox、PII 脱敏、关闭 debug logging，并使用精确 HTTPS endpoint 或显式非 Logcat custom uploader。`DENIED` 在所有 profile 下拒绝初始化。校验通过后 SDK 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获 epoch 时间戳、线程名及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。直接构造 `ApmEvent` 的内部/测试接入同样会在 dispatcher 或多进程异步 hand-off 前冻结 fields/globalContext/extras，宿主后续修改不会改写已发生事件。业务上下文默认采用 `SYNCHRONOUS` 精确事件时刻快照，兼容既有语义，但 provider 必须 O(1)、无 IO、无等待锁。可能阻塞的 provider 应使用 `ASYNC_CACHED`：`apm-biz-context` 后台线程按 100 ms–24 h 有界周期刷新，emit 只原子读取最近一次成功的不可变快照；失败保留 LKG，首次成功前为空。登录、退出或租户切换可调用 `Apm.refreshBizContext()` 合并式触发后台刷新，重复调用不无界积压。两种模式都会复制宿主 map，recoverable provider 异常记录 internal error 而不向业务调用栈外泄。
+
+`ApmClock` 明确区分两类时间：collector event timestamp、持久化 lease/age、文件 mtime 和 HTTP-date 使用 Unix epoch；延迟、超时、冷却、去重、限流、聚合、采样窗口使用单调时钟并对负 duration 归零。FPS 以相邻回调形成的实际 interval 数除以真实单调耗时，再按当前 refresh rate 封顶，同时上报 `windowDurationMs`；回调数不再被误当成完整帧区间数。
 
 队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；默认在总队列达到 75% 后，已占总容量 50% 的同一来源模块不能继续写入 NORMAL/LOW，给其他模块预留压力槽位。HIGH/CRITICAL 绕过该隔离门禁；满载时仍可原子替换队列内最旧的更低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。模块占用用有界队列内的 O(1) 计数维护，元素 drain 或淘汰时同步释放，不扫描 payload。
 
@@ -311,6 +313,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第十二批 critical-handoff/loss-attribution hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon`：core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。测试覆盖 CRITICAL promotion、ANR 同步 hand-off 成功/失败、remote IPC rejection 归因、queue/storage/uploader drop reasons、reason/priority/reset 一致性、UNATTRIBUTED、SQLite capacity/prune priority recovery 与 fatal error 可见性。该结果是当前源码的定向证据；前述 605-test 仍是最近全根运行。
 
+2026-07-22 的第十三批 time-semantics/event-snapshot hardening 在 JDK 17.0.14 下以 `--rerun-tasks` 执行 core 与 15 个监控/扩展模块的定向测试：77 suites / 527 tests，0 failures/errors/skips；根 `lintDebug --rerun-tasks --no-daemon` 通过。同一源码随后完整刷新：根 96 suites / 630 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，全部 0 failures/errors/skips；根 Android + model 当前为 101 suites / 676 tests，plugin 18 tests 独立报告，并取代前述 605-test 根基线。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。覆盖 duration/expiry/dedup/rate-limit 的单调时钟、collector epoch 时间、span 逆序结束保护、按实际 interval 计算 FPS，以及直接事件在异步边界的 fields/globalContext/extras 不可变快照。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -319,7 +323,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-100 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、drop reason/priority/UNATTRIBUTED 归因、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
+100 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
 
 测试通过不能代替以下验证：
 
@@ -331,7 +335,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、直接事件异步 map 冻结、epoch/单调时钟职责分离、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、按实际 interval 定义的 FPS、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
 

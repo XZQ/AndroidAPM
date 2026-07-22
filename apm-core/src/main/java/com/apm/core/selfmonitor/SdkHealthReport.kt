@@ -1,5 +1,6 @@
 package com.apm.core.selfmonitor
 
+import com.apm.core.ApmClock
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
@@ -35,7 +36,7 @@ data class SdkHealthReport(
     /** Diagnostics file-sink failures. */
     val diagnosticWriteFailureCount: Long = 0L,
     /** 报告生成时间戳（毫秒）。 */
-    val reportTimestamp: Long = System.currentTimeMillis(),
+    val reportTimestamp: Long = ApmClock.wallTimeMillis(),
     /** Complete period loss counts keyed by stable [SdkDropReason] names. */
     val dropCountsByReason: Map<String, Long> = emptyMap(),
     /** Complete period loss counts keyed by priority names plus `UNATTRIBUTED`. */

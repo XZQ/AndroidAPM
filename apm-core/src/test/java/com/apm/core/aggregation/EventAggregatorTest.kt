@@ -147,6 +147,18 @@ class EventAggregatorTest {
     // --- 辅助方法 ---
 
     /** 创建 FPS METRIC 事件。 */
+    /** Expiration uses monotonic time while collector timestamps remain Unix epoch values. */
+    @Test
+    fun `expired window keeps wall timestamps in output`() {
+        val aggregator = EventAggregator(windowMs = 1L, enabled = true)
+        aggregator.process(createMetricEvent(fps = 60.0))
+
+        val result = aggregator.flushExpired(nowElapsedMs = Long.MAX_VALUE).single()
+
+        assertTrue((result.fields["window_start_ms"] as Long) > 1_500_000_000_000L)
+        assertEquals(result.timestamp, result.fields["window_end_ms"])
+    }
+
     private fun createMetricEvent(fps: Double): ApmEvent {
         return ApmEvent(
             module = "fps",

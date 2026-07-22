@@ -32,7 +32,7 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 162：157 Kotlin + 4 C + 1 proto |
+| 主源码 | 163：158 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 100 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
@@ -116,7 +116,8 @@ Apm.emit
 - self-monitor/auto-throttle：开启
 - dispatcher module isolation：开启；75% 高水位 / 单模块 50% 总容量上限，仅约束 NORMAL/LOW
 - biz context：默认 `SYNCHRONOUS` 精确事件时刻快照，provider 必须 O(1)/无 IO/无等待锁；慢 provider 使用 `ASYNC_CACHED`，默认 1s 后台刷新并保留 LKG
-- FPS report interval：1000ms 单调时间窗口；旧 `windowSize` 仅兼容保留
+- FPS report interval：1000ms 单调时间窗口；以相邻回调实际 interval / elapsed time 计算并按 refresh rate 封顶，上报 `windowDurationMs`；旧 `windowSize` 仅兼容保留
+- 时间与快照：collector/持久化/file/HTTP-date 用 epoch；duration/timeout/cooldown/dedup/rate-limit/window 用 `ApmClock` 单调时钟；直接 `ApmEvent` 在异步 hand-off 前冻结三个 map
 - self-diagnostics：开启；200 条 / 4 MiB 内存、256 条 / 4 MiB 队列、每进程 3 × 512 KiB 文件；不自动上传
 - native crash：关闭
 - Hprof/fork dump：关闭
@@ -168,6 +169,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 2026-07-22 的第十一批 collector-wire-V2 定向验证：JDK 17.0.14 下 `:apm-model:test :apm-uploader:testDebugUnitTest :apm-uploader:lintDebug :apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 Markdown / 47 links。测试覆盖 typed scalar、append-only event field 15、稳定 batch identity、固定 resource、编码后字节预算、协议保留请求头、exact whole-batch ACK、strict 协议/resource 校验及 legacy 兼容。该结果是当前源码的定向证据；上面的 605-test 结果仍是最近一次全根运行。
 
 2026-07-22 的第十二批 critical-handoff/loss-attribution 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon` 通过 core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 Markdown / 47 links。覆盖 CRITICAL promotion、ANR 同步 hand-off、remote IPC rejection、固定 drop reason/priority、UNATTRIBUTED、SQLite capacity/prune priority 与 fatal error 边界。该结果是当前源码的定向证据；上面的 605-test 结果仍是最近一次全根运行。
+
+2026-07-22 的第十三批 time-semantics/event-snapshot 定向验证：JDK 17.0.14 下 core 与 15 个监控/扩展模块以 `--rerun-tasks` 通过 77 suites / 527 tests，0 failures/errors/skips；根 `lintDebug --rerun-tasks --no-daemon` 通过。同一源码完整刷新通过根 96 suites / 630 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，全部 0 failures/errors/skips；当前根 Android + model 为 101 suites / 676 tests，plugin 18 tests 独立报告，取代 605-test 根基线。`python docs/verify_docs.py` 通过 43 Markdown / 47 links。覆盖单调 duration/expiry/dedup/rate-limit、epoch collector 时间、span 逆序结束保护、FPS 实际 interval 语义和直接事件异步 map 快照。
 
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 

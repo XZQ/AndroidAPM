@@ -1,5 +1,6 @@
 package com.apm.network
 
+import com.apm.core.ApmClock
 import okhttp3.*
 import java.io.IOException
 import java.net.InetAddress
@@ -75,7 +76,7 @@ class ApmEventListener(
             evictOldestTiming()
         }
         val timing = CallTiming()
-        timing.callStartNs = System.nanoTime()
+        timing.callStartNs = ApmClock.monotonicTimeNanos()
         // OkHttp 4.x 中 request() 是函数调用，不是属性
         timing.url = call.request().url.toString()
         timing.method = call.request().method
@@ -93,7 +94,7 @@ class ApmEventListener(
     }
 
     override fun dnsStart(call: Call, domainName: String) {
-        callTimings[call]?.dnsStartNs = System.nanoTime()
+        callTimings[call]?.dnsStartNs = ApmClock.monotonicTimeNanos()
     }
 
     override fun dnsEnd(call: Call, domainName: String, inetAddressList: List<InetAddress>) {
@@ -103,7 +104,7 @@ class ApmEventListener(
     }
 
     override fun connectStart(call: Call, address: InetSocketAddress, proxy: Proxy) {
-        callTimings[call]?.connectStartNs = System.nanoTime()
+        callTimings[call]?.connectStartNs = ApmClock.monotonicTimeNanos()
     }
 
     override fun connectEnd(call: Call, address: InetSocketAddress, proxy: Proxy, protocol: Protocol?) {
@@ -117,7 +118,7 @@ class ApmEventListener(
     }
 
     override fun secureConnectStart(call: Call) {
-        callTimings[call]?.tlsStartNs = System.nanoTime()
+        callTimings[call]?.tlsStartNs = ApmClock.monotonicTimeNanos()
     }
 
     override fun secureConnectEnd(call: Call, handshake: Handshake?) {
@@ -127,7 +128,7 @@ class ApmEventListener(
     }
 
     override fun requestHeadersStart(call: Call) {
-        callTimings[call]?.requestHeaderStartNs = System.nanoTime()
+        callTimings[call]?.requestHeaderStartNs = ApmClock.monotonicTimeNanos()
     }
 
     override fun requestHeadersEnd(call: Call, request: Request) {
@@ -137,7 +138,7 @@ class ApmEventListener(
     }
 
     override fun responseHeadersStart(call: Call) {
-        callTimings[call]?.responseHeaderStartNs = System.nanoTime()
+        callTimings[call]?.responseHeaderStartNs = ApmClock.monotonicTimeNanos()
     }
 
     override fun responseHeadersEnd(call: Call, response: Response) {
@@ -148,7 +149,7 @@ class ApmEventListener(
     }
 
     override fun responseBodyStart(call: Call) {
-        callTimings[call]?.responseBodyStartNs = System.nanoTime()
+        callTimings[call]?.responseBodyStartNs = ApmClock.monotonicTimeNanos()
     }
 
     /**
@@ -211,7 +212,11 @@ class ApmEventListener(
 
     /** 计算经过时间（纳秒 → 毫秒）。 */
     private fun elapsedMs(startNs: Long): Long {
-        return if (startNs > 0L) (System.nanoTime() - startNs) / NANOS_PER_MS else 0L
+        return if (startNs > 0L) {
+            (ApmClock.monotonicTimeNanos() - startNs).coerceAtLeast(0L) / NANOS_PER_MS
+        } else {
+            0L
+        }
     }
 
     companion object {

@@ -214,21 +214,22 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
      */
     private fun reportAndReset() {
         // 根据实际刷新率计算 FPS
-        val fps = if (measuredFrameIntervals > 0 && totalFrameIntervalNanos > 0L) {
-            ((measuredFrameIntervals * NANOS_PER_SECOND) / totalFrameIntervalNanos).toInt()
-        } else {
-            0
-        }
+        val fps = calculateRenderedFps(
+            measuredIntervalCount = measuredFrameIntervals,
+            totalIntervalNanos = totalFrameIntervalNanos,
+            maximumFps = computeMaxFps()
+        )
 
         // 聚合 FrameMetrics 数据（API 24+）
         val breakdown = aggregateFrameMetrics()
 
         val stats = FrameStats(
-            fps = fps.coerceAtMost(computeMaxFps()),
+            fps = fps,
             droppedFrames = droppedFrames,
             jankCount = jankCount,
             frozenCount = frozenCount,
             frameCount = frameCount,
+            windowDurationMs = totalFrameIntervalNanos / NANOS_PER_MS,
             refreshRate = refreshRate,
             dropSeverity = maxDropSeverity,
             frameMetricsBreakdown = breakdown

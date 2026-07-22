@@ -1,9 +1,9 @@
 package com.apm.slowmethod
 
 import android.os.Looper
-import android.os.SystemClock
 import android.util.Printer
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
@@ -99,13 +99,13 @@ class SlowMethodModule(private val config: SlowMethodConfig = SlowMethodConfig()
 
             if (log.startsWith(DISPATCH_PREFIX)) {
                 // 消息开始分发，记录开始时间
-                dispatchStartTime = SystemClock.uptimeMillis()
+                dispatchStartTime = ApmClock.monotonicTimeMillis()
             } else if (log.startsWith(FINISH_PREFIX)) {
                 // 消息分发完成，计算耗时
                 if (dispatchStartTime <= 0L) {
                     return
                 }
-                val duration = SystemClock.uptimeMillis() - dispatchStartTime
+                val duration = ApmClock.elapsedMillisSince(dispatchStartTime)
                 dispatchStartTime = 0L
 
                 // 超过阈值则上报

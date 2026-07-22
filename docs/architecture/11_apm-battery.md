@@ -49,3 +49,7 @@ scheduled background executor 周期检查；BroadcastReceiver 接收电量变�
 ## 测试
 
 Config、模块 callback/窗口和 `CpuJiffiesSampler` 数学有测试；真实电量广播/proc/OEM 行为需设备验证。
+
+## 时间语义
+
+WakeLock/GPS/Alarm/电量变化窗口和 CPU jiffies 采样间隔使用 `ApmClock` 单调时间；事件 timestamp 保持 epoch，避免手工校时扭曲功耗持续时间。

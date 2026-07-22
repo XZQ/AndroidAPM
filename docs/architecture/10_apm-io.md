@@ -59,3 +59,7 @@ Java wrapper 在底层 read/write/close 已完成后执行的全部监控 bookke
 ## 测试
 
 Config、module、NativeIoHookInstaller 降级和 JNI contract 有测试；真实 PLT hook、ABI、16 KiB page 与文件系统行为需真机测试。
+
+## 时间语义
+
+Java wrapper 与 Native IO session 的操作 duration 通过 `ApmClock` 单调时间计算；文件元数据和 collector timestamp 仍使用各自的 epoch 语义。

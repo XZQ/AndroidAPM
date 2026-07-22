@@ -55,3 +55,7 @@ wrapper 覆盖常用 `rawQuery/query/insert/update/delete/execSQL` 并自动计�
 ## 测试
 
 Config、module 分类与 QueryPlan gate 有 JVM 测试；真实 SQLite planner、Room/并发/大数据库需 instrumentation/真机验证。
+
+## 时间语义
+
+SQL 执行与 EXPLAIN 开销使用 `ApmClock` 单调时间；事件 timestamp 保持 epoch。这里不改变 durable outbox 的 epoch lease/expiry 协议。

@@ -63,3 +63,7 @@ val result = ApmTrace.traced("payment") { span ->
 ## 边界与测试
 
 没有自动 instrumentation、跨线程 context、sampling 或 W3C header 注入。`ApmSpanTest` 覆盖 ID、parent、attributes、error、duration 和幂等 end。
+
+## 时间语义
+
+span start/end timestamp 保持 epoch 供 collector 展示，duration/timeout 使用私有单调起止点。早于 start 的 `end()` 被忽略，不会生成 epoch 量级的伪 duration。

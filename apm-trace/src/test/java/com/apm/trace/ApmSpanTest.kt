@@ -44,6 +44,17 @@ class ApmSpanTest {
         assertEquals(firstDuration, span.durationMs)
     }
 
+    /** Ending an unstarted span does not fabricate a wall-clock-sized duration. */
+    @Test
+    fun span_endBeforeStartIsIgnored() {
+        val span = ApmTrace.span("not_started")
+
+        span.end()
+
+        assertFalse(span.isFinished)
+        assertEquals(-1L, span.durationMs)
+    }
+
     /** 测试 SpanContext 生成：traceId 和 spanId 不为空。 */
     @Test
     fun span_contextGenerated() {

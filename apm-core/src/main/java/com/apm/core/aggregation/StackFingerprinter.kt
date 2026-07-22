@@ -1,5 +1,6 @@
 package com.apm.core.aggregation
 
+import com.apm.core.ApmClock
 import com.apm.model.ApmEvent
 
 /**
@@ -33,6 +34,11 @@ class StackFingerprinter(
      * @return 去重结果：[DedupResult.New] 表示首次出现，[DedupResult.Duplicate] 表示重复
      */
     fun check(event: ApmEvent): DedupResult {
+        return checkAt(event, ApmClock.monotonicTimeMillis())
+    }
+
+    /** Performs one deterministic check at the supplied monotonic time. */
+    internal fun checkAt(event: ApmEvent, nowElapsedMs: Long): DedupResult {
         val stackTrace = event.fields["stack_trace"]?.toString()
             ?: event.fields["stacktrace"]?.toString()
 
@@ -42,13 +48,13 @@ class StackFingerprinter(
         }
 
         val fingerprint = computeFingerprint(stackTrace)
-        val now = System.currentTimeMillis()
+        val now = nowElapsedMs
 
         // 清理过期的指纹条目
         evictExpired(now)
 
         val existing = seenFingerprints[fingerprint]
-        if (existing != null && (now - existing.lastSeenMs) < dedupWindowMs) {
+        if (existing != null && (now - existing.lastSeenElapsedMs) < dedupWindowMs) {
             // 在窗口内重复出现，增加计数
             existing.increment(now)
             return DedupResult.Duplicate(existing.count)
@@ -79,7 +85,7 @@ class StackFingerprinter(
         val iterator = seenFingerprints.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
-            if (now - entry.value.lastSeenMs > dedupWindowMs) {
+            if (now - entry.value.lastSeenElapsedMs > dedupWindowMs) {
                 iterator.remove()
             }
         }
@@ -96,14 +102,14 @@ class StackFingerprinter(
     /** 指纹条目。 */
     private class FingerprintEntry(
         /** 最后出现时间戳。 */
-        var lastSeenMs: Long,
+        var lastSeenElapsedMs: Long,
         /** 出现次数。 */
         var count: Int = 1
     ) {
         /** 增加计数。 */
         fun increment(now: Long) {
             count++
-            lastSeenMs = now
+            lastSeenElapsedMs = now
         }
     }
 

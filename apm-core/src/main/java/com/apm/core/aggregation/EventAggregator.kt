@@ -1,5 +1,6 @@
 package com.apm.core.aggregation
 
+import com.apm.core.ApmClock
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
@@ -79,11 +80,11 @@ class EventAggregator(
         }
 
         val results = mutableListOf<ApmEvent>()
-        val now = System.currentTimeMillis()
+        val nowTimestampMs = ApmClock.wallTimeMillis()
 
         for ((key, bucket) in buckets) {
             if (bucket.eventCount > 0) {
-                val aggregated = bucket.toAggregatedEvent(now)
+                val aggregated = bucket.toAggregatedEvent(nowTimestampMs)
                 results.add(aggregated.toApmEvent())
                 logger?.d("Flushed aggregation bucket $key: ${bucket.eventCount} events")
             }
@@ -96,21 +97,22 @@ class EventAggregator(
     /**
      * Flushes only buckets whose aggregation window has expired.
      *
-     * @param now current wall-clock time
+     * @param nowElapsedMs current monotonic time
      * @return expired aggregate events
      */
     @Synchronized
-    fun flushExpired(now: Long = System.currentTimeMillis()): List<ApmEvent> {
+    fun flushExpired(nowElapsedMs: Long = ApmClock.monotonicTimeMillis()): List<ApmEvent> {
         val results = mutableListOf<ApmEvent>()
+        val nowTimestampMs = ApmClock.wallTimeMillis()
         val iterator = buckets.entries.iterator()
         while (iterator.hasNext()) {
             val (key, bucket) = iterator.next()
-            if (now - bucket.windowStartMs < windowMs) {
+            if (nowElapsedMs - bucket.windowStartElapsedMs < windowMs) {
                 continue
             }
             iterator.remove()
             if (bucket.eventCount > 0) {
-                results += bucket.toAggregatedEvent(now).toApmEvent()
+                results += bucket.toAggregatedEvent(nowTimestampMs).toApmEvent()
             }
         }
         return results
@@ -122,7 +124,8 @@ class EventAggregator(
      */
     private fun aggregateMetric(event: ApmEvent): List<ApmEvent> {
         val bucketKey = "${event.module}/${event.name}"
-        val now = System.currentTimeMillis()
+        val nowElapsedMs = ApmClock.monotonicTimeMillis()
+        val nowTimestampMs = ApmClock.wallTimeMillis()
         val output = mutableListOf<ApmEvent>()
 
         // 获取或创建聚合桶
@@ -133,14 +136,15 @@ class EventAggregator(
                 if (eldest != null) {
                     buckets.remove(eldest.key)
                     if (eldest.value.eventCount > 0) {
-                        output += eldest.value.toAggregatedEvent(now).toApmEvent()
+                        output += eldest.value.toAggregatedEvent(nowTimestampMs).toApmEvent()
                     }
                 }
             }
             bucket = AggregationBucket(
                 module = event.module,
                 name = event.name,
-                windowStartMs = now,
+                windowStartTimestampMs = nowTimestampMs,
+                windowStartElapsedMs = nowElapsedMs,
                 maxSamplesPerField = maxSamplesPerField
             )
             buckets[bucketKey] = bucket
@@ -150,11 +154,11 @@ class EventAggregator(
         bucket.addSample(event.fields)
 
         // 检查窗口是否到期
-        if (now - bucket.windowStartMs >= windowMs) {
+        if (nowElapsedMs - bucket.windowStartElapsedMs >= windowMs) {
             // 窗口到期，输出聚合结果
             buckets.remove(bucketKey)
             if (bucket.eventCount > 0) {
-                val aggregated = bucket.toAggregatedEvent(now)
+                val aggregated = bucket.toAggregatedEvent(nowTimestampMs)
                 logger?.d("Aggregation window expired for $bucketKey: ${bucket.eventCount} events")
                 output += aggregated.toApmEvent()
             }
@@ -203,7 +207,9 @@ private class AggregationBucket(
     /** 事件名。 */
     val name: String,
     /** 窗口起始时间。 */
-    var windowStartMs: Long,
+    val windowStartTimestampMs: Long,
+    /** Monotonic window origin used only for expiration decisions. */
+    val windowStartElapsedMs: Long,
     /** Maximum samples retained per numeric field. */
     private val maxSamplesPerField: Int
 ) {
@@ -242,7 +248,7 @@ private class AggregationBucket(
     /**
      * 将桶内采样数据转换为聚合结果。
      */
-    fun toAggregatedEvent(now: Long): AggregatedEvent {
+    fun toAggregatedEvent(windowEndTimestampMs: Long): AggregatedEvent {
         val fieldStats = mutableMapOf<String, NumericStats>()
         for ((fieldName, accumulator) in fields) {
             fieldStats[fieldName] = accumulator.snapshot()
@@ -251,8 +257,8 @@ private class AggregationBucket(
         return AggregatedEvent(
             module = module,
             name = name,
-            windowStartMs = windowStartMs,
-            windowEndMs = now,
+            windowStartMs = windowStartTimestampMs,
+            windowEndMs = windowEndTimestampMs,
             count = eventCount,
             fieldStats = fieldStats
         )

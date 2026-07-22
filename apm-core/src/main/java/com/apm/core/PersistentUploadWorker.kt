@@ -112,7 +112,7 @@ internal class PersistentUploadWorker(
                 store.claimPending(
                     ownerId = ownerId,
                     limit = batchSize,
-                    nowMs = System.currentTimeMillis(),
+                    nowMs = ApmClock.wallTimeMillis(),
                     leaseDurationMs = leaseDurationMs
                 )
             } catch (error: Exception) {
@@ -136,7 +136,7 @@ internal class PersistentUploadWorker(
                 continue
             }
 
-            val startedAt = System.currentTimeMillis()
+            val startedAt = ApmClock.monotonicTimeMillis()
             if (uploadOnce(batch)) {
                 val ids = batch.map(PendingEvent::id)
                 try {
@@ -151,7 +151,7 @@ internal class PersistentUploadWorker(
                     logger.e("Failed to acknowledge uploaded events", error)
                     Apm.recordInternalError(ERROR_ACKNOWLEDGE, error)
                 }
-                selfMonitor?.recordUploadLatency(System.currentTimeMillis() - startedAt)
+                selfMonitor?.recordUploadLatency(ApmClock.elapsedMillisSince(startedAt))
             } else {
                 val ids = batch.map(PendingEvent::id)
                 try {

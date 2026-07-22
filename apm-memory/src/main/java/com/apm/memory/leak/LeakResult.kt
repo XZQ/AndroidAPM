@@ -1,5 +1,7 @@
 package com.apm.memory.leak
 
+import com.apm.core.ApmClock
+
 /** 泄漏类型枚举。 */
 enum class LeakType {
     /** Activity 泄漏。 */
@@ -30,5 +32,5 @@ data class LeakResult(
     /** GC Root 引用链（从 root 到泄漏对象的路径）。 */
     val referenceChain: List<String> = emptyList(),
     /** 检测时间戳。 */
-    val timestamp: Long = System.currentTimeMillis()
+    val timestamp: Long = ApmClock.wallTimeMillis()
 )

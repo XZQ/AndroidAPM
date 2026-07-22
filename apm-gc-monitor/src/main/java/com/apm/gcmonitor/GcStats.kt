@@ -1,5 +1,7 @@
 package com.apm.gcmonitor
 
+import com.apm.core.ApmClock
+
 /**
  * GC 统计数据快照。
  * 记录某次采样点的 GC 次数、耗时、内存分配速率等。
@@ -14,7 +16,7 @@ data class GcStats(
     /** Java Heap 最大值（字节）。 */
     val javaHeapMax: Long = 0L,
     /** 采样时间戳。 */
-    val timestamp: Long = System.currentTimeMillis(),
+    val timestamp: Long = ApmClock.monotonicTimeMillis(),
     /** Object allocation rate in KiB/second, derived from ART counter deltas. */
     val allocationRateKbPerSec: Float = 0f,
     /** Bytes reclaimed during the latest completed sampling window. */

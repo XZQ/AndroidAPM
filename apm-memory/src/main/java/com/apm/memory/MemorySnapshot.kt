@@ -1,12 +1,14 @@
 package com.apm.memory
 
+import com.apm.core.ApmClock
+
 /**
  * 内存快照数据模型。
  * 一次采样产生的全部内存指标，包括 Java Heap、PSS、Native、系统、GC 等。
  */
 data class MemorySnapshot(
     /** 采样时间戳（毫秒）。 */
-    val timestamp: Long = System.currentTimeMillis(),
+    val timestamp: Long = ApmClock.wallTimeMillis(),
     /** 产生快照的进程名。 */
     val processName: String = "",
 

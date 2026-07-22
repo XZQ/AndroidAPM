@@ -1,5 +1,6 @@
 package com.apm.network
 
+import com.apm.core.ApmClock
 import okhttp3.Interceptor
 import okhttp3.Response
 import java.io.IOException
@@ -20,11 +21,11 @@ class ApmNetworkInterceptor(private val networkModule: NetworkModule) : Intercep
     @Throws(IOException::class)
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        val startTimeMs = System.currentTimeMillis()
+        val startTimeMs = ApmClock.monotonicTimeMillis()
 
         try {
             val response = chain.proceed(request)
-            val durationMs = System.currentTimeMillis() - startTimeMs
+            val durationMs = ApmClock.elapsedMillisSince(startTimeMs)
 
             // 请求成功，上报
             networkModule.onRequestComplete(
@@ -38,7 +39,7 @@ class ApmNetworkInterceptor(private val networkModule: NetworkModule) : Intercep
 
             return response
         } catch (e: IOException) {
-            val durationMs = System.currentTimeMillis() - startTimeMs
+            val durationMs = ApmClock.elapsedMillisSince(startTimeMs)
 
             // 请求失败，上报错误
             networkModule.onRequestComplete(

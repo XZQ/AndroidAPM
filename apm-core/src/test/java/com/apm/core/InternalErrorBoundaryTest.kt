@@ -1,5 +1,6 @@
 package com.apm.core
 
+import com.apm.model.ApmEvent
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
@@ -23,6 +24,38 @@ class InternalErrorBoundaryTest {
 
         assertEquals("before", fieldSnapshot["status"])
         assertEquals("before", extrasSnapshot["source"])
+    }
+
+    /** Direct module events freeze every map at the asynchronous boundary. */
+    @Test
+    fun `complete event snapshots do not follow later host mutation`() {
+        val fields = mutableMapOf<String, Any?>("field" to "before")
+        val context = mutableMapOf("tenant" to "before")
+        val extras = mutableMapOf("extra" to "before")
+        val snapshot = snapshotEvent(
+            ApmEvent(
+                module = "test",
+                name = "snapshot",
+                fields = fields,
+                globalContext = context,
+                extras = extras
+            )
+        )
+
+        fields["field"] = "after"
+        context["tenant"] = "after"
+        extras["extra"] = "after"
+
+        assertEquals("before", snapshot.fields["field"])
+        assertEquals("before", snapshot.globalContext["tenant"])
+        assertEquals("before", snapshot.extras["extra"])
+    }
+
+    /** Invalid/regressing test timestamps cannot create negative telemetry durations. */
+    @Test
+    fun `monotonic duration helper clamps regressing input`() {
+        assertEquals(25L, nonNegativeMonotonicDurationMillis(100L, 125L))
+        assertEquals(0L, nonNegativeMonotonicDurationMillis(125L, 100L))
     }
 
     /** Failure in one internal-error sink must not prevent the independent sink. */

@@ -42,3 +42,7 @@ View 树只能在主线程安全访问，因此遍历在主线程 post callback 
 ## 测试
 
 Config、RenderStats、FrameMetrics fixed-window accumulator 和阈值事件有测试；真实复杂 View/Compose/主线程开销由 `apm-benchmark` 与设备矩阵验证。
+
+## 时间语义
+
+RenderStats 的对外采样 timestamp 明确为 Unix epoch，便于 collector 排序；FrameMetrics 自身提供 duration，不用 epoch 差值推导渲染耗时。

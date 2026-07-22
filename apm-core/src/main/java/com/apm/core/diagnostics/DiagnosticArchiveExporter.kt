@@ -1,5 +1,6 @@
 package com.apm.core.diagnostics
 
+import com.apm.core.ApmClock
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -105,7 +106,7 @@ internal object DiagnosticArchiveExporter {
         return JSONObject()
             .put(MANIFEST_FORMAT_VERSION, EXPORT_FORMAT_VERSION)
             .put(MANIFEST_SDK_VERSION, SDK_VERSION)
-            .put(MANIFEST_EXPORTED_AT_MS, System.currentTimeMillis())
+            .put(MANIFEST_EXPORTED_AT_MS, ApmClock.wallTimeMillis())
             .put(MANIFEST_PROCESS_NAMES, JSONArray(processNames))
             .put(MANIFEST_SESSION_IDS, JSONArray(sessionIds))
             .put(MANIFEST_EXPORTED_RECORDS, read.entries.size)

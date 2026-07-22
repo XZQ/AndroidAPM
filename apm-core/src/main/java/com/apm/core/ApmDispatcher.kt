@@ -228,19 +228,21 @@ internal class ApmDispatcher(
      * 调用线程只做入队，聚合/限流/脱敏/存储全部在 worker 线程执行。
      */
     fun dispatch(event: ApmEvent) {
+        // Directly constructed module events may still reference mutable host maps.
+        val eventSnapshot = snapshotEvent(event)
         selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件，避免关闭期间出现尾部写入。
         if (shutdown) {
-            logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
-            selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
+            logger.d("Dispatcher already shutdown, drop ${eventSnapshot.module}/${eventSnapshot.name}")
+            selfMonitor?.recordDrop(eventSnapshot.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
 
         enqueue(
             QueuedEvent(
-                event = event,
-                priority = event.priority,
-                sourceModule = normalizedModule(event.module)
+                event = eventSnapshot,
+                priority = eventSnapshot.priority,
+                sourceModule = normalizedModule(eventSnapshot.module)
             )
         )
     }
@@ -509,7 +511,7 @@ internal class ApmDispatcher(
         }
 
         try {
-            val startTime = System.currentTimeMillis()
+            val startTime = ApmClock.monotonicTimeMillis()
             // 单事务批量落盘
             val appendResult = store.appendBatchWithResult(toPersist)
             recordStorageResult(appendResult)
@@ -534,7 +536,7 @@ internal class ApmDispatcher(
                     }
                 }
                 // 记录整批处理延迟
-                selfMonitor?.recordUploadLatency(System.currentTimeMillis() - startTime)
+                selfMonitor?.recordUploadLatency(ApmClock.elapsedMillisSince(startTime))
             }
         } catch (error: Exception) {
             logger.e("Failed to dispatch batch of ${toPersist.size} events", error)

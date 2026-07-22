@@ -3,6 +3,7 @@ package com.apm.memory.oom
 import android.content.Context
 import android.os.Debug
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmExecutors
 import com.apm.core.ApmLogger
 import com.apm.memory.MemoryConfig
@@ -73,7 +74,7 @@ internal class HprofDumper(private val context: Context, private val config: Mem
      * 流程：生成文件 → dump → 可选 strip → 上报文件事件。
      */
     private fun dumpInternal(reason: String) {
-        val hprofFile = File(hprofDir, "${System.currentTimeMillis()}_${reason.replaceNonAlpha()}$HPROF_EXTENSION")
+        val hprofFile = File(hprofDir, "${ApmClock.wallTimeMillis()}_${reason.replaceNonAlpha()}$HPROF_EXTENSION")
 
         try {
             // 优先使用 fork 子进程 dump（无 STW）

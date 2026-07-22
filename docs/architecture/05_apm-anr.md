@@ -59,3 +59,7 @@ Watchdog、flag poll 和 SIGQUIT analysis 为命名 daemon/measurement 线程。
 ## 测试
 
 Config、module、flag poller、analysis dispatcher 与 critical hand-off 成功/失败边界有单元测试；Native signal delivery、OEM traces 权限、真实 SQLite fsync 时延和系统 ANR 对齐需真机验证。
+
+## 时间语义
+
+主线程 blocked duration 与多通道去重窗口使用 `ApmClock` 单调时间；上报事件 timestamp 仍为 epoch。这样系统校时不会制造负卡顿或重复 ANR。

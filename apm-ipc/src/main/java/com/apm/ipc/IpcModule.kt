@@ -2,6 +2,7 @@ package com.apm.ipc
 
 import android.os.Looper
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
@@ -73,13 +74,14 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
      * @return application result from [block]
      */
     fun <T> traceBinderCall(interfaceName: String, methodName: String, block: () -> T): T {
-        val startedAtNanos = System.nanoTime()
+        val startedAtNanos = ApmClock.monotonicTimeNanos()
         try {
             return block()
         } finally {
             // Completion is recorded even when the application call throws;
             // the original exception continues to the caller.
-            val durationMs = (System.nanoTime() - startedAtNanos).coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+            val durationMs = (ApmClock.monotonicTimeNanos() - startedAtNanos)
+                .coerceAtLeast(0L) / NANOS_PER_MILLISECOND
             onBinderCallComplete(interfaceName, methodName, durationMs)
         }
     }

@@ -8,7 +8,7 @@
 
 - 同步日期：2026-07-22
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 162 个主源码文件：157 Kotlin + 4 C + 1 proto
+- 163 个主源码文件：158 Kotlin + 4 C + 1 proto
 - 100 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
@@ -21,7 +21,7 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
 
 ```text
 监控模块
-  -> Apm.emit（调用线程捕获时间/线程及 payload；业务上下文按同步或异步缓存模式取不可变快照）
+  -> Apm.emit（调用线程捕获 epoch 时间/线程及 payload；异步边界冻结 fields/globalContext/extras）
   -> 有界队列 2048（75% 高水位后，NORMAL/LOW 单模块默认最多占总容量 50%；高优事件仍可替换最低优先级事件；生产者永不等待）
   -> 可选聚合 -> 限流 -> 默认 PII 脱敏
   -> appendBatch（单轮最多 32 条）
@@ -60,7 +60,7 @@ Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采
 | `apm-anr` | `libapm-anr.so` SIGQUIT 标志 + Watchdog、堆栈采样、原因分类 | 注册后自动运行，Native 失败自动降级 Watchdog |
 | `apm-launch` | 进程真实启动基线、冷/热/温启动、首帧、阶段跟踪 | Activity 生命周期自动；ContentProvider/App 阶段需宿主调用 |
 | `apm-network` | OkHttp DNS→TCP→TLS→Body、HttpURLConnection 总耗时、慢请求和聚合 | 接入 Interceptor/EventListener、显式 `traceHttpUrlConnection`，或手动回调 |
-| `apm-fps` | Choreographer 一秒时间窗口 + FrameMetrics 原始类型滚动累计、掉帧分级 | Activity 生命周期自动 |
+| `apm-fps` | Choreographer 一秒单调窗口，以实际回调区间计算并按刷新率封顶 + FrameMetrics 原始类型滚动累计、掉帧分级 | Activity 生命周期自动 |
 | `apm-slow-method` | Looper Hook、栈采样、ASM 方法插桩 | 运行时注册；ASM 需应用 `com.apm.slow-method` 插件 |
 | `apm-io` | 流代理、主线程/慢 IO、FD/Closeable 泄漏、可选 PLT Hook | 包装流；Native 路径依赖运行时可解析 xhook |
 | `apm-battery` | 电量下降、CPU Jiffies、WakeLock/GPS/Alarm 统计 | 电量/CPU 自动；其余需宿主转发生命周期 |
@@ -467,7 +467,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：按已冻结 V2 协议实现生产 Collector、租户/鉴权、服务端 eventId 幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 

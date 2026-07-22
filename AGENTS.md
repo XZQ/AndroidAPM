@@ -22,7 +22,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `162` (`157` Kotlin + `4` C + `1` proto)
+- Main source files: `163` (`158` Kotlin + `4` C + `1` proto)
 - Test/benchmark files: `100`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
@@ -68,6 +68,8 @@ Eleventh-batch collector-wire-V2 checks on `2026-07-22` used JDK `17.0.14`: `:ap
 
 Twelfth-batch critical-handoff/loss-attribution checks on `2026-07-22` used JDK `17.0.14`: `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon` passed core `27` suites / `184` tests, storage `6` suites / `37` tests, and ANR `5` suites / `26` tests with zero failures/errors/skips; all three lint reports say `No issues found`. Documentation verification passed `43` Markdown files / `47` local links. Tests cover critical-priority promotion, synchronous ANR hand-off success/failure, remote-process IPC rejection attribution, queue/storage/uploader drop reasons, reason/priority/reset invariants, explicit unattributed totals, SQLite capacity/prune priority recovery, and fatal-error visibility. This is focused current-source evidence; the preceding `605`-test root result remains the most recent full-root run.
 
+Thirteenth-batch time-semantics/event-snapshot checks on `2026-07-22` used JDK `17.0.14`: focused unit tests across core plus 15 monitoring/extension modules passed `77` suites / `527` tests with zero failures/errors/skips, and root `lintDebug --rerun-tasks --no-daemon` passed. A same-source full refresh then passed root `96` suites / `630` tests, model `5` suites / `46` tests, and included plugin `1` suite / `18` tests, all with zero failures/errors/skips; root Android plus model is now `101` suites / `676` tests, with plugin reported separately. `python docs/verify_docs.py` passed `43` Markdown files / `47` local links. Tests cover monotonic duration/expiry/dedup/rate-limit windows, epoch collector timestamps, end-before-start span handling, rendered-FPS interval semantics, and immutable direct-event maps at asynchronous hand-off boundaries. This supersedes the preceding `605`-test root result. Wall-clock values remain only where the wire/persistence/file/HTTP contract requires an epoch; in-process elapsed measurements use `ApmClock` monotonic time.
+
 ## Project Boundary
 
 AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
@@ -103,7 +105,7 @@ Registration alone does not make every monitor automatic:
 - Battery WakeLock/GPS/Alarm signals are host callbacks.
 - IO uses explicit stream wrappers and an optional xhook-backed native path. Deprecated `enableAutoHook=false` does not take over arbitrary Java streams; Java ThreadLocal call-path suppression prevents double counting without dropping custom streams, Native callback-depth prevents APM-owned IO recursion, fd sessions use mutex/generation protection, duplicate/small-buffer findings report once per bounded path, and wrapper bookkeeping cannot fail completed host IO.
 - Slow-method ASM requires the host module to apply `com.apm.slow-method`.
-- FPS reports on a monotonic wall-clock interval (`reportIntervalMs=1000` by default) rather than after a fixed frame count. The deprecated `windowSize` remains source-compatible but no longer controls cadence; API 24+ FrameMetrics uses a bounded primitive rolling accumulator on the main callback path.
+- FPS reports on a monotonic interval (`reportIntervalMs=1000` by default) rather than after a fixed frame count. Rendered FPS is measured callback intervals divided by their actual elapsed nanoseconds, capped by the display refresh rate, and reports `windowDurationMs`; the deprecated `windowSize` remains source-compatible but no longer controls cadence. API 24+ FrameMetrics uses a bounded primitive rolling accumulator on the main callback path.
 - Render measures view count/depth and API 24+ FrameMetrics. Deprecated `detectOverdraw=false` is truthful because no supported GPU overdraw counter exists.
 - Thread monitoring inspects count/name/BLOCKED state; real ThreadPoolExecutor backlog requires explicit registration. Generic leak fields are deprecated/false.
 - GC count/time/allocation/reclaim analysis consumes monotonic ART cumulative counters on an `ApmExecutors` background sampler; missing/reset counters invalidate only that dimension/window, invalid intervals clamp to one second, and available heap dimensions continue.

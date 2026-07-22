@@ -8,6 +8,7 @@ import android.os.BatteryManager
 import android.os.Handler
 import android.os.Looper
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
@@ -149,7 +150,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableWakeLockHook) {
             return
         }
-        activeWakeLocks[tag] = System.currentTimeMillis()
+        activeWakeLocks[tag] = ApmClock.monotonicTimeMillis()
     }
 
     /**
@@ -161,7 +162,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
             return
         }
         val acquireTime = activeWakeLocks.remove(tag) ?: return
-        val duration = System.currentTimeMillis() - acquireTime
+        val duration = ApmClock.elapsedMillisSince(acquireTime)
         if (duration >= config.wakeLockThresholdMs) {
             Apm.emit(
                 module = MODULE_NAME,
@@ -186,7 +187,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableGpsMonitor) {
             return
         }
-        activeGpsSessions[tag] = System.currentTimeMillis()
+        activeGpsSessions[tag] = ApmClock.monotonicTimeMillis()
     }
 
     /**
@@ -199,7 +200,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
             return
         }
         val startedAt = activeGpsSessions.remove(tag) ?: return
-        val duration = System.currentTimeMillis() - startedAt
+        val duration = ApmClock.elapsedMillisSince(startedAt)
         if (duration >= config.gpsThresholdMs) {
             emitGpsUsage(tag, duration, EVENT_GPS_USED_TOO_LONG)
         }
@@ -215,7 +216,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableAlarmMonitor || config.alarmFloodThreshold <= 0) {
             return
         }
-        val now = System.currentTimeMillis()
+        val now = ApmClock.monotonicTimeMillis()
         alarmTimestamps += now
         removeExpiredAlarms(now)
         if (alarmTimestamps.size >= config.alarmFloodThreshold) {
@@ -243,13 +244,13 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (lastBatteryLevel < 0) {
             // 首次记录
             lastBatteryLevel = percent
-            lastBatteryTime = System.currentTimeMillis()
+            lastBatteryTime = ApmClock.monotonicTimeMillis()
             return
         }
 
         val drop = lastBatteryLevel - percent
         if (drop >= config.batteryDrainPercent) {
-            val duration = System.currentTimeMillis() - lastBatteryTime
+            val duration = ApmClock.elapsedMillisSince(lastBatteryTime)
             Apm.emit(
                 module = MODULE_NAME,
                 name = EVENT_BATTERY_DRAIN,
@@ -263,7 +264,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
             )
             // 重置基准
             lastBatteryLevel = percent
-            lastBatteryTime = System.currentTimeMillis()
+            lastBatteryTime = ApmClock.monotonicTimeMillis()
         }
     }
 
@@ -272,7 +273,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!config.enableWakeLockHook) {
             return
         }
-        val now = System.currentTimeMillis()
+        val now = ApmClock.monotonicTimeMillis()
         for ((tag, acquireTime) in activeWakeLocks.toMap()) {
             val duration = now - acquireTime
             if (duration >= config.wakeLockThresholdMs) {
@@ -295,7 +296,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!config.enableGpsMonitor) {
             return
         }
-        val now = System.currentTimeMillis()
+        val now = ApmClock.monotonicTimeMillis()
         for ((tag, startedAt) in activeGpsSessions) {
             val duration = now - startedAt
             if (duration >= config.gpsThresholdMs) {
@@ -329,7 +330,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
     /**
      * Removes alarm timestamps outside the current detection window.
      *
-     * @param now current wall-clock time
+     * @param now current monotonic time
      */
     private fun removeExpiredAlarms(now: Long) {
         val cutoff = now - config.checkIntervalMs

@@ -58,3 +58,7 @@ Looper hook 回调在主线程，只做计时/触发；stack sampling 在独立 
 ## 测试
 
 Module/config/tracer 测试覆盖运行时；`apm-plugin` 独立测试验证过滤、方法签名、正常返回、显式/传播异常的 exit 平衡。
+
+## 时间语义
+
+Looper、采样和 ASM tracer 的方法 duration 统一通过 `ApmClock` 单调时间计算；事件 timestamp 保持 epoch，系统校时不改变慢方法判定。

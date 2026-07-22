@@ -135,11 +135,14 @@ class ProcessEventCoordinator internal constructor(
             return
         }
 
+        // Serialization runs later on the IPC writer, so freeze producer-owned maps now.
+        val eventSnapshot = snapshotEvent(event)
+
         try {
             writeExecutor.execute {
                 try {
                     // 进入合批缓冲：按行数阈值或定时器触发批量发布
-                    bufferEvent(event)
+                    bufferEvent(eventSnapshot)
                 } catch (e: Exception) {
                     // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
                     Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
@@ -293,7 +296,7 @@ class ProcessEventCoordinator internal constructor(
                 file.name.endsWith(IPC_FILE_EXTENSION)
             } ?: return
 
-            val now = System.currentTimeMillis()
+            val now = ApmClock.wallTimeMillis()
             cleanupExpiredTempFiles(now)
             for (file in files) {
                 try {

@@ -51,3 +51,7 @@
 ## 测试
 
 Config、LaunchModule 和 RelaunchTracker 覆盖冷/热/温计算和状态转换；系统进程启动与首帧准确性需设备/宏基准校验。
+
+## 时间语义
+
+启动阶段 duration 统一使用 `ApmClock` 单调时间；上报 timestamp 保持 epoch。冷/热/温状态转换不再依赖可跳变的系统墙钟计算耗时。

@@ -1,6 +1,7 @@
 package com.apm.trace
 
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
@@ -50,13 +51,23 @@ class ApmSpan internal constructor(
     var endTimestampMs: Long = -1
         private set
 
+    /** Monotonic start time used only for duration and timeout decisions. */
+    private var startElapsedMs: Long = -1L
+
+    /** Monotonic end time used only for duration and timeout decisions. */
+    private var endElapsedMs: Long = -1L
+
     /** Span 是否已完成。 */
     val isFinished: Boolean
         get() = endTimestampMs > 0
 
     /** Span 持续时间（毫秒）。未结束时返回 -1。 */
     val durationMs: Long
-        get() = if (isFinished) endTimestampMs - startTimestampMs else -1
+        get() = if (isFinished && startElapsedMs >= 0L && endElapsedMs >= startElapsedMs) {
+            endElapsedMs - startElapsedMs
+        } else {
+            -1L
+        }
 
     /** 自定义属性。 */
     private val attributes = LinkedHashMap<String, String>()
@@ -115,7 +126,8 @@ class ApmSpan internal constructor(
         if (!config.enabled) {
             return this
         }
-        startTimestampMs = System.currentTimeMillis()
+        startTimestampMs = ApmClock.wallTimeMillis()
+        startElapsedMs = ApmClock.monotonicTimeMillis()
 
         // 构建 Span 上下文
         val parentRef = parentSpan
@@ -130,7 +142,7 @@ class ApmSpan internal constructor(
 
         // 检查最大持续时间限制
         if (config.maxSpanDurationMs > 0) {
-            maxSpanTimeout = startTimestampMs + config.maxSpanDurationMs
+            maxSpanTimeout = startElapsedMs + config.maxSpanDurationMs
         }
         return this
     }
@@ -140,13 +152,14 @@ class ApmSpan internal constructor(
      * 多次调用安全（幂等）。
      */
     fun end() {
-        if (!config.enabled || isFinished) {
+        if (!config.enabled || isFinished || startElapsedMs < 0L) {
             return
         }
-        endTimestampMs = System.currentTimeMillis()
+        endTimestampMs = ApmClock.wallTimeMillis()
+        endElapsedMs = ApmClock.monotonicTimeMillis()
 
         // 超时检查
-        if (maxSpanTimeout > 0 && endTimestampMs > maxSpanTimeout) {
+        if (maxSpanTimeout > 0 && endElapsedMs > maxSpanTimeout) {
             attributes["timeout"] = "true"
         }
 

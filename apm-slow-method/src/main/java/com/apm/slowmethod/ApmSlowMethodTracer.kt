@@ -1,7 +1,7 @@
 package com.apm.slowmethod
 
-import android.os.SystemClock
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -93,7 +93,7 @@ object ApmSlowMethodTracer {
             return
         }
         val stack = getOrCreateStack()
-        stack.push(Pair(methodSignature, SystemClock.elapsedRealtimeNanos()))
+        stack.push(Pair(methodSignature, ApmClock.monotonicTimeNanos()))
     }
 
     /**
@@ -130,7 +130,7 @@ object ApmSlowMethodTracer {
         }
 
         // 计算方法耗时
-        val durationNs = SystemClock.elapsedRealtimeNanos() - top.second
+        val durationNs = (ApmClock.monotonicTimeNanos() - top.second).coerceAtLeast(0L)
         val durationMs = durationNs / NANOS_PER_MILLIS
 
         // 更新热点方法统计

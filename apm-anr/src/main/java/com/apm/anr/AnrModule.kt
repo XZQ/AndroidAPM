@@ -3,6 +3,7 @@ package com.apm.anr
 import android.os.Handler
 import android.os.Looper
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.core.ApmExecutors
@@ -264,7 +265,7 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
 
             // tick 未被消费且尚未报告过 ANR
             if (!tick.get()) {
-                val now = System.currentTimeMillis()
+                val now = ApmClock.monotonicTimeMillis()
                 val blockedSince = blockedSinceMs.updateAndGet { previous ->
                     if (previous == 0L) now - config.checkIntervalMs else previous
                 }
@@ -293,7 +294,7 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
      * @param source 检测来源（"sigquit" 或 "watchdog"）。
      */
     private fun handleAnrDetection(source: String, blockedDurationMs: Long = config.anrTimeoutMs) {
-        val now = System.currentTimeMillis()
+        val now = ApmClock.monotonicTimeMillis()
         val mainStack = captureMainThreadStack()
 
         // ANR 去重：相同堆栈在窗口内不重复上报

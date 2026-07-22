@@ -1,6 +1,7 @@
 package com.apm.core.diagnostics
 
 import android.util.Log
+import com.apm.core.ApmClock
 import com.apm.core.ApmExecutors
 import java.io.File
 import java.util.ArrayDeque
@@ -22,8 +23,8 @@ internal class DiagnosticRecorder(
     private val sessionId: String,
     /** Independent persistent store. */
     private val store: DiagnosticStore,
-    /** Wall-clock source used by retry scheduling. */
-    private val clockMs: () -> Long = System::currentTimeMillis,
+    /** Monotonic time source used by retry scheduling. */
+    private val clockMs: () -> Long = ApmClock::monotonicTimeMillis,
     /** Interruptible wait used during file-sink cooldown. */
     private val retryWait: (Long) -> Unit = Thread::sleep
 ) {
@@ -62,7 +63,7 @@ internal class DiagnosticRecorder(
     private val fileSinkHealthy = AtomicBoolean(true)
     /** Last sanitized file-sink failure. */
     private val lastFailure = AtomicReference<String?>(null)
-    /** Earliest wall-clock time at which file writes may be retried. */
+    /** Earliest monotonic time at which file writes may be retried. */
     private val nextFileRetryAtMs = AtomicLong(0L)
     /** Cached retained disk bytes; status reads never traverse the filesystem. */
     private val retainedBytes = AtomicLong(0L)
@@ -102,7 +103,7 @@ internal class DiagnosticRecorder(
         val throwable = DiagnosticSanitizer.sanitizeThrowable(error, config.includeStackTraces)
         val entry = DiagnosticEntry(
             sequence = sequence.incrementAndGet(),
-            timestampMs = System.currentTimeMillis(),
+            timestampMs = ApmClock.wallTimeMillis(),
             sessionId = sessionId,
             level = level,
             component = DiagnosticSanitizer.sanitizeMessage(component),
@@ -169,10 +170,10 @@ internal class DiagnosticRecorder(
     /** Waits for accepted records to settle, bounded by [timeoutMs]. */
     fun flush(timeoutMs: Long): Boolean {
         val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0L))
-        val deadline = System.nanoTime() + timeoutNanos
+        val deadline = ApmClock.monotonicTimeNanos() + timeoutNanos
         synchronized(pendingLock) {
             while (pendingWrites.get() > 0L) {
-                val remainingNanos = deadline - System.nanoTime()
+                val remainingNanos = deadline - ApmClock.monotonicTimeNanos()
                 if (remainingNanos <= 0L) {
                     return false
                 }

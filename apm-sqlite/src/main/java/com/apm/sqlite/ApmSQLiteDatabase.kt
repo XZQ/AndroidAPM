@@ -4,8 +4,8 @@ import android.content.ContentValues
 import android.database.Cursor
 import android.database.CursorWrapper
 import android.database.sqlite.SQLiteDatabase
-import android.os.SystemClock
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 
 /**
  * SQLiteDatabase 自动计时包装器。
@@ -109,7 +109,7 @@ class ApmSQLiteDatabase(
      * @return 受影响行数
      */
     fun update(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?): Int {
-        val startMs = SystemClock.elapsedRealtime()
+        val startMs = ApmClock.monotonicTimeMillis()
         val affected = delegate.update(table, values, whereClause, whereArgs)
         report("UPDATE $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}", startMs, affected)
         return affected
@@ -124,7 +124,7 @@ class ApmSQLiteDatabase(
      * @return 受影响行数
      */
     fun delete(table: String, whereClause: String?, whereArgs: Array<String>?): Int {
-        val startMs = SystemClock.elapsedRealtime()
+        val startMs = ApmClock.monotonicTimeMillis()
         val affected = delegate.delete(table, whereClause, whereArgs)
         report("DELETE FROM $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}", startMs, affected)
         return affected
@@ -161,7 +161,7 @@ class ApmSQLiteDatabase(
         queryPlanArgs: Array<String>? = null,
         block: () -> T
     ): T {
-        val startMs = SystemClock.elapsedRealtime()
+        val startMs = ApmClock.monotonicTimeMillis()
         try {
             return block()
         } finally {
@@ -184,7 +184,7 @@ class ApmSQLiteDatabase(
         queryPlanSql: String? = null,
         queryPlanArgs: Array<String>? = null
     ) {
-        val durationMs = SystemClock.elapsedRealtime() - startMs
+        val durationMs = ApmClock.elapsedMillisSince(startMs)
         reportDuration(sql, durationMs, affectedRows, queryPlanSql, queryPlanArgs)
     }
 
@@ -251,13 +251,13 @@ private class FirstAccessReportingCursor(
         if (reported) {
             return block()
         }
-        val startMs = SystemClock.elapsedRealtime()
+        val startMs = ApmClock.monotonicTimeMillis()
         try {
             return block()
         } finally {
             reported = true
             try {
-                onFirstAccess(SystemClock.elapsedRealtime() - startMs)
+                onFirstAccess(ApmClock.elapsedMillisSince(startMs))
             } catch (error: RuntimeException) {
                 // Monitoring must never change Cursor semantics for the host application.
                 Apm.recordInternalError(ERROR_TAG_CURSOR_REPORT, error)

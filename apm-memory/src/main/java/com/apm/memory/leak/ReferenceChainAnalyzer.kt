@@ -1,6 +1,7 @@
 package com.apm.memory.leak
 
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -36,7 +37,7 @@ class ReferenceChainAnalyzer {
             return null
         }
 
-        val startTime = System.currentTimeMillis()
+        val startTime = ApmClock.monotonicTimeMillis()
         try {
             // 打开 Hprof 文件进行二进制读取
             val raf = RandomAccessFile(hprofFile, MODE_READ)
@@ -76,7 +77,7 @@ class ReferenceChainAnalyzer {
                     instanceFields, classNameMap, instanceClassMap
                 )
 
-                val durationMs = System.currentTimeMillis() - startTime
+                val durationMs = ApmClock.elapsedMillisSince(startTime)
                 return ReferenceChainResult(
                     targetClassName = targetClassName,
                     chain = chain,

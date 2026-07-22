@@ -1,7 +1,7 @@
 package com.apm.gcmonitor
 
-import android.os.SystemClock
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
@@ -206,7 +206,7 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
                 gcTimeMs = gcTimeMs,
                 javaHeapUsed = heapUsed,
                 javaHeapMax = heapMax,
-                timestamp = SystemClock.elapsedRealtime(),
+                timestamp = ApmClock.monotonicTimeMillis(),
                 bytesAllocated = bytesAllocated,
                 bytesFreed = bytesFreed
             )

@@ -67,6 +67,15 @@ internal fun snapshotEventFields(fields: Map<String, Any?>): Map<String, Any?> =
 /** Freezes host-owned event extras before a lazy dispatcher observes them. */
 internal fun snapshotEventExtras(extras: Map<String, String>): Map<String, String> = extras.toMap()
 
+/** Freezes every host-owned event map before an asynchronous hand-off. */
+internal fun snapshotEvent(event: ApmEvent): ApmEvent {
+    return event.copy(
+        fields = event.fields.toMap(),
+        globalContext = event.globalContext.toMap(),
+        extras = event.extras.toMap()
+    )
+}
+
 /** Runs one recoverable lifecycle phase and leaves fatal VM errors visible. */
 internal inline fun runRecoverableBoundary(
     block: () -> Unit,
@@ -417,7 +426,7 @@ object Apm {
         val currentState = state ?: return
         // 只在调用线程捕获必须反映发射现场的信息：时间戳、线程名、业务上下文快照；
         // 上下文 map 合并等分配开销推迟到 dispatcher worker 线程执行
-        val timestamp = System.currentTimeMillis()
+        val timestamp = ApmClock.wallTimeMillis()
         val threadName = Thread.currentThread().name
         val bizContext = captureBizContext(currentState)
         // Host callers may reuse mutable maps after emit returns. Freeze the occurrence payload
@@ -458,7 +467,7 @@ object Apm {
         val event = buildEvent(
             currentState, module, name, kind, severity, effectivePriority, scene, foreground,
             fields, extras,
-            timestamp = System.currentTimeMillis(),
+            timestamp = ApmClock.wallTimeMillis(),
             threadName = Thread.currentThread().name,
             bizContext = captureBizContext(currentState)
         )

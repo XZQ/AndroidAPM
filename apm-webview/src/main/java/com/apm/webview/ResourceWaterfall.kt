@@ -3,6 +3,7 @@ package com.apm.webview
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -78,7 +79,7 @@ class ResourceWaterfall(private val config: WebviewConfig) {
             return
         }
 
-        val startedAt = System.currentTimeMillis()
+        val startedAt = ApmClock.monotonicTimeMillis()
         resourceStartTimes.getOrPut(resourceKey(pageUrl, url)) {
             ConcurrentLinkedQueue()
         }.offer(startedAt)
@@ -136,7 +137,7 @@ class ResourceWaterfall(private val config: WebviewConfig) {
         if (starts.isEmpty()) {
             resourceStartTimes.remove(key, starts)
         }
-        val endTime = System.currentTimeMillis()
+        val endTime = ApmClock.monotonicTimeMillis()
         val duration = endTime - startTime
 
         // 查找对应的资源记录并更新
@@ -181,7 +182,7 @@ class ResourceWaterfall(private val config: WebviewConfig) {
     fun onPageComplete(url: String) {
         // 取出该页面的所有资源记录
         val records = pageResources.remove(url) ?: return
-        val pageCompletedAt = System.currentTimeMillis()
+        val pageCompletedAt = ApmClock.monotonicTimeMillis()
         for (record in records) {
             if (record.endTimeMs == 0L) {
                 // Public WebView callbacks do not expose network completion for

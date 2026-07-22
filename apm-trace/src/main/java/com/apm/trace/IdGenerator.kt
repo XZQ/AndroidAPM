@@ -1,5 +1,6 @@
 package com.apm.trace
 
+import com.apm.core.ApmClock
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.atomic.AtomicLong
 
@@ -23,7 +24,7 @@ internal object IdGenerator {
      */
     fun generateTraceId(): String {
         val random = ThreadLocalRandom.current()
-        val hi = System.currentTimeMillis() xor random.nextLong()
+        val hi = ApmClock.wallTimeMillis() xor random.nextLong()
         val lo = random.nextLong()
         return StringBuilder(TRACE_ID_LENGTH).apply {
             appendHexLong(hi)
@@ -37,7 +38,7 @@ internal object IdGenerator {
      */
     fun generateSpanId(): String {
         val random = ThreadLocalRandom.current()
-        val ts = (System.currentTimeMillis() ushr 16) and 0xFFFFFFFFL
+        val ts = (ApmClock.wallTimeMillis() ushr 16) and 0xFFFFFFFFL
         val seq = sequence.getAndIncrement() and 0xFFFFL
         val value = ts xor (seq shl 48) xor random.nextLong()
         return StringBuilder(SPAN_ID_LENGTH).apply {

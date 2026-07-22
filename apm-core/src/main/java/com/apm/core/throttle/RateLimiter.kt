@@ -1,5 +1,6 @@
 package com.apm.core.throttle
 
+import com.apm.core.ApmClock
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -79,7 +80,7 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
         /** 当前可用令牌数。 */
         private val tokens = AtomicLong(capacity.toLong())
         /** 上一次补充令牌的时间戳。 */
-        private val lastRefill = AtomicLong(System.currentTimeMillis())
+        private val lastRefill = AtomicLong(ApmClock.monotonicTimeMillis())
 
         /** Returns whether this bucket already represents the effective dynamic policy. */
         fun matches(capacity: Int, windowMs: Long): Boolean {
@@ -108,7 +109,7 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
          * 使用 CAS 保证只有一个线程执行补充。
          */
         private fun refill() {
-            val now = System.currentTimeMillis()
+            val now = ApmClock.monotonicTimeMillis()
             val last = lastRefill.get()
             if (now - last < windowMs) {
                 return

@@ -1,6 +1,7 @@
 package com.apm.battery
 
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import java.io.BufferedReader
 import java.io.File
 import java.io.FileReader
@@ -23,8 +24,8 @@ class CpuJiffiesSampler(
     private val clockTickHz: Long = resolveClockTickHz(),
     /** 进程 jiffies 读取器；默认读 /proc/self/stat，测试可注入。 */
     private val jiffiesReader: (() -> Long)? = null,
-    /** 墙钟时间源（毫秒）；默认 System.currentTimeMillis，测试可注入。 */
-    private val clock: () -> Long = System::currentTimeMillis
+    /** Monotonic time source in milliseconds; tests may inject deterministic values. */
+    private val clock: () -> Long = ApmClock::monotonicTimeMillis
 ) {
 
     /** 上次采样的进程 jiffies。 */

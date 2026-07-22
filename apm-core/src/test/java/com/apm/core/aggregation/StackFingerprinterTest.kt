@@ -73,6 +73,17 @@ class StackFingerprinterTest {
     }
 
     /** 创建带栈信息的 ALERT 事件。 */
+    /** Dedup expiry follows monotonic time rather than event wall timestamps. */
+    @Test
+    fun `dedup window expires on monotonic time`() {
+        val fingerprinter = StackFingerprinter(dedupWindowMs = 100L)
+        val event = createEvent("at com.app.Main.test(Main.java:10)")
+
+        assertTrue(fingerprinter.checkAt(event, nowElapsedMs = 1_000L) is StackFingerprinter.DedupResult.New)
+        assertTrue(fingerprinter.checkAt(event, nowElapsedMs = 1_099L) is StackFingerprinter.DedupResult.Duplicate)
+        assertTrue(fingerprinter.checkAt(event, nowElapsedMs = 1_201L) is StackFingerprinter.DedupResult.New)
+    }
+
     private fun createEvent(stackTrace: String): ApmEvent {
         return ApmEvent(
             module = "crash",

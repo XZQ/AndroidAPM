@@ -55,3 +55,7 @@
 ## 测试
 
 配置默认值、真实 Android/Robolectric 采样快照、Reporter 快照/告警/泄漏分类、ViewModel Context/View 引用、OOM warn/critical/system/native 边界、Hprof primitive array 清零与截断输入清理，以及 JNI dump 契约由 module/JVM 测试覆盖。报告逻辑通过内部 sink 验证字段和优先级，不依赖全局 `Apm` 状态；真机 ART dump 仍需设备验证。
+
+## 时间语义
+
+采样和文件产物 timestamp 保持 Unix epoch；Hprof 分析 duration 与 OOM 冷却窗口使用 `ApmClock` 单调时间，避免系统时间回拨产生负耗时或绕过冷却。

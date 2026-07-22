@@ -1,5 +1,6 @@
 package com.apm.memory.oom
 
+import com.apm.core.ApmClock
 import com.apm.memory.ApmMemoryReportSink
 import com.apm.memory.MemoryConfig
 import com.apm.memory.MemoryReport
@@ -154,7 +155,7 @@ internal class OomMonitor(
         if (!config.enableHprofDump) {
             return
         }
-        val now = System.currentTimeMillis()
+        val now = ApmClock.monotonicTimeMillis()
         val last = lastDumpTime.get()
         // 冷却期内跳过
         if (hasTriggeredDump.get() && now - last < config.dumpCooldownMs) {

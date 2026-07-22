@@ -65,15 +65,15 @@ static pthread_t s_receiver_thread;
 static atomic_int s_receiver_running = 0;
 
 /**
- * 读取当前 epoch 毫秒时间戳。
+ * 读取任意原点的单调毫秒标记。
  * clock_gettime 是异步信号安全函数，可在处理器内调用。
  *
- * @return epoch 毫秒
+ * @return 单调毫秒
  */
-static long long current_time_ms(void) {
+static long long monotonic_time_ms(void) {
     struct timespec ts;
-    /* CLOCK_REALTIME 与 Java 的 System.currentTimeMillis 同源 */
-    if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+    /* Detection markers use CLOCK_MONOTONIC so wall-clock corrections cannot affect intervals. */
+    if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
         return 0;
     }
     return (long long)ts.tv_sec * MILLIS_PER_SECOND + ts.tv_nsec / NANOS_PER_MILLI;
@@ -92,7 +92,7 @@ static void sigquit_handler(int sig, siginfo_t *info, void *context) {
     (void)context;
 
     /* 时间戳为 0 时兜底写 1，保证 Java 侧能感知到信号 */
-    long long now = current_time_ms();
+    long long now = monotonic_time_ms();
     atomic_store(&s_sigquit_timestamp_ms, now > 0 ? now : 1);
 
     /* 把信号定向转发给 Signal Catcher，保留系统 ANR trace dump 行为；

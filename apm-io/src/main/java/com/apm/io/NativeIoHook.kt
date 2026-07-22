@@ -2,6 +2,7 @@ package com.apm.io
 
 import android.os.Looper
 import com.apm.core.Apm
+import com.apm.core.ApmClock
 import com.apm.core.ApmExecutors
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
@@ -302,7 +303,7 @@ class NativeIoHook(private val config: IoConfig) {
         proxySessionIds[proxy] = sessionId
         activeSessions[sessionId] = IoSession(
             path = path,
-            openTime = System.currentTimeMillis(),
+            openTime = ApmClock.monotonicTimeMillis(),
             threadName = Thread.currentThread().name,
             isMainThread = Looper.myLooper() == Looper.getMainLooper()
         )
@@ -622,7 +623,7 @@ class NativeIoHook(private val config: IoConfig) {
     }
 
     /** Returns monotonic milliseconds for operation-duration measurement. */
-    private fun monotonicTimeMs(): Long = System.nanoTime() / NANOS_PER_MILLISECOND
+    private fun monotonicTimeMs(): Long = ApmClock.monotonicTimeMillis()
 
     /** Executes one source call while marking synchronous Native callbacks as represented by the wrapper. */
     private inline fun <T> withJavaProxyIo(block: () -> T): T {

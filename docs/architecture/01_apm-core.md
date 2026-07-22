@@ -280,3 +280,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 - compatibility 保持源兼容；生产必须显式选择 strict 并声明 consent
 - consent gate 是进程本地；多进程撤回需要宿主传播，磁盘路径为 app-private shared artifacts
 - PII 默认开启；aggregation/multi-process 默认关闭，生产配置仍需明确评审
+
+## 时间与快照语义
+
+`ApmClock` 把 epoch timestamp 与单调 elapsed measurement 分开：事件/持久化协议继续输出 epoch，dispatcher/upload latency、诊断冷却、限流、指纹去重和聚合过期使用单调时间并把负 duration 归零。公共 `emit` 与直接事件入口都在进入异步队列或 IPC 协调器前复制 fields/globalContext/extras。
