@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜26 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜94 个测试/benchmark 文件
+> 文档同步：2026-07-22｜27 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜94 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -49,9 +49,9 @@ monitor module
 |---|---|
 | 分支 | `develop` |
 | runtime tip | 使用 `git log --oneline -n 10` 查看；远程配置实现与本文档同一交付提交 |
-| root Gradle subproject | 24 |
+| root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
-| 总构建单元 | 26 |
+| 总构建单元 | 27 |
 | 主源码 | 157：152 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 94 |
 | Kotlin | 2.2.21 |
@@ -100,6 +100,7 @@ monitor module
 
 | 模块 | 作用 |
 |---|---|
+| `apm-bundle` | 单依赖完整客户端分发；不承载实现类，通过发布 POM 传递暴露 22 个运行时模块 |
 | `apm-trace` | 手动 Span/Trace API，结束后通过 `Apm.emit` 上报 |
 | `apm-otel-exporter` | 输出 OTel-compatible Span/Metric/Log Map；不负责 SDK/网络发送 |
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
@@ -246,7 +247,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十一、构建与发布
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
 
 2026-07-16 在 JDK 17.0.14 执行的开发验证：
 
@@ -284,6 +285,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第五批 biz-context latency hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：24 suites / 172 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。测试覆盖同步不可变快照、异步 SDK 线程执行、首次空值/LKG、recoverable provider 失败、显式请求合并和公共 init/refresh/stop 生命周期。该定向基线证明 `ASYNC_CACHED` emit 不执行宿主 provider；`SYNCHRONOUS` 兼容模式仍依赖接入方遵守 O(1)/无 IO/无等待锁契约。
 
+2026-07-22 的第六批 consumer distribution 验证在 JDK 17.0.14 下执行根 `publishToMavenLocal --no-daemon`、隔离 consumer `clean assembleDebug --no-daemon` 以及 `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon`，全部通过。隔离 consumer 只声明 `com.apm:apm-bundle:0.1.0`，仍可编译来自 core、memory、network、model 和 OTel exporter 的代表性 API。Maven Local 当前包含 22 个 AAR、24 个 JAR 和 23 个 POM；bundle POM 传递暴露 22 个 `com.apm` 运行时制品，AAR 不承载 SDK 实现类。`python docs/verify_docs.py` 通过 41 个 Markdown 文件和 39 个本地链接。该结果证明本地发布与单依赖编译链，不代表 Maven Central 或其他外部仓库已经发布。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -304,7 +307,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 
@@ -324,6 +327,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 ## 十五、文档与历史资料
 
 - `docs/architecture/`：当前模块架构事实源
+- `docs/architecture/21_apm-bundle.md`：单依赖分发的依赖集合、边界与取舍
 - `docs/APM_Review_2026-07-08.md`：历史评审与当前处置状态
 - `docs/APM_Optimization_2026-07-08.md`：历史优化建议与落地状态
 - `docs/architecture/generated-diagrams/`：由当前架构同步生成的 SVG/PNG

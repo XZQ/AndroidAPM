@@ -33,8 +33,6 @@ kotlin {
 }
 
 dependencies {
-    implementation("com.apm:apm-memory:0.1.0")
-    implementation("com.apm:apm-network:0.1.0")
-    implementation("com.apm:apm-otel-exporter:0.1.0")
-    implementation("com.apm:apm-remote-config:0.1.0")
+    // One published bundle must expose representative APIs from all transitive SDK modules.
+    implementation("com.apm:apm-bundle:0.1.0")
 }

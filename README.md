@@ -1,13 +1,13 @@
 # Android APM Framework
 
-模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、稳定事件身份、SQLite 持久化出箱、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、单依赖完整能力 Bundle、稳定事件身份、SQLite 持久化出箱、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
 ## 当前基线
 
 - 同步日期：2026-07-22
-- 26 个构建单元：24 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
+- 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 157 个主源码文件：152 Kotlin + 4 C + 1 proto
 - 94 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
@@ -69,10 +69,11 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-gc-monitor` | GC 次数/耗时、Heap 增长、分配率、回收率 | 定时读取运行时统计 |
 | `apm-render` | View 数量/层级 + API 24 `FrameMetrics` 帧耗时窗口 | Activity 生命周期自动；公共 API 不支持 GPU overdraw 计数 |
 
-### 扩展与构建工具
+### 分发、扩展与构建工具
 
 | 模块 | 作用 |
 |---|---|
+| `apm-bundle` | 单依赖完整客户端分发；AAR 不承载实现类，通过 POM 传递暴露 22 个运行时模块 |
 | `apm-trace` | 手动 Span/Trace API，Span 结束后进入统一事件管线 |
 | `apm-otel-exporter` | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
@@ -84,17 +85,23 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 
 ### 添加依赖
 
-本地开发：
+需要完整客户端能力时，本地源码工程只依赖 Bundle：
 
 ```kotlin
 dependencies {
-    implementation(project(":apm-memory"))
-    implementation(project(":apm-network"))
-    implementation(project(":apm-remote-config"))
+    implementation(project(":apm-bundle"))
 }
 ```
 
-发布到制品库后：
+发布到制品库后同样只需一个坐标：
+
+```kotlin
+dependencies {
+    implementation("com.apm:apm-bundle:0.1.0")
+}
+```
+
+`apm-bundle` 传递暴露基础、监控、Trace、OTel 映射和签名远程配置模块，但不会自动初始化、注册监控模块或应用慢方法 Gradle 插件。体积敏感或只使用部分能力的宿主应继续按需选择细粒度制品，例如：
 
 ```kotlin
 dependencies {
@@ -391,7 +398,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 

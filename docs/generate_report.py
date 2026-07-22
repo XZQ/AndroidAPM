@@ -14,7 +14,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-16"
+REPORT_DATE = "2026-07-22"
 RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
@@ -79,9 +79,9 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
 def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
-        ("构建单元", "26", "24 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "156", "151 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "93", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
+        ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
+        ("主源码", "157", "152 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "94", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -224,6 +224,7 @@ def build_architecture_report() -> Document:
     document.add_paragraph(
         "架构以 apm-core 为编排中心，以 apm-model、apm-storage、apm-uploader 形成数据底座；"
         "15 个监控模块负责采集或接收宿主埋点，apm-trace 与 apm-otel-exporter 提供扩展能力，"
+        "apm-bundle 提供单依赖完整客户端分发，"
         "apm-plugin 在构建期完成慢方法插桩，apm-benchmark 提供非发布真机开销入口。"
     )
     add_diagram(document, "android-apm-overview.png", "图 1：客户端 SDK 总体结构")
@@ -235,6 +236,7 @@ def build_architecture_report() -> Document:
             "监控模块通过 apm-core 上报，不直接操作 SQLite 或 HTTP。",
             "apm-uploader 不反向依赖 apm-core；因此保留模块内执行器和注入式 UploaderLogger。",
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
+            "apm-bundle 只聚合发布依赖，不承载运行时实现，也不自动应用慢方法插件。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
             "apm-benchmark 只生成设备测量入口，不进入 Maven publication。",
         ],

@@ -111,14 +111,14 @@ def document(title: str, subtitle: str, elements: list[str]) -> str:
   <text x="70" y="70" class="title">{escape(title)}</text>
   <text x="70" y="108" class="subtitle">{escape(subtitle)}</text>
   <g filter="url(#shadow)">{''.join(elements)}</g>
-  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-16</text>
+  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-22</text>
 </svg>'''
 
 
 def overview() -> str:
     """Build the high-level client architecture diagram."""
     elements = [
-        box_svg(Box(70, 210, 250, 150, "宿主应用", ("Application", "显式 API / 配置"), "#6D4AA5", "#F8F4FC")),
+        box_svg(Box(70, 210, 250, 150, "宿主应用", ("apm-bundle / 按需模块", "显式 API / 配置"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(390, 175, 340, 220, "监控与扩展模块", ("15 monitoring modules", "apm-trace", "apm-otel-exporter"), "#157A6E", "#F0FAF7")),
         box_svg(Box(800, 175, 300, 220, "apm-core", ("配置与生命周期", "ApmDispatcher", "ApmExecutors / health"), "#1F5A94")),
         box_svg(Box(1170, 175, 360, 220, "数据与控制面", ("apm-model / apm-storage", "apm-uploader", "apm-remote-config"), "#B25D16", "#FFF8F1")),
@@ -141,7 +141,7 @@ def overview() -> str:
 def module_dependencies() -> str:
     """Build the main module dependency diagram."""
     elements = [
-        box_svg(Box(70, 185, 260, 140, "Sample / Benchmark", ("apm-sample-app", "apm-benchmark (不发布)"), "#6D4AA5", "#F8F4FC")),
+        box_svg(Box(70, 165, 260, 180, "分发 / 应用", ("apm-bundle", "apm-sample-app", "apm-benchmark (不发布)"), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(395, 165, 330, 180, "监控模块 × 15", ("自动生命周期采集", "显式 API 采集", "构建期慢方法"), "#157A6E", "#F0FAF7")),
         box_svg(Box(790, 165, 300, 180, "apm-core", ("Apm / Dispatcher", "配置 / 执行器", "内部健康"), "#1F5A94")),
         box_svg(Box(1155, 145, 375, 220, "基础与控制面", ("model / storage / uploader", "remote-config", "eventId + claim lease", "signed config + LKG"), "#B25D16", "#FFF8F1")),
@@ -156,8 +156,9 @@ def module_dependencies() -> str:
         arrow(940, 500, 940, 345, "构建约定", dashed=True),
         pill(70, 765, "箭头指向被调用/依赖侧"),
         pill(430, 765, "uploader 不反向依赖 core", "#B25D16"),
+        pill(850, 765, "apm-bundle 聚合全部 22 个运行时制品", "#6D4AA5"),
     ]
-    return document("AndroidAPM 模块依赖", "24 个根子项目 + 2 个 included builds", elements)
+    return document("AndroidAPM 模块依赖", "25 个根子项目 + 2 个 included builds", elements)
 
 
 def event_pipeline() -> str:

@@ -42,6 +42,7 @@ include(
     ":apm-trace",
     ":apm-otel-exporter",
     ":apm-remote-config",
+    ":apm-bundle",
     ":apm-benchmark",
     ":apm-sample-app"
 )

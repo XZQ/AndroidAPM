@@ -4,9 +4,9 @@
 
 ## 结论
 
-当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
+当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、稳定 eventId、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入和 benchmark harness 已有测试与本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、稳定 eventId、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入和 benchmark harness 已有测试与本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；75% 高水位后，单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
@@ -25,12 +25,13 @@
 
 | 项目 | 数量/版本 |
 |---|---|
-| root subproject | 24 |
+| root subproject | 25 |
 | included build | 2：`apm-plugin`, `build-logic` |
-| 构建单元 | 26 |
+| 构建单元 | 27 |
 | 基础模块 | 5 |
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
+| 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 157：152 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 94 |
 | Gradle runtime | JDK 17+ |
@@ -92,6 +93,8 @@ Apm.emit
 
 初始化方式也必须明确二选一：手动 `Apm.init` 的宿主从合并 manifest 移除 `ApmInitProvider`；自动模式保留 Provider 并配置 `com.apm.config_class`。Sample 使用手动模式，并为 IO wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册及 Battery 回调提供可运行入口。
 
+完整能力宿主可只依赖 `com.apm:apm-bundle:0.1.0`；该制品通过 POM 传递暴露全部 22 个运行时模块，但不会自动初始化、注册模块或应用 `com.apm.slow-method`。体积敏感宿主仍应按需选择细粒度模块。
+
 ## 默认配置注意
 
 - endpoint 空/未知 scheme：安全确认后丢弃，不输出 payload；开发 Logcat 必须显式 `logcat://...`
@@ -140,6 +143,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 2026-07-22 的第四批 dispatcher isolation 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 23 suites / 167 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 Markdown / 37 links。确定性压力测试覆盖默认模块隔离、其他模块保留容量、HIGH 绕过并执行优先级淘汰、百分比约束、关闭开关、总 drop 与 `dispatcherModuleIsolationDropCount` 独立计数。该结果只证明入口容量隔离，不是 dispatcher 多 worker 吞吐或真机性能基线。
 
 2026-07-22 的第五批 biz-context latency 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 24 suites / 172 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 Markdown / 37 links。测试覆盖同步不可变快照、异步 SDK 线程、首次空值/LKG、recoverable provider 失败、显式请求合并和公共 init/refresh/stop 生命周期。该结果证明异步模式 emit 不执行宿主 provider；同步兼容模式仍要求接入方履行 O(1)/无 IO/无等待锁契约。
+
+2026-07-22 的第六批 consumer distribution 定向验证：JDK 17.0.14 下根 `publishToMavenLocal --no-daemon`、隔离 consumer `clean assembleDebug --no-daemon` 与 `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon` 均通过。consumer 只声明 `com.apm:apm-bundle:0.1.0`；Maven Local 当前包含 22 AAR / 24 JAR / 23 POM，bundle POM 传递暴露 22 个 `com.apm` 运行时制品，AAR 不承载 SDK 实现类。`python docs/verify_docs.py` 通过 41 Markdown / 39 links。该结果只覆盖本地发布与单依赖消费，不代表外部 Maven 发布完成。
 
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
