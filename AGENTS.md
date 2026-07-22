@@ -22,8 +22,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `161` (`156` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `97`
+- Main source files: `162` (`157` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `100`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.
@@ -66,6 +66,8 @@ Tenth-batch strict-production/consent checks on `2026-07-22` used JDK `17.0.14`:
 
 Eleventh-batch collector-wire-V2 checks on `2026-07-22` used JDK `17.0.14`: `:apm-model:test :apm-uploader:testDebugUnitTest :apm-uploader:lintDebug :apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` passed model `5` suites / `46` tests, uploader `4` suites / `24` tests, and core `25` suites / `180` tests with zero failures/errors/skips; both lint reports say `No issues found`. `python docs/verify_docs.py` passed `43` Markdown files / `47` local links. Tests cover all supported typed scalars, append-only event field 15, stable batch identity, fixed resource metadata, encoded-size splitting/rejection, protocol-owned request headers, exact whole-batch ACK, strict-profile protocol/resource validation, and legacy compatibility. This is focused current-source evidence; the preceding `605`-test root result remains the most recent full-root run.
 
+Twelfth-batch critical-handoff/loss-attribution checks on `2026-07-22` used JDK `17.0.14`: `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon` passed core `27` suites / `184` tests, storage `6` suites / `37` tests, and ANR `5` suites / `26` tests with zero failures/errors/skips; all three lint reports say `No issues found`. Documentation verification passed `43` Markdown files / `47` local links. Tests cover critical-priority promotion, synchronous ANR hand-off success/failure, remote-process IPC rejection attribution, queue/storage/uploader drop reasons, reason/priority/reset invariants, explicit unattributed totals, SQLite capacity/prune priority recovery, and fatal-error visibility. This is focused current-source evidence; the preceding `605`-test root result remains the most recent full-root run.
+
 ## Project Boundary
 
 AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
@@ -84,7 +86,7 @@ monitor module
   -> integrator-owned collector
 ```
 
-Crash-class events can use synchronous local persistence. Optional multi-process forwarding publishes complete `.tmp` files as `.ipc` files before the uploader process consumes them.
+Crash and ANR use the dedicated `Apm.emitCriticalSync` path: caller-supplied lower priority is promoted to CRITICAL, the shared queue/sampling/aggregation/rate-limit path is bypassed, and success means the complete event reached SQLite or a synchronously published critical IPC file. The path never performs blocking network IO. Optional normal multi-process forwarding still publishes complete `.tmp` files as `.ipc` files before the uploader process consumes them.
 
 Delivery is acknowledged and at least once. Stable `eventId` survives Line Protocol, Protobuf field 14, durable codec, SQLite, and IPC. SQLite write transactions atomically claim rows with owner/expiry; only the owner may acknowledge or fail them, shutdown releases claims, and expired claims are reclaimable. Ambiguous network completion can still retransmit, so the collector must deduplicate by `eventId`.
 
@@ -115,7 +117,7 @@ Important defaults: `ApmRuntimeProfile.COMPATIBILITY` preserves the existing emp
 
 AutoThrottle degradation is immediate and sticky. Recovery requires three consecutive periods at or below 20% drop rate and 3 seconds average upload latency; a degraded or hysteresis-band period resets the recovery streak. Registration and signed dynamic-config reconciliation cannot restart a module while it is held by auto-throttle, and recovery still rechecks process/dynamic/gray gates.
 
-SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated; aggregate export selects up to 16 recent process directories and is bounded to 10,000 records / 16 MiB of uncompressed JSONL. Each periodic `sdk_health` report first records a payload-free numeric summary, including dispatcher module-isolation drops, in this independent journal, then attempts normal telemetry at HIGH priority; the journal copy does not depend on dispatcher/outbox/uploader. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics are not automatically uploaded.
+SDK self-diagnostics are separate from event delivery. They are enabled by default and bound both the 200-record memory ring and 256-record writer queue to 4 MiB each, plus up to three 512 KiB app-private JSONL segments per Android process. Process journals are isolated; aggregate export selects up to 16 recent process directories and is bounded to 10,000 records / 16 MiB of uncompressed JSONL. Each real loss increments the aggregate drop count plus a stable reason and LOW/NORMAL/HIGH/CRITICAL priority counter; aggregate-only compatibility results use an explicit `UNATTRIBUTED` priority rather than inventing one. Capacity eviction and retry/age pruning carry exact SQLite priority counts. Each periodic `sdk_health` report first records this payload-free numeric summary, including dispatcher module-isolation drops, in the independent journal, then attempts normal telemetry at HIGH priority; the journal copy does not depend on dispatcher/outbox/uploader. `ApmDiagnostics` exposes cached status, synchronous/async snapshot and ZIP export, current-process clear, and explicit all-process clear APIs. Diagnostics are not automatically uploaded.
 
 ## Working Rules
 

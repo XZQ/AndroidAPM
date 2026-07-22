@@ -1,6 +1,7 @@
 package com.apm.storage
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmPriority
 
 /**
  * SQLite 存储优先级映射器。
@@ -19,4 +20,8 @@ internal object StoragePriorityMapper {
     fun priorityOf(event: ApmEvent): Int {
         return event.priority.value
     }
+
+    /** Maps one persisted numeric value back to a known priority, or null for corrupt input. */
+    fun fromStoredValue(value: Int): ApmPriority? =
+        ApmPriority.values().firstOrNull { priority -> priority.value == value }
 }

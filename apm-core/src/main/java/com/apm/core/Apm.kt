@@ -27,6 +27,10 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
+/** Promotes every dedicated synchronous hand-off to the strongest storage priority. */
+internal fun criticalHandoffPriority(requested: ApmPriority): ApmPriority =
+    if (requested == ApmPriority.CRITICAL) requested else ApmPriority.CRITICAL
+
 /** Runs independent internal-error sinks without allowing one recoverable failure to block the other. */
 internal inline fun recordInternalErrorSafely(
     selfMonitorSink: () -> Unit,
@@ -429,9 +433,13 @@ object Apm {
     }
 
     /**
-     * Synchronously persists a critical event before process termination.
+     * Synchronously publishes a CRITICAL event to the local SQLite or cross-process hand-off.
      *
-     * @return true when local persistence completed
+     * A caller-supplied lower priority is promoted to [ApmPriority.CRITICAL] so this dedicated API
+     * cannot accidentally weaken its own storage ordering and retention guarantees. This method
+     * never performs a blocking network request.
+     *
+     * @return true when the complete event reached the local hand-off point
      */
     fun emitCriticalSync(
         module: String,
@@ -445,9 +453,10 @@ object Apm {
         extras: Map<String, String> = emptyMap()
     ): Boolean {
         val currentState = state ?: return false
+        val effectivePriority = criticalHandoffPriority(priority)
         // critical 路径保持全同步：立即构建并持久化
         val event = buildEvent(
-            currentState, module, name, kind, severity, priority, scene, foreground,
+            currentState, module, name, kind, severity, effectivePriority, scene, foreground,
             fields, extras,
             timestamp = System.currentTimeMillis(),
             threadName = Thread.currentThread().name,

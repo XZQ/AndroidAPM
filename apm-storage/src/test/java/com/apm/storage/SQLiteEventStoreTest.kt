@@ -124,6 +124,7 @@ class SQLiteEventStoreTest {
             val result = budgetStore.appendWithResult(critical)
 
             assertEquals(1, result.capacityEvictedEventCount)
+            assertEquals(mapOf(ApmPriority.LOW to 1), result.capacityEvictedPriorityCounts)
             val retained = budgetStore.readPending(10).map { it.event }
             assertEquals(listOf(critical, lowNew), retained)
         } finally {
@@ -340,17 +341,21 @@ class SQLiteEventStoreTest {
     @Test
     fun `pruneExpired removes exhausted and aged rows`() {
         // 一条超龄行（时间戳远在过去）
-        store.append(event("aged", timestamp = 1L))
+        store.append(event("aged", priority = ApmPriority.LOW, timestamp = 1L))
         // 一条重试耗尽行
-        store.append(event("exhausted"))
+        store.append(event("exhausted", priority = ApmPriority.CRITICAL))
         val exhaustedId = store.readPending(2).first { it.event.name == "exhausted" }.id
         repeat(MAX_RETRY_FOR_TEST) { store.markRetry(listOf(exhaustedId)) }
         // 一条健康行
         store.append(event("healthy"))
 
-        val pruned = store.pruneExpired(MAX_RETRY_FOR_TEST, ONE_DAY_MS)
+        val result = store.pruneExpiredWithResult(MAX_RETRY_FOR_TEST, ONE_DAY_MS)
 
-        assertEquals(2, pruned)
+        assertEquals(2, result.prunedEventCount)
+        assertEquals(
+            mapOf(ApmPriority.LOW to 1, ApmPriority.CRITICAL to 1),
+            result.priorityCounts
+        )
         assertEquals("healthy", store.readPending(1).single().event.name)
     }
 

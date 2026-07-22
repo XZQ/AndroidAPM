@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜27 个构建单元｜161 个主源码文件（156 Kotlin + 4 C + 1 proto）｜97 个测试/benchmark 文件
+> 文档同步：2026-07-22｜27 个构建单元｜162 个主源码文件（157 Kotlin + 4 C + 1 proto）｜100 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -20,7 +20,7 @@ monitor module
   -> integrator-owned collector
 ```
 
-关键事件可同步到 durable hand-off point。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定时服务端仍须按 `eventId` 去重。
+Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定时服务端仍须按 `eventId` 去重。
 
 ## 二、事实源与接手顺序
 
@@ -53,8 +53,8 @@ monitor module
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 161：156 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 97 |
+| 主源码 | 162：157 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 100 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -83,7 +83,7 @@ monitor module
 |---|---|---|
 | Memory | Heap/PSS/Native Heap、Activity/Fragment/ViewModel 泄漏、OOM、Hprof | 注册自动采样；ViewModel API 手动；dump 默认关闭 |
 | Crash | Java crash、可选 Native signal、tombstone、ApplicationExitInfo | Java 默认；Native crash 默认关闭 |
-| ANR | SIGQUIT flag、Watchdog、堆栈采样、traces、分类/去重 | 注册自动；Native 失败降级 Watchdog |
+| ANR | SIGQUIT flag、Watchdog、堆栈采样、traces、分类/去重、同步 critical hand-off | 注册自动；Native 失败降级 Watchdog |
 | Launch | 真实进程启动基线、冷/热/温、首帧、阶段 | Activity 自动；ContentProvider/App 阶段手动 |
 | Network | OkHttp 全阶段、HttpURLConnection 总耗时、慢/错请求、聚合 | Interceptor/EventListener、显式 `traceHttpUrlConnection` 或手动回调 |
 | FPS | Choreographer 单调时间窗口、FrameMetrics 原始类型滚动累计、掉帧等级 | Activity 生命周期自动 |
@@ -204,7 +204,7 @@ PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证
 
 ## 九、SDK 自诊断
 
-`SdkSelfMonitor` 每 60 秒生成 emit/drop/queue/upload latency/internal error 健康报告。`dispatcherModuleIsolationDropCount` 单列高水位模块隔离造成的丢弃，并同时进入总 `dropCount`/drop rate，便于区分 noisy-neighbor 与其他损失。AutoThrottle 在 drop rate > 50% 或平均上传延迟 > 10 秒时立即保持关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块；恢复必须连续 3 个周期同时满足 drop rate <= 20% 且平均上传延迟 <= 3 秒。迟滞区间或再次退化会重置恢复计数，注册和动态配置也不能绕过当前自动降级集合；恢复时仍重新检查进程、签名动态配置和灰度门禁。
+`SdkSelfMonitor` 每 60 秒生成 emit/drop/queue/upload latency/internal error 健康报告。每次真实 loss 同时累计总数、稳定 `SdkDropReason` 和事件优先级；`sdk_health` 以 `dropReason.<reason>` / `dropPriority.<priority>` 数值字段展开，兼容存储只返回总数时进入 `dropPriority.unattributed`。SQLite capacity eviction 和 outbox retry/age prune 返回并保留精确 priority counts。`dispatcherModuleIsolationDropCount` 继续单列高水位模块隔离造成的丢弃，并同时进入总 `dropCount`/drop rate。AutoThrottle 在 drop rate > 50% 或平均上传延迟 > 10 秒时立即保持关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块；恢复必须连续 3 个周期同时满足 drop rate <= 20% 且平均上传延迟 <= 3 秒。迟滞区间或再次退化会重置恢复计数，注册和动态配置也不能绕过当前自动降级集合；恢复时仍重新检查进程、签名动态配置和灰度门禁。
 
 每份 `sdk_health` 先将仅含数值计数的摘要写入独立诊断 journal，再以 HIGH 优先级尝试普通事件管线。dispatcher 拥塞、采样或限流仍可能影响遥测副本，但不会抹掉独立本地摘要；诊断 sink 的 recoverable 失败也不能阻断事件尝试。
 
@@ -309,6 +309,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第十一批 collector-wire-V2 hardening 在 JDK 17.0.14 下执行 `:apm-model:test :apm-uploader:testDebugUnitTest :apm-uploader:lintDebug :apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。测试覆盖完整 scalar type mapping、append-only event field 15、稳定 batch identity、固定 resource、按实际编码字节拆分/拒绝、协议保留请求头、exact whole-batch ACK、strict 协议/resource 校验和 legacy 兼容。该结果是当前源码的定向证据；前述 605-test 仍是最近全根运行。
 
+2026-07-22 的第十二批 critical-handoff/loss-attribution hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon`：core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。测试覆盖 CRITICAL promotion、ANR 同步 hand-off 成功/失败、remote IPC rejection 归因、queue/storage/uploader drop reasons、reason/priority/reset 一致性、UNATTRIBUTED、SQLite capacity/prune priority recovery 与 fatal error 可见性。该结果是当前源码的定向证据；前述 605-test 仍是最近全根运行。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -317,7 +319,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-97 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
+100 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、drop reason/priority/UNATTRIBUTED 归因、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
 
 测试通过不能代替以下验证：
 
@@ -329,7 +331,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
 

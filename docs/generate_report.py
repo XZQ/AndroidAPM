@@ -80,8 +80,8 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "161", "156 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "97", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
+        ("主源码", "162", "157 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "100", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -109,6 +109,7 @@ def add_capability_table(document: Document) -> None:
     rows = [
         ("生产安全入口", "Strict profile、显式 consent、撤回清理", "初始化前 fail closed；停止 delivery 后清理 queue/outbox/IPC"),
         ("Collector Wire V2", "Typed fields、standard resource、batch ID、size、exact ACK", "Legacy wire 不变；V2 独立 schema 与 endpoint"),
+        ("关键事件与损失证据", "Crash/ANR sync hand-off、drop reason/priority", "绕过共享队列且不做网络；未知 priority 显式 unattributed"),
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),

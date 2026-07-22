@@ -36,6 +36,9 @@ class SdkSelfMonitorTest {
         monitor.recordDrop(ApmPriority.LOW)
         monitor.recordDrop(ApmPriority.NORMAL)
         assertEquals(2L, monitor.getTotalDropCount())
+        assertEquals(1L, monitor.getDropCount(ApmPriority.LOW))
+        assertEquals(1L, monitor.getDropCount(ApmPriority.NORMAL))
+        assertEquals(2L, monitor.getDropCount(SdkDropReason.UNCLASSIFIED))
     }
 
     /** recordDrops 应以一次原子增量记录存储批量淘汰。 */
@@ -47,6 +50,7 @@ class SdkSelfMonitorTest {
         monitor.recordDrops(0)
 
         assertEquals(7L, monitor.getTotalDropCount())
+        assertEquals(7L, monitor.getUnattributedDropPriorityCount())
     }
 
     /** 模块隔离丢弃必须同时进入专用指标和总丢弃数。 */
@@ -61,7 +65,38 @@ class SdkSelfMonitorTest {
         val report = monitor.generateReport()
         assertEquals(1L, report.dropCount)
         assertEquals(1L, report.dispatcherModuleIsolationDropCount)
+        assertEquals(1L, report.dropCountsByReason[SdkDropReason.DISPATCHER_MODULE_ISOLATION.name])
+        assertEquals(1L, report.dropCountsByPriority[ApmPriority.NORMAL.name])
         assertEquals(0L, monitor.getTotalDispatcherModuleIsolationDropCount())
+    }
+
+    /** Drop reason and priority remain orthogonal and reconcile to the aggregate count. */
+    @Test
+    fun `drop report classifies reasons priorities and unattributed totals`() {
+        val monitor = SdkSelfMonitor()
+
+        monitor.recordDrop(ApmPriority.CRITICAL, SdkDropReason.DISPATCHER_QUEUE_FULL)
+        monitor.recordDrops(2, ApmPriority.LOW, SdkDropReason.RATE_LIMIT)
+        monitor.recordDropsByPriority(
+            totalCount = 4,
+            priorityCounts = mapOf(ApmPriority.NORMAL to 2, ApmPriority.HIGH to 1),
+            reason = SdkDropReason.STORAGE_CAPACITY_EVICTED
+        )
+
+        val report = monitor.generateReport()
+
+        assertEquals(7L, report.dropCount)
+        assertEquals(1L, report.dropCountsByReason[SdkDropReason.DISPATCHER_QUEUE_FULL.name])
+        assertEquals(2L, report.dropCountsByReason[SdkDropReason.RATE_LIMIT.name])
+        assertEquals(4L, report.dropCountsByReason[SdkDropReason.STORAGE_CAPACITY_EVICTED.name])
+        assertEquals(2L, report.dropCountsByPriority[ApmPriority.LOW.name])
+        assertEquals(2L, report.dropCountsByPriority[ApmPriority.NORMAL.name])
+        assertEquals(1L, report.dropCountsByPriority[ApmPriority.HIGH.name])
+        assertEquals(1L, report.dropCountsByPriority[ApmPriority.CRITICAL.name])
+        assertEquals(1L, report.dropCountsByPriority[SdkSelfMonitor.UNATTRIBUTED_PRIORITY])
+        assertEquals(0L, monitor.getDropCount(SdkDropReason.RATE_LIMIT))
+        assertEquals(0L, monitor.getDropCount(ApmPriority.CRITICAL))
+        assertEquals(0L, monitor.getUnattributedDropPriorityCount())
     }
 
     /** recordUploadLatency 应更新最大延迟。 */
@@ -185,6 +220,27 @@ class SdkSelfMonitorTest {
         assertEquals(5L, fields["dispatcherModuleIsolationDropCount"])
         assertEquals(6L, fields["diagnosticDroppedCount"])
         assertEquals(7L, fields["diagnosticWriteFailureCount"])
+    }
+
+    /** Health telemetry flattens bounded classification maps into typed numeric fields. */
+    @Test
+    fun `health fields flatten drop reason and priority counts`() {
+        val report = SdkHealthReport(
+            emitCount = 2L,
+            dropCount = 2L,
+            queueSize = 0,
+            avgUploadLatencyMs = 0L,
+            maxUploadLatencyMs = 0L,
+            dropCountsByReason = mapOf(SdkDropReason.RATE_LIMIT.name to 2L),
+            dropCountsByPriority = mapOf(ApmPriority.LOW.name to 2L)
+        )
+
+        val fields = report.toCoreHealthFields()
+
+        assertEquals(2L, fields["dropReason.rate_limit"])
+        assertEquals(2L, fields["dropPriority.low"])
+        assertTrue(report.toDiagnosticSummary().contains("dropReason.rate_limit=2"))
+        assertTrue(report.toDiagnosticSummary().contains("dropPriority.low=2"))
     }
 
     /** 独立诊断摘要只包含有界数值健康字段。 */

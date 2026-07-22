@@ -1,6 +1,8 @@
 package com.apm.core
 
+import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
+import com.apm.storage.EventStorePruneResult
 import com.apm.storage.PendingEvent
 import com.apm.storage.PendingEventStore
 import com.apm.uploader.ApmUploader
@@ -205,15 +207,21 @@ internal class PersistentUploadWorker(
      * 空闲周期负责年龄清理，失败路径负责及时清理刚耗尽的行。
      */
     private fun pruneExpiredRows() {
-        val pruned = try {
-            store.pruneExpired(retryFailureLimit, OUTBOX_TTL_MS)
+        val result = try {
+            store.pruneExpiredWithResult(retryFailureLimit, OUTBOX_TTL_MS)
         } catch (error: Exception) {
             logger.e("Failed to prune expired outbox rows", error)
             Apm.recordInternalError(ERROR_PRUNE, error)
-            0
+            EventStorePruneResult(prunedEventCount = 0)
         }
+        val pruned = result.prunedEventCount
         // 有清理动作时输出警告，帮助发现持续性上传失败
         if (pruned > 0) {
+            selfMonitor?.recordDropsByPriority(
+                totalCount = pruned,
+                priorityCounts = result.priorityCounts,
+                reason = SdkDropReason.OUTBOX_EXPIRED_OR_RETRY_EXHAUSTED
+            )
             logger.w(
                 "Pruned $pruned expired outbox rows " +
                     "(retry>=$retryFailureLimit or age>${OUTBOX_TTL_MS}ms)"

@@ -5,6 +5,7 @@ import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.storage.EventStoreAppendResult
@@ -227,14 +228,13 @@ internal class ApmDispatcher(
      * 调用线程只做入队，聚合/限流/脱敏/存储全部在 worker 线程执行。
      */
     fun dispatch(event: ApmEvent) {
+        selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件，避免关闭期间出现尾部写入。
         if (shutdown) {
             logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
+            selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
-
-        // 记录事件发射
-        selfMonitor?.recordEmit()
 
         enqueue(
             QueuedEvent(
@@ -259,14 +259,13 @@ internal class ApmDispatcher(
         sourceModule: String = UNKNOWN_SOURCE_MODULE,
         eventFactory: () -> ApmEvent
     ) {
+        selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件
         if (shutdown) {
             logger.d("Dispatcher already shutdown, drop lazy event")
+            selfMonitor?.recordDrop(priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
-
-        // 记录事件发射
-        selfMonitor?.recordEmit()
 
         enqueue(
             QueuedEvent(
@@ -288,7 +287,7 @@ internal class ApmDispatcher(
         // participates so no caller can steal the slot between a priority eviction and replace.
         if (!admissionLock.tryLock()) {
             logger.d("Dispatcher admission busy, drop priority=${queued.priority}")
-            selfMonitor?.recordDrop(queued.priority)
+            selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_ADMISSION_BUSY)
             return
         }
         try {
@@ -326,16 +325,22 @@ internal class ApmDispatcher(
                         "Dispatcher queue full, evict priority=${evictionCandidate.priority} " +
                             "for priority=${queued.priority}"
                     )
-                    selfMonitor?.recordDrop(evictionCandidate.priority)
+                    selfMonitor?.recordDrop(
+                        evictionCandidate.priority,
+                        SdkDropReason.DISPATCHER_PRIORITY_EVICTION
+                    )
                     return
                 }
                 // Keep accounting explicit if a defensive replacement offer ever fails after
                 // the victim was removed.
-                selfMonitor?.recordDrop(evictionCandidate.priority)
+                selfMonitor?.recordDrop(
+                    evictionCandidate.priority,
+                    SdkDropReason.DISPATCHER_PRIORITY_EVICTION
+                )
             }
 
             logger.d("Dispatcher queue full, drop priority=${queued.priority}")
-            selfMonitor?.recordDrop(queued.priority)
+            selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_QUEUE_FULL)
         } finally {
             admissionLock.unlock()
         }
@@ -409,10 +414,11 @@ internal class ApmDispatcher(
      * @return true when local persistence succeeded
      */
     fun dispatchCriticalSync(event: ApmEvent): Boolean {
+        selfMonitor?.recordEmit()
         if (shutdown) {
+            selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return false
         }
-        selfMonitor?.recordEmit()
         return try {
             val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
             val appendResult = store.appendWithResult(sanitizedEvent)
@@ -424,7 +430,7 @@ internal class ApmDispatcher(
             true
         } catch (error: Exception) {
             logger.e("Failed to persist critical event ${event.module}/${event.name}", error)
-            selfMonitor?.recordDrop(event.priority)
+            selfMonitor?.recordDrop(event.priority, SdkDropReason.STORAGE_FAILURE)
             Apm.recordInternalError(ERROR_PROCESS_EVENT, error)
             false
         }
@@ -491,7 +497,10 @@ internal class ApmDispatcher(
             } catch (error: Exception) {
                 // One malformed or failing monitor event must not terminate the shared worker.
                 logger.e("Failed to process queued event", error)
-                selfMonitor?.recordDrop(queued.event?.priority ?: com.apm.model.ApmPriority.NORMAL)
+                selfMonitor?.recordDrop(
+                    queued.event?.priority ?: queued.priority,
+                    SdkDropReason.EVENT_PROCESSING_FAILURE
+                )
                 Apm.recordInternalError(ERROR_PROCESS_EVENT, error)
             }
         }
@@ -521,7 +530,7 @@ internal class ApmDispatcher(
                     if (!uploader.upload(event)) {
                         logger.w("Uploader rejected ${event.module}/${event.name}")
                         // 上传被拒绝计入丢弃
-                        selfMonitor?.recordDrop(event.priority)
+                        selfMonitor?.recordDrop(event.priority, SdkDropReason.UPLOADER_REJECTED)
                     }
                 }
                 // 记录整批处理延迟
@@ -532,7 +541,7 @@ internal class ApmDispatcher(
             Apm.recordInternalError(ERROR_PERSIST_BATCH, error)
             // 异常整批计入丢弃
             for (event in toPersist) {
-                selfMonitor?.recordDrop(event.priority)
+                selfMonitor?.recordDrop(event.priority, SdkDropReason.STORAGE_FAILURE)
             }
         }
     }
@@ -562,7 +571,7 @@ internal class ApmDispatcher(
         }
         logger.d("Rate limited: $key")
         // 记录事件丢弃
-        selfMonitor?.recordDrop(event.priority)
+        selfMonitor?.recordDrop(event.priority, SdkDropReason.RATE_LIMIT)
         return false
     }
 
@@ -572,7 +581,7 @@ internal class ApmDispatcher(
             return true
         }
         logger.d("Sampled out: ${event.module}/${event.name}")
-        selfMonitor?.recordDrop(event.priority)
+        selfMonitor?.recordDrop(event.priority, SdkDropReason.DYNAMIC_SAMPLING)
         return false
     }
 
@@ -686,9 +695,14 @@ internal class ApmDispatcher(
         admissionLock.lock()
         return try {
             val discarded = queue.size
+            val priorityCounts = queue.groupingBy(QueuedEvent::priority).eachCount()
             queue.clear()
             queuedModuleCounts.clear()
-            selfMonitor?.recordDrops(discarded)
+            selfMonitor?.recordDropsByPriority(
+                totalCount = discarded,
+                priorityCounts = priorityCounts,
+                reason = SdkDropReason.CONSENT_REVOKED
+            )
             discarded
         } finally {
             admissionLock.unlock()
@@ -714,7 +728,7 @@ internal class ApmDispatcher(
         if (result.rejectedEvents.isNotEmpty()) {
             logger.w("Storage rejected ${result.rejectedEvents.size} event payloads")
             for (event in result.rejectedEvents) {
-                selfMonitor?.recordDrop(event.priority)
+                selfMonitor?.recordDrop(event.priority, SdkDropReason.STORAGE_PAYLOAD_REJECTED)
             }
             // The storage isolated bad input instead of throwing away the rest of the batch.
             Apm.recordInternalError(
@@ -724,7 +738,11 @@ internal class ApmDispatcher(
         }
         if (result.capacityEvictedEventCount > 0) {
             logger.w("Storage capacity evicted ${result.capacityEvictedEventCount} events")
-            selfMonitor?.recordDrops(result.capacityEvictedEventCount)
+            selfMonitor?.recordDropsByPriority(
+                totalCount = result.capacityEvictedEventCount,
+                priorityCounts = result.capacityEvictedPriorityCounts,
+                reason = SdkDropReason.STORAGE_CAPACITY_EVICTED
+            )
         }
     }
 

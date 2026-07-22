@@ -89,7 +89,7 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 `ASYNC_CACHED` 用 `BizContextSnapshotSource` 在 `apm-biz-context` 单线程 executor 立即异步首刷并按配置周期刷新。provider 返回值复制后通过 `AtomicReference` 发布；失败只记录 `biz_context_provider` internal error，保留 last-known-good，不用空值覆盖。emit 只读取原子快照，不执行宿主代码；代价是首次成功前为空、正常最多滞后一个刷新周期。`bizContextRefreshIntervalMs` 运行时约束到 100 ms–24 h；`Apm.refreshBizContext()` 可在登录/退出/租户切换后请求即时后台刷新，`AtomicBoolean` 最多允许一个显式 pending 任务，避免请求风暴形成无界队列。stop 和 init rollback 都会关闭该 executor。
 
-`emitCriticalSync` 不走 lazy queue：立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。
+`emitCriticalSync` 不走 lazy queue：调用方较低 priority 自动提升为 CRITICAL，立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。Crash/ANR 均使用该入口；它绕过 sampling/aggregation/rate limit 且不执行网络请求。非 uploader 进程同步 IPC 失败会进入 `IPC_HANDOFF_FAILURE` reason/priority 计数。
 
 ## 5. Dispatcher
 
@@ -221,7 +221,7 @@ PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。存储层隔离拒绝与容量淘汰也会增加 drop 健康计数。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`，并把固定 `SdkDropReason` 与 LOW/NORMAL/HIGH/CRITICAL 计数展开为 `dropReason.*` / `dropPriority.*` 数值字段。队列竞争/满/优先级淘汰/模块隔离、处理失败、采样、限流、storage reject/failure/evict、non-durable uploader reject、outbox prune、consent erase 和 critical IPC failure 均有明确 reason；兼容层只返回总数时进入 `dropPriority.unattributed`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。
 
 `AutoThrottleController` 根据 drop rate/upload latency 维护完整降级集合：drop rate > 50% 或平均上传延迟 > 10 秒立即关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块。恢复阈值采用迟滞：连续 3 个周期 drop rate <= 20% 且平均上传延迟 <= 3 秒才释放；迟滞区间或再次退化会重置计数。`Apm` 在 `initLock` 下镜像该集合，后注册和动态配置不能绕过；恢复仍通过 `startModule` 重查进程、签名配置和灰度门禁。健康事件的 telemetry 副本仍经过同一 dispatcher，但 HIGH 优先级可在入口满载时替换更低优先级事件。
 

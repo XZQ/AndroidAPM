@@ -81,7 +81,7 @@ interface EventStore {
 }
 ```
 
-`appendBatch` 默认逐条调用；SQLite 覆盖为批量编码隔离 + 单事务写入。新增 result API 对旧自定义 store 有默认实现，并返回 `acceptedEventCount`、逐事件 `rejectedEvents` 与 `capacityEvictedEventCount`，供 dispatcher 把存储降级计入 SDK health。
+`appendBatch` 默认逐条调用；SQLite 覆盖为批量编码隔离 + 单事务写入。result API 对旧自定义 store 有默认实现，并返回 `acceptedEventCount`、逐事件 `rejectedEvents`、`capacityEvictedEventCount` 与可用时的 `capacityEvictedPriorityCounts`，供 dispatcher 把存储降级按 reason/priority 计入 SDK health。
 
 `PendingEventStore` 额外提供：
 
@@ -94,6 +94,7 @@ interface EventStore {
 - `releaseClaims(ownerId)`
 - `pendingCount()`
 - `pruneExpired(maxRetryCount, maxAgeMs)`
+- `pruneExpiredWithResult(maxRetryCount, maxAgeMs)`：SQLite 在同一删除事务内返回精确 priority counts；兼容实现保留 aggregate-only 结果
 
 它定义“上传成功后确认删除”的 durable outbox 契约。
 
@@ -136,7 +137,7 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 
 - upload order：priority DESC, timestamp ASC
 - capacity：50,000 行 + 64 MiB live payload 逻辑预算；不包含 SQLite page/WAL 物理开销
-- overflow eviction：任一维度超限时 priority ASC, timestamp ASC，返回实际淘汰数
+- overflow eviction：任一维度超限时 priority ASC, timestamp ASC，返回实际淘汰数与可观测 priority counts
 - recent debug view：timestamp DESC，从 payload decode 后渲染 Line Protocol
 - corrupted payload：记录 id 后隔离删除
 - claim order：priority DESC, timestamp ASC；写事务覆盖 select + owner/expiry update
@@ -144,7 +145,7 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 
 ### 清理
 
-`pruneExpired` 删除：
+`pruneExpiredWithResult` 删除并将原因计为 `OUTBOX_EXPIRED_OR_RETRY_EXHAUSTED`：
 
 - retry_count ≥ caller threshold
 - timestamp 早于当前时间减 maxAge

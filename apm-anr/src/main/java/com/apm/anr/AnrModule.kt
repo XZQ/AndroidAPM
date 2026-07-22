@@ -16,6 +16,24 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
 /**
+ * Executes one synchronous ANR hand-off and surfaces a false result exactly once.
+ *
+ * @param criticalHandoff synchronous local persistence or IPC publication
+ * @param onFailure failure observer invoked only for a false result
+ * @return the unchanged local hand-off result
+ */
+internal inline fun executeCriticalAnrHandoff(
+    criticalHandoff: () -> Boolean,
+    onFailure: () -> Unit
+): Boolean {
+    val handedOff = criticalHandoff()
+    if (!handedOff) {
+        onFailure()
+    }
+    return handedOff
+}
+
+/**
  * ANR 监控模块。
  * 双重检测机制（对标微信 Matrix + Google 最佳实践）：
  *
@@ -332,12 +350,24 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
             fields[FIELD_STACK_SAMPLES] = samples.joinToString(SEPARATOR_SAMPLE)
         }
 
-        Apm.emit(
-            module = MODULE_NAME,
-            name = EVENT_ANR_DETECTED,
-            kind = ApmEventKind.ALERT,
-            severity = severity, priority = ApmPriority.CRITICAL,
-            fields = fields
+        // ANR is a process-liveness signal: bypass the shared queue, sampling, aggregation, and
+        // rate limiting, then synchronously hand the complete event to SQLite or critical IPC.
+        executeCriticalAnrHandoff(
+            criticalHandoff = {
+                Apm.emitCriticalSync(
+                    module = MODULE_NAME,
+                    name = EVENT_ANR_DETECTED,
+                    kind = ApmEventKind.ALERT,
+                    severity = severity,
+                    priority = ApmPriority.CRITICAL,
+                    fields = fields
+                )
+            },
+            onFailure = {
+                val error = IllegalStateException("ANR event did not reach the local critical hand-off")
+                apmContext?.logger?.e("ANR local hand-off failed", error)
+                Apm.recordInternalError(ERROR_ANR_HANDOFF, error)
+            }
         )
 
         apmContext?.logger?.w("ANR detected: source=$source, cause=$cause")
@@ -542,6 +572,8 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         // --- 事件名 ---
         /** ANR 检测事件名。 */
         private const val EVENT_ANR_DETECTED = "anr_detected"
+        /** Internal-error tag for a failed synchronous local ANR hand-off. */
+        private const val ERROR_ANR_HANDOFF = "anr_local_handoff"
 
         // --- 字段名 ---
         /** 字段：主线程堆栈。 */

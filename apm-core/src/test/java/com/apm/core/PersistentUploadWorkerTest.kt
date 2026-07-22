@@ -1,5 +1,7 @@
 package com.apm.core
 
+import com.apm.core.selfmonitor.SdkDropReason
+import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.model.ApmEvent
 import com.apm.storage.PendingEvent
 import com.apm.storage.PendingEventStore
@@ -83,13 +85,14 @@ class PersistentUploadWorkerTest {
     fun `retry disabled prunes row after initial failure`() {
         val store = FakePendingStore(mutableListOf(PendingEvent(13L, event("exhausted"), 0)))
         val attempted = CountDownLatch(1)
+        val selfMonitor = SdkSelfMonitor()
         val worker = PersistentUploadWorker(
             store = store,
             uploader = FailingBatchUploader(attempted),
             retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
             batchSize = 1,
             logger = NoOpLogger,
-            selfMonitor = null
+            selfMonitor = selfMonitor
         )
 
         assertTrue(attempted.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
@@ -98,6 +101,8 @@ class PersistentUploadWorkerTest {
 
         assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
         assertEquals(store.claimedOwner, store.failedOwner)
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.OUTBOX_EXPIRED_OR_RETRY_EXHAUSTED))
+        assertEquals(1L, selfMonitor.getUnattributedDropPriorityCount())
     }
 
     /** A recoverable transport exception follows the same durable retry path as a false result. */

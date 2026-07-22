@@ -230,7 +230,12 @@ class ProcessEventCoordinator internal constructor(
                 return false
             }
             // Serialize against consent cleanup so every completed file is deleted before return.
-            return runCatching { publishBatchFile(listOf(event)) }.getOrDefault(false)
+            return try {
+                publishBatchFile(listOf(event))
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
+                false
+            }
         }
     }
 

@@ -23,6 +23,15 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     /** Dispatcher high-water drops caused specifically by per-module isolation. */
     private val dispatcherModuleIsolationDropCount = AtomicLong(0L)
 
+    /** Per-reason loss counters indexed by stable enum ordinal. */
+    private val dropReasonCounts = Array(SdkDropReason.values().size) { AtomicLong(0L) }
+
+    /** Per-priority loss counters indexed by stable enum ordinal. */
+    private val dropPriorityCounts = Array(ApmPriority.values().size) { AtomicLong(0L) }
+
+    /** Losses whose historical priority was unavailable at the observation boundary. */
+    private val unattributedDropPriorityCount = AtomicLong(0L)
+
     /** 上传延迟累计（毫秒），用于计算平均值。 */
     private val totalUploadLatencyMs = AtomicLong(0L)
 
@@ -51,21 +60,69 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
      * 限流拦截、队列满丢弃时调用。
      *
      * @param priority 被丢弃事件的优先级，用于分类统计
+     * @param reason stable loss reason
      */
-    fun recordDrop(priority: ApmPriority = ApmPriority.NORMAL) {
-        recordDrops(1)
+    fun recordDrop(
+        priority: ApmPriority = ApmPriority.NORMAL,
+        reason: SdkDropReason = SdkDropReason.UNCLASSIFIED
+    ) {
+        recordDrops(1, priority, reason)
     }
 
     /**
      * 批量记录存储容量淘汰等已知数量的事件丢弃。
      *
      * @param count 本次丢弃数量；非正数被忽略
+     * @param priority exact priority, or null when an upstream boundary exposed only an aggregate
+     * @param reason stable loss reason
      */
-    fun recordDrops(count: Int) {
+    fun recordDrops(
+        count: Int,
+        priority: ApmPriority? = null,
+        reason: SdkDropReason = SdkDropReason.UNCLASSIFIED
+    ) {
         if (count <= 0) {
             return
         }
-        dropCount.addAndGet(count.toLong())
+        val delta = count.toLong()
+        dropCount.addAndGet(delta)
+        dropReasonCounts[reason.ordinal].addAndGet(delta)
+        if (priority == null) {
+            unattributedDropPriorityCount.addAndGet(delta)
+        } else {
+            dropPriorityCounts[priority.ordinal].addAndGet(delta)
+        }
+    }
+
+    /**
+     * Records an aggregate loss with every exact priority still visible at the boundary.
+     *
+     * Any difference between [totalCount] and [priorityCounts] is assigned to the explicit
+     * `UNATTRIBUTED` bucket instead of inventing a priority.
+     *
+     * @param totalCount complete number of removed events
+     * @param priorityCounts non-negative exact counts by known priority
+     * @param reason shared reason for the removal
+     */
+    fun recordDropsByPriority(
+        totalCount: Int,
+        priorityCounts: Map<ApmPriority, Int>,
+        reason: SdkDropReason
+    ) {
+        if (totalCount <= 0) {
+            return
+        }
+        var attributed = 0
+        for ((priority, rawCount) in priorityCounts) {
+            val remaining = totalCount - attributed
+            if (remaining <= 0) {
+                break
+            }
+            val count = rawCount.coerceIn(0, remaining)
+            recordDrops(count, priority, reason)
+            attributed += count
+        }
+        recordDrops(totalCount - attributed, priority = null, reason = reason)
     }
 
     /**
@@ -78,7 +135,7 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
      */
     fun recordDispatcherModuleIsolationDrop(priority: ApmPriority = ApmPriority.NORMAL) {
         dispatcherModuleIsolationDropCount.incrementAndGet()
-        recordDrop(priority)
+        recordDrop(priority, SdkDropReason.DISPATCHER_MODULE_ISOLATION)
     }
 
     /**
@@ -131,6 +188,12 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
         val emit = emitCount.getAndSet(0L)
         val drop = dropCount.getAndSet(0L)
         val dispatcherIsolationDrops = dispatcherModuleIsolationDropCount.getAndSet(0L)
+        val reasonDrops = SdkDropReason.values().associate { reason ->
+            reason.name to dropReasonCounts[reason.ordinal].getAndSet(0L)
+        }
+        val priorityDrops = ApmPriority.values().associate { priority ->
+            priority.name to dropPriorityCounts[priority.ordinal].getAndSet(0L)
+        } + (UNATTRIBUTED_PRIORITY to unattributedDropPriorityCount.getAndSet(0L))
         val totalLatency = totalUploadLatencyMs.getAndSet(0L)
         val uploads = uploadCount.getAndSet(0L)
         val maxLatency = maxUploadLatencyMs.getAndSet(0L)
@@ -146,7 +209,9 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
             avgUploadLatencyMs = avgLatency,
             maxUploadLatencyMs = maxLatency,
             internalErrorCount = internalErrors,
-            dispatcherModuleIsolationDropCount = dispatcherIsolationDrops
+            dispatcherModuleIsolationDropCount = dispatcherIsolationDrops,
+            dropCountsByReason = reasonDrops,
+            dropCountsByPriority = priorityDrops
         )
     }
 
@@ -166,6 +231,15 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     fun getTotalDispatcherModuleIsolationDropCount(): Long =
         dispatcherModuleIsolationDropCount.get()
 
+    /** Returns the current-period count for one stable loss reason without resetting it. */
+    fun getDropCount(reason: SdkDropReason): Long = dropReasonCounts[reason.ordinal].get()
+
+    /** Returns the current-period count for one event priority without resetting it. */
+    fun getDropCount(priority: ApmPriority): Long = dropPriorityCounts[priority.ordinal].get()
+
+    /** Returns current losses whose priority was unavailable without resetting the counter. */
+    fun getUnattributedDropPriorityCount(): Long = unattributedDropPriorityCount.get()
+
     /**
      * 获取累计内部错误数（非重置）。
      * 用于外部查询监控模块降级处理的异常总量。
@@ -175,5 +249,7 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     companion object {
         /** 默认报告间隔：60 秒。 */
         private const val DEFAULT_REPORT_INTERVAL_MS = 60_000L
+        /** Stable priority-map bucket used only when an upstream aggregate omitted priority. */
+        const val UNATTRIBUTED_PRIORITY = "UNATTRIBUTED"
     }
 }

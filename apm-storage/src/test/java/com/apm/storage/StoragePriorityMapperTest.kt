@@ -20,10 +20,19 @@ class StoragePriorityMapperTest {
         assertEquals(3, StoragePriorityMapper.priorityOf(event(ApmPriority.CRITICAL)))
     }
 
+    /** Persisted values map back exactly while corrupt values remain explicitly unknown. */
+    @Test
+    fun `stored values map back to event priority`() {
+        for (priority in ApmPriority.values()) {
+            assertEquals(priority, StoragePriorityMapper.fromStoredValue(priority.value))
+        }
+        assertEquals(null, StoragePriorityMapper.fromStoredValue(Int.MIN_VALUE))
+    }
+
     /**
      * 构造指定严重级别的测试事件。
      *
-     * @param severity 严重级别。
+     * @param priority 事件优先级。
      * @return 测试事件。
      */
     private fun event(priority: ApmPriority): ApmEvent {

@@ -1,6 +1,6 @@
 # apm-anr 模块
 
-> 同步日期：2026-07-10｜模块名：`anr`
+> 同步日期：2026-07-22｜模块名：`anr`
 
 ## 目的
 
@@ -25,9 +25,11 @@ Native 安装失败时启动 Watchdog。Watchdog 按 5s interval 在 main Handle
 4. 依据 stack/sample 关键字分类：CPU / IO / LOCK / DEADLOCK / BINDER / UNKNOWN
 5. 对 stack 生成 fingerprint
 6. 30s 窗口内相同 fingerprint 去重
-7. 发出 `anr_detected`
+7. 通过 `Apm.emitCriticalSync` 同步 hand-off `anr_detected`
 
 10s 以上使用更高 severity。
+
+ANR 报告不再进入 shared dispatcher queue，也不经过 sampling、aggregation 或 rate limit。完整事件同步到 uploader 进程 SQLite，或在非 uploader 进程同步发布 critical `.ipc` 文件；只有 hand-off 完成才返回成功，现场线程不执行网络请求。false 结果写 `anr_local_handoff` internal error，并由 core 的 `IPC_HANDOFF_FAILURE` / storage reason 计数保留损失证据。
 
 ## 默认配置
 
@@ -56,4 +58,4 @@ Watchdog、flag poll 和 SIGQUIT analysis 为命名 daemon/measurement 线程。
 
 ## 测试
 
-Config、module、flag poller、analysis dispatcher 有单元测试；Native signal delivery、OEM traces 权限和系统 ANR 对齐需真机验证。
+Config、module、flag poller、analysis dispatcher 与 critical hand-off 成功/失败边界有单元测试；Native signal delivery、OEM traces 权限、真实 SQLite fsync 时延和系统 ANR 对齐需真机验证。

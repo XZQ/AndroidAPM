@@ -8,8 +8,8 @@
 
 - 同步日期：2026-07-22
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 161 个主源码文件：156 Kotlin + 4 C + 1 proto
-- 97 个测试/benchmark 文件
+- 162 个主源码文件：157 Kotlin + 4 C + 1 proto
+- 100 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -31,13 +31,13 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
   -> 接入方 Collector
 ```
 
-Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网络请求。非上传进程可选择通过 `.tmp` 写入、`.ipc` 发布的文件通道交给主进程。
+Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采样、聚合和限流，同步到 SQLite durable hand-off；该入口把较低调用方 priority 自动提升为 CRITICAL，但不会在崩溃/ANR 线程执行阻塞网络请求。非上传进程同步完成 `.tmp` 写入与 `.ipc` 发布后才返回成功，失败会进入 `IPC_HANDOFF_FAILURE` 自监控计数。
 
 每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避；`maxRetries` 表示首次尝试后的重试次数，达到 `maxRetries + 1` 次失败后立即清理，超过 7 天的行也会清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
 本地 durable codec 当前写 version 3，并继续读取 version 1/2。v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger 和 BigDecimal 写入显式类型标签，SQLite/IPC 重放后恢复原标量类型；任意其他对象保持历史 `toString()` 降级，不引入 Java 对象反序列化。legacy Line Protocol 与 standalone Protobuf 的 `fields` 继续是字符串 map；生产 Collector 使用显式 `PROTOBUF_ENVELOPE_V2` 获得 append-only field 15 typed values，不静默改写旧协议。
 
-生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。dispatcher 仍是单 worker 顺序执行聚合、限流、脱敏和 SQLite hand-off；模块高水位隔离解决的是共享入口的 noisy-neighbor 容量挤占，不虚称提升该 worker 的并行吞吐。单个 lazy event/聚合/脱敏异常不会杀死共享 worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数或活跃 payload 预算淘汰会进入 SDK drop 计数。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
+生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。dispatcher 仍是单 worker 顺序执行聚合、限流、脱敏和 SQLite hand-off；模块高水位隔离解决的是共享入口的 noisy-neighbor 容量挤占，不虚称提升该 worker 的并行吞吐。单个 lazy event/聚合/脱敏异常不会杀死共享 worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。每次真实丢弃同时累计总数、稳定 `SdkDropReason` 和 LOW/NORMAL/HIGH/CRITICAL 优先级；旧存储实现若只能返回总数，会显式进入 `UNATTRIBUTED`，不会伪造优先级。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数/活跃 payload 淘汰及 retry/age prune 也进入上述分类。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
 
 ## 模块组成
 
@@ -420,7 +420,7 @@ Matrix 的强项是成熟的 Trace/IO/SQLite/Battery 与 Native Hook 体系；KO
 
 APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同时进入 Logcat 与独立本地诊断 journal。该 journal 不依赖 `ApmDispatcher`、事件 SQLite outbox 或 uploader，因此这些组件异常时仍可保留本地证据。
 
-每个周期的 `sdk_health` 会先把仅含数值计数的摘要写入独立 journal，再以 HIGH 优先级尝试普通事件上报；其中 `dispatcherModuleIsolationDropCount` 单独标识高水位模块隔离丢弃，并同时计入总 `dropCount`。即使 dispatcher 拥塞、采样或限流影响事件通道，本地仍有独立健康证据；该副本仍受诊断环与写队列的有界预算约束。
+每个周期的 `sdk_health` 会先把仅含数值计数的摘要写入独立 journal，再以 HIGH 优先级尝试普通事件上报；其中 `dispatcherModuleIsolationDropCount` 单独标识高水位模块隔离丢弃，并同时计入总 `dropCount`。所有原因以 `dropReason.<reason>`、优先级以 `dropPriority.<priority>` 数值字段展开，无法从兼容存储结果恢复优先级时使用 `dropPriority.unattributed`。即使 dispatcher 拥塞、采样或限流影响事件通道，本地仍有独立健康证据；该副本仍受诊断环与写队列的有界预算约束。
 
 默认资源上限为：200 条 / 4 MiB 内存记录、256 条 / 4 MiB 非阻塞写队列、每个 Android 进程 3 个 512 KiB app-private JSONL 文件。进程目录由进程名和稳定哈希隔离；队列满时丢弃而不阻塞宿主，文件失败时先保留排队记录等待冷却重试，并降级为内存 + Logcat，且不会递归进入 APM logger。
 
@@ -467,7 +467,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：按已冻结 V2 协议实现生产 Collector、租户/鉴权、服务端 eventId 幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 

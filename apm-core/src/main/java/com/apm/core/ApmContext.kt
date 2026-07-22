@@ -3,6 +3,7 @@ package com.apm.core
 import android.app.Application
 import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
+import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 
 /**
@@ -69,7 +70,12 @@ class ApmContext internal constructor(
      */
     fun emitCriticalSync(event: ApmEvent): Boolean {
         return if (processCoordinator != null && !isUploaderProcess) {
-            processCoordinator.writeEventSync(event)
+            selfMonitor?.recordEmit()
+            val handedOff = processCoordinator.writeEventSync(event)
+            if (!handedOff) {
+                selfMonitor?.recordDrop(event.priority, SdkDropReason.IPC_HANDOFF_FAILURE)
+            }
+            handedOff
         } else {
             dispatcher.dispatchCriticalSync(event)
         }

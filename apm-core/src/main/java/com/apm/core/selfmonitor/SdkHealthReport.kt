@@ -35,7 +35,11 @@ data class SdkHealthReport(
     /** Diagnostics file-sink failures. */
     val diagnosticWriteFailureCount: Long = 0L,
     /** 报告生成时间戳（毫秒）。 */
-    val reportTimestamp: Long = System.currentTimeMillis()
+    val reportTimestamp: Long = System.currentTimeMillis(),
+    /** Complete period loss counts keyed by stable [SdkDropReason] names. */
+    val dropCountsByReason: Map<String, Long> = emptyMap(),
+    /** Complete period loss counts keyed by priority names plus `UNATTRIBUTED`. */
+    val dropCountsByPriority: Map<String, Long> = emptyMap()
 ) {
     /**
      * 计算事件丢弃率（0.0 ~ 1.0）。
@@ -58,34 +62,39 @@ data class SdkHealthReport(
             severity = ApmSeverity.INFO,
             priority = ApmPriority.HIGH,
             timestamp = reportTimestamp,
-            fields = mapOf(
-                FIELD_EMIT_COUNT to emitCount,
-                FIELD_DROP_COUNT to dropCount,
-                FIELD_QUEUE_SIZE to queueSize,
-                FIELD_DROP_RATE to String.format(Locale.ROOT, "%.4f", dropRate),
-                FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
-                FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
-                FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
-                FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT to dispatcherModuleIsolationDropCount,
-                FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
-                FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
-            )
+            fields = healthFields(String.format(Locale.ROOT, "%.4f", dropRate))
         )
     }
 
     /** Returns the complete field map used by the runtime `core/sdk_health` event. */
-    internal fun toCoreHealthFields(): Map<String, Any> = mapOf(
-        FIELD_EMIT_COUNT to emitCount,
-        FIELD_DROP_COUNT to dropCount,
-        FIELD_DROP_RATE to dropRate,
-        FIELD_QUEUE_SIZE to queueSize,
-        FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
-        FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
-        FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
-        FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT to dispatcherModuleIsolationDropCount,
-        FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
-        FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
-    )
+    internal fun toCoreHealthFields(): Map<String, Any> = healthFields(dropRate)
+
+    /** Builds fixed aggregate fields plus deterministic flattened reason and priority counters. */
+    private fun healthFields(dropRateValue: Any): Map<String, Any> {
+        val fields = linkedMapOf<String, Any>(
+            FIELD_EMIT_COUNT to emitCount,
+            FIELD_DROP_COUNT to dropCount,
+            FIELD_DROP_RATE to dropRateValue,
+            FIELD_QUEUE_SIZE to queueSize,
+            FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
+            FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
+            FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
+            FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT to dispatcherModuleIsolationDropCount,
+            FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
+            FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
+        )
+        for (reason in SdkDropReason.values()) {
+            fields["$FIELD_DROP_REASON_PREFIX${reason.name.lowercase(Locale.ROOT)}"] =
+                dropCountsByReason[reason.name] ?: 0L
+        }
+        for (priority in ApmPriority.values()) {
+            fields["$FIELD_DROP_PRIORITY_PREFIX${priority.name.lowercase(Locale.ROOT)}"] =
+                dropCountsByPriority[priority.name] ?: 0L
+        }
+        fields["$FIELD_DROP_PRIORITY_PREFIX$UNATTRIBUTED_PRIORITY_FIELD"] =
+            dropCountsByPriority[SdkSelfMonitor.UNATTRIBUTED_PRIORITY] ?: 0L
+        return fields
+    }
 
     /** Returns a bounded, payload-free summary suitable for the independent diagnostics journal. */
     internal fun toDiagnosticSummary(): String = buildString {
@@ -100,6 +109,16 @@ data class SdkHealthReport(
             .append(dispatcherModuleIsolationDropCount)
         append(' ').append(FIELD_DIAGNOSTIC_DROPPED_COUNT).append('=').append(diagnosticDroppedCount)
         append(' ').append(FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT).append('=').append(diagnosticWriteFailureCount)
+        for (reason in SdkDropReason.values()) {
+            append(' ').append(FIELD_DROP_REASON_PREFIX).append(reason.name.lowercase(Locale.ROOT))
+                .append('=').append(dropCountsByReason[reason.name] ?: 0L)
+        }
+        for (priority in ApmPriority.values()) {
+            append(' ').append(FIELD_DROP_PRIORITY_PREFIX).append(priority.name.lowercase(Locale.ROOT))
+                .append('=').append(dropCountsByPriority[priority.name] ?: 0L)
+        }
+        append(' ').append(FIELD_DROP_PRIORITY_PREFIX).append(UNATTRIBUTED_PRIORITY_FIELD)
+            .append('=').append(dropCountsByPriority[SdkSelfMonitor.UNATTRIBUTED_PRIORITY] ?: 0L)
     }
 
     companion object {
@@ -128,6 +147,12 @@ data class SdkHealthReport(
         private const val FIELD_DIAGNOSTIC_DROPPED_COUNT = "diagnosticDroppedCount"
         /** Field: diagnostics file-sink failures. */
         private const val FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT = "diagnosticWriteFailureCount"
+        /** Prefix for one stable drop-reason counter. */
+        private const val FIELD_DROP_REASON_PREFIX = "dropReason."
+        /** Prefix for one priority or unattributed drop counter. */
+        private const val FIELD_DROP_PRIORITY_PREFIX = "dropPriority."
+        /** Lowercase wire field suffix for aggregate-only loss results. */
+        private const val UNATTRIBUTED_PRIORITY_FIELD = "unattributed"
     }
 }
 

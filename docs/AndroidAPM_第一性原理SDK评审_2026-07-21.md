@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，161 个主源码文件，97 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；其后的 collector-wire-V2 定向验证为 model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个受影响 Android 模块 lint 均无问题。
+> 当前基线：`develop` 分支，27 个构建单元，162 个主源码文件，100 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；最新 critical-handoff/loss-attribution 定向验证为 core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个模块 lint 均无问题。定向结果不把旧全根结论自动外推到新源码。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -38,7 +38,7 @@
 | P5 资源有界 | 4.9 | 队列、payload、存储总量、大数解析与诊断均有明确上限，溢出受控 |
 | P6 宿主安全 | 4.9 | fail-safe 边界近乎最佳实践 |
 | P7 模块化 | 4.8 | 内部分层保持独立，`apm-bundle` 提供单依赖分发入口 |
-| P8 自身可观测 | 4.8 | 每份 `sdk_health` 先写独立诊断摘要，再尝试 HIGH 遥测副本 |
+| P8 自身可观测 | 4.9 | `sdk_health` 独立摘要 + HIGH 副本，并按稳定丢弃原因/优先级计数 |
 | P9 兼容演进 | 4.9 | legacy wire 保持不变；独立 V2 冻结 typed/resource/batch/size/exact-ACK 语义 |
 
 ---
@@ -76,6 +76,9 @@ Tink Ed25519 + 固定 32 字节 **pinned** raw key（非随响应下发）、`RA
 
 **I. Collector wire contract 已版本化冻结（`ApmBatchEnvelopeSerializer.kt` / `COLLECTOR_WIRE_V2.md`）**
 legacy Line/standalone Protobuf 保持原字符串语义；独立 `PROTOBUF_ENVELOPE_V2` 用 field 15 显式区分 12 类标量，batch 携带 schema/SDK/fixed resource/retry-stable batchId，按实际编码字节拆批。2xx 只有 response schema、batchId、event count 精确匹配才允许 ACK/delete，partial ACK 明确不支持。
+
+**J. 关键事件与真实损失都进入可证明边界（`emitCriticalSync` / `SdkDropReason`）**
+Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off；较低调用 priority 自动提升为 CRITICAL，现场不做网络 IO。每次 drop 同时记录稳定 reason 和 priority；SQLite capacity eviction、retry/age prune 返回精确 priority，兼容 aggregate-only 结果进入 `UNATTRIBUTED`，不以 NORMAL 冒充未知。
 
 ---
 
@@ -130,7 +133,7 @@ listener 只把 primitive long 写入固定容量 rolling accumulator；窗口�
 codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB，活跃 payload 总预算为 64 MiB，同时保留 50,000 行上限。编码/超限只拒绝单事件，同批有效 peer 继续事务落盘；trim 按低优先级、旧事件优先并保护活动 lease，拒绝/淘汰进入 SDK health。
 
 **R10. `sdk_health` 共享 dispatcher——已完成双通道**
-每个周期先把仅含数值计数的摘要写入独立 diagnostics journal，再尝试 HIGH 优先级普通事件。dispatcher/outbox/uploader 拥塞不会抹掉本地摘要；journal 自身仍受 4 MiB 内存/队列与分片磁盘预算约束，且不会递归回流 logger。
+每个周期先把仅含数值计数的摘要写入独立 diagnostics journal，再尝试 HIGH 优先级普通事件。总 drop 同时按固定 `SdkDropReason` 和 priority 展开；未知 priority 显式标为 `UNATTRIBUTED`。dispatcher/outbox/uploader 拥塞不会抹掉本地摘要；journal 自身仍受 4 MiB 内存/队列与分片磁盘预算约束，且不会递归回流 logger。
 
 **R11. 多 artifact 接入摩擦——已完成 `apm-bundle`**
 当前 27 个构建单元保持内部模块化，`com.apm:apm-bundle:0.1.0` 的 POM 传递暴露 22 个运行时 SDK artifact，bundle AAR 不复制实现类，也不自动初始化模块或应用 `com.apm.slow-method`。体积敏感接入仍可选择细粒度 artifact。
@@ -156,14 +159,15 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 10 | 健康事件独立证据（R10） | P2 | 已实现 journal summary + HIGH telemetry 双通道 |
 | 11 | 单依赖消费者入口（R11） | P2 | 已实现 transitives-only `apm-bundle` |
 | 12 | HttpURLConnection 接入（R12） | P2 | 已实现显式 wrapper 与异常边界测试 |
+| 13 | 关键事件 hand-off + loss reason/priority | P1 | Crash/ANR 同步本地接管；drop 三维计数并显式保留 unknown |
 
 ---
 
 ## 5. 闭环验证与局限
 
 - **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 92 suites / 605 tests；`apm-model:test` 通过 4 suites / 40 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：R1 host gate 5 tests；R5 storage 6 suites / 36 tests；benchmark Release/AndroidTest Kotlin 编译；R2/R3/R4/R6–R10 core/FPS/storage 定向套件；R11 本地 publication + 单依赖 consumer；R12 network 3 suites / 21 tests 与 lint 均已有通过证据。
-- **文档验证**：`python docs/verify_docs.py` 通过 42 个 Markdown 文件与 41 个本地链接。
+- **定向测试/构建**：最近 critical-handoff/loss-attribution 源码在 JDK 17.0.14 下通过 core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均 0 failures/errors/skips，三个 lint 均 `No issues found`；此前 R1 host gate、R5、R11 publication/consumer、R12 network 与 wire V2 证据仍分别保留在项目/交接文档。
+- **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 47 个本地链接。
 - **仍需真机/外部系统**：接受物理设备上的预算 gate、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵、生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。模拟器 benchmark 只证明 instrumentation/parser 链路，不能替代物理性能结论。
 
 ---

@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.database.sqlite.SQLiteDatabase
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventCodec
+import com.apm.model.ApmPriority
 import com.apm.model.toLineProtocol
 import java.util.concurrent.atomic.AtomicLong
 
@@ -126,11 +127,16 @@ class SQLiteEventStore(
             }
         }
 
-        val evictedCount = if (encodedEvents.isEmpty()) 0 else appendBatchLocked(encodedEvents)
+        val trimResult = if (encodedEvents.isEmpty()) {
+            CapacityTrimResult.EMPTY
+        } else {
+            appendBatchLocked(encodedEvents)
+        }
         return EventStoreAppendResult(
             acceptedEventCount = events.size - rejectedEvents.size,
             rejectedEvents = rejectedEvents.toList(),
-            capacityEvictedEventCount = evictedCount
+            capacityEvictedEventCount = trimResult.evictedEventCount,
+            capacityEvictedPriorityCounts = trimResult.priorityCounts
         )
     }
 
@@ -139,9 +145,9 @@ class SQLiteEventStore(
      * 事务插入 → 维护计数 → 周期性重同步 → 水位线淘汰。
      *
      * @param encodedEvents 已完成单事件大小校验的事件列表
-     * @return 为满足容量预算而淘汰的事件数
+     * @return 为满足容量预算而淘汰的事件数及其可观测优先级
      */
-    private fun appendBatchLocked(encodedEvents: List<EncodedEvent>): Int {
+    private fun appendBatchLocked(encodedEvents: List<EncodedEvent>): CapacityTrimResult {
         val db = dbHelper.writableDatabase
         ensureStatisticsInitialized(db)
 
@@ -496,19 +502,36 @@ class SQLiteEventStore(
      */
     @Synchronized
     override fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int {
+        return pruneExpiredWithResult(maxRetryCount, maxAgeMs).prunedEventCount
+    }
+
+    /** Removes expired rows with exact priority attribution inside the deletion transaction. */
+    @Synchronized
+    override fun pruneExpiredWithResult(maxRetryCount: Int, maxAgeMs: Long): EventStorePruneResult {
         val db = dbHelper.writableDatabase
         val oldestAllowedTimestamp = System.currentTimeMillis() - maxAgeMs
         val nowMs = System.currentTimeMillis()
-        return deleteAndAccount(
-            db = db,
-            selection = "($COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?) AND " +
-                "($COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?)",
-            selectionArgs = arrayOf(
-                maxRetryCount.toString(),
-                oldestAllowedTimestamp.toString(),
-                nowMs.toString()
-            )
+        val selection = "($COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?) AND " +
+            "($COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?)"
+        val selectionArgs = arrayOf(
+            maxRetryCount.toString(),
+            oldestAllowedTimestamp.toString(),
+            nowMs.toString()
         )
+        var result = EventStorePruneResult(prunedEventCount = 0)
+        db.beginTransaction()
+        try {
+            val priorities = priorityCountsInternal(db, selection, selectionArgs)
+            val pruned = deleteAndAccount(db, selection, selectionArgs)
+            result = EventStorePruneResult(
+                prunedEventCount = pruned,
+                priorityCounts = if (priorities.values.sum() == pruned) priorities else emptyMap()
+            )
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return result
     }
 
     /** Closes the underlying database helper. */
@@ -536,15 +559,16 @@ class SQLiteEventStore(
      * 使用缓存统计判断水位；真正超限时先按数据库真值校准，避免跨实例陈旧缓存误删。
      *
      * @param db 可写数据库
-     * @return 实际淘汰行数
+     * @return 实际淘汰行数及其可观测优先级
      */
-    private fun trimIfNeeded(db: SQLiteDatabase): Int {
+    private fun trimIfNeeded(db: SQLiteDatabase): CapacityTrimResult {
         if (!isOverCapacity(cachedRowCount.get(), cachedPayloadBytes.get())) {
-            return 0
+            return CapacityTrimResult.EMPTY
         }
 
         val nowMs = System.currentTimeMillis()
         val idsToDelete = mutableListOf<Long>()
+        val selectedPriorityCounts = mutableMapOf<ApmPriority, Int>()
         var deleted = 0
         db.beginTransaction()
         try {
@@ -555,7 +579,7 @@ class SQLiteEventStore(
             if (isOverCapacity(projectedRows, projectedPayloadBytes)) {
                 db.query(
                     TABLE_NAME,
-                    arrayOf(COLUMN_ID, "LENGTH($COLUMN_PAYLOAD)"),
+                    arrayOf(COLUMN_ID, "LENGTH($COLUMN_PAYLOAD)", COLUMN_PRIORITY),
                     "$COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?",
                     arrayOf(nowMs.toString()),
                     null,
@@ -564,6 +588,10 @@ class SQLiteEventStore(
                 ).use { cursor ->
                     while (cursor.moveToNext() && isOverCapacity(projectedRows, projectedPayloadBytes)) {
                         idsToDelete += cursor.getLong(0)
+                        StoragePriorityMapper.fromStoredValue(cursor.getInt(2))?.let { priority ->
+                            selectedPriorityCounts[priority] =
+                                (selectedPriorityCounts[priority] ?: 0) + 1
+                        }
                         projectedRows -= 1L
                         projectedPayloadBytes = (projectedPayloadBytes - cursor.getLong(1)).coerceAtLeast(0L)
                     }
@@ -589,12 +617,40 @@ class SQLiteEventStore(
         if (idsToDelete.isEmpty()) {
             // 活跃租约不允许为满足容量预算而删除，预算会在租约释放后的下一次写入重试。
             resyncStatistics(db)
-            return 0
+            return CapacityTrimResult.EMPTY
         }
 
         // 容量淘汰是低频路径，删除后再次校准可覆盖跨实例并发变化。
         resyncStatistics(db)
-        return deleted
+        return CapacityTrimResult(
+            evictedEventCount = deleted,
+            priorityCounts = if (deleted == idsToDelete.size) selectedPriorityCounts else emptyMap()
+        )
+    }
+
+    /** Counts selected rows by valid persisted priority without materializing event payloads. */
+    private fun priorityCountsInternal(
+        db: SQLiteDatabase,
+        selection: String,
+        selectionArgs: Array<String>
+    ): Map<ApmPriority, Int> {
+        val counts = mutableMapOf<ApmPriority, Int>()
+        db.query(
+            TABLE_NAME,
+            arrayOf(COLUMN_PRIORITY, "COUNT(*)"),
+            selection,
+            selectionArgs,
+            COLUMN_PRIORITY,
+            null,
+            null
+        ).use { cursor ->
+            while (cursor.moveToNext()) {
+                StoragePriorityMapper.fromStoredValue(cursor.getInt(0))?.let { priority ->
+                    counts[priority] = cursor.getInt(1)
+                }
+            }
+        }
+        return counts
     }
 
     /** 查询指定范围的行数与 payload 总字节，不额外加锁。 */
@@ -693,6 +749,22 @@ class SQLiteEventStore(
         val event: ApmEvent,
         val payload: ByteArray
     )
+
+    /**
+     * Capacity trimming result retained across the storage/core module boundary.
+     *
+     * @property evictedEventCount complete number of removed rows
+     * @property priorityCounts exact counts when every selected row was removed and valid
+     */
+    private data class CapacityTrimResult(
+        val evictedEventCount: Int,
+        val priorityCounts: Map<ApmPriority, Int>
+    ) {
+        companion object {
+            /** Shared empty result for the common below-budget path. */
+            val EMPTY = CapacityTrimResult(0, emptyMap())
+        }
+    }
 
     /**
      * SQLite 活跃 outbox 的两个容量维度。

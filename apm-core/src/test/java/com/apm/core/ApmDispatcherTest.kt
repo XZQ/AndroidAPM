@@ -6,6 +6,7 @@ import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
 import com.apm.storage.EventStoreAppendResult
@@ -104,6 +105,8 @@ class ApmDispatcherTest {
         assertTrue(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
         waitUntil { selfMonitor.getTotalDropCount() == 1L }
         assertEquals(1L, selfMonitor.getTotalDropCount())
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.UPLOADER_REJECTED))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.HIGH))
 
         dispatcher.shutdown()
     }
@@ -133,10 +136,12 @@ class ApmDispatcherTest {
         val firstAppendStarted = CountDownLatch(1)
         val releaseFirstAppend = CountDownLatch(1)
         val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val selfMonitor = SdkSelfMonitor()
         val dispatcher = ApmDispatcher(
             store = store,
             uploader = RecordingUploader(),
             logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
             queueCapacity = 2
         )
 
@@ -152,6 +157,8 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
 
         assertEquals(listOf("blocking", "low-newest", "critical"), store.events.map(ApmEvent::name))
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.DISPATCHER_PRIORITY_EVICTION))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.LOW))
     }
 
     /** A noisy NORMAL module must leave pressured queue capacity for peers and critical work. */
@@ -258,6 +265,7 @@ class ApmDispatcherTest {
             store.events.map(ApmEvent::name)
         )
         assertEquals(1L, selfMonitor.getTotalDispatcherModuleIsolationDropCount())
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.DISPATCHER_MODULE_ISOLATION))
     }
 
     /** Fatal VM errors must remain visible instead of being converted into a telemetry drop. */
@@ -297,6 +305,8 @@ class ApmDispatcherTest {
 
         assertTrue(!dispatcher.dispatchCriticalSync(event))
         assertEquals(1L, selfMonitor.getTotalDropCount())
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.STORAGE_PAYLOAD_REJECTED))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.CRITICAL))
 
         dispatcher.shutdown()
     }
@@ -309,7 +319,12 @@ class ApmDispatcherTest {
             store = ResultStore(
                 EventStoreAppendResult(
                     acceptedEventCount = 1,
-                    capacityEvictedEventCount = CAPACITY_EVICTION_COUNT
+                    capacityEvictedEventCount = CAPACITY_EVICTION_COUNT,
+                    capacityEvictedPriorityCounts = mapOf(
+                        ApmPriority.LOW to 1,
+                        ApmPriority.NORMAL to 1,
+                        ApmPriority.HIGH to 1
+                    )
                 )
             ),
             uploader = RecordingUploader(),
@@ -319,6 +334,11 @@ class ApmDispatcherTest {
 
         assertTrue(dispatcher.dispatchCriticalSync(createEvent(name = "retained")))
         assertEquals(CAPACITY_EVICTION_COUNT.toLong(), selfMonitor.getTotalDropCount())
+        assertEquals(CAPACITY_EVICTION_COUNT.toLong(), selfMonitor.getDropCount(SdkDropReason.STORAGE_CAPACITY_EVICTED))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.LOW))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.NORMAL))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.HIGH))
+        assertEquals(0L, selfMonitor.getUnattributedDropPriorityCount())
 
         dispatcher.shutdown()
     }

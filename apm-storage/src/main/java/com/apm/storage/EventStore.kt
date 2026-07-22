@@ -1,6 +1,7 @@
 package com.apm.storage
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmPriority
 
 /**
  * 事件存储接口。
@@ -75,11 +76,24 @@ interface EventStore {
  * @property acceptedEventCount 被存储层接纳的输入事件数
  * @property rejectedEvents 因单事件编码或软大小限制而拒绝的原始事件
  * @property capacityEvictedEventCount 为满足行数或 payload 总量预算而淘汰的历史事件数
+ * @property capacityEvictedPriorityCounts exact evictions by priority when the store can observe them
  */
 data class EventStoreAppendResult(
     val acceptedEventCount: Int,
     val rejectedEvents: List<ApmEvent> = emptyList(),
-    val capacityEvictedEventCount: Int = 0
+    val capacityEvictedEventCount: Int = 0,
+    val capacityEvictedPriorityCounts: Map<ApmPriority, Int> = emptyMap()
+)
+
+/**
+ * Durable outbox rows removed because their retry or retention budget expired.
+ *
+ * @property prunedEventCount complete number of removed rows
+ * @property priorityCounts exact removals by priority when supported by the store
+ */
+data class EventStorePruneResult(
+    val prunedEventCount: Int,
+    val priorityCounts: Map<ApmPriority, Int> = emptyMap()
 )
 
 /**
@@ -177,4 +191,16 @@ interface PendingEventStore : EventStore {
      * @return 清除的行数
      */
     fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int = 0
+
+    /**
+     * Removes expired rows and returns priority attribution when the implementation supports it.
+     *
+     * The compatibility default delegates to [pruneExpired] and reports an unattributed total.
+     *
+     * @param maxRetryCount retry-count removal threshold
+     * @param maxAgeMs maximum retained event age
+     * @return aggregate and per-priority removal result
+     */
+    fun pruneExpiredWithResult(maxRetryCount: Int, maxAgeMs: Long): EventStorePruneResult =
+        EventStorePruneResult(prunedEventCount = pruneExpired(maxRetryCount, maxAgeMs))
 }
