@@ -282,7 +282,7 @@ def build_architecture_report() -> Document:
             "架构细节：docs/architecture/00_整体架构.md 与对应模块文档。",
             "云端、发布和真机设备实验室清单由独立 AndroidAPM-Server 仓库的 docs/云端待建设清单.md 维护。",
             "DOCX、SVG 和 PNG 是派生产物；出现冲突时以源码和 Markdown 为准。",
-            "记录.zip 与 绘制.jpeg 仅作为历史原始资料保留，不作为当前事实来源。",
+            "历史原始附件已移除，不再作为文档交付或当前事实来源。",
         ],
     )
 

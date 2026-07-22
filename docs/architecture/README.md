@@ -78,7 +78,7 @@ python docs/verify_docs.py
 - `../APM_Optimization_2026-07-08.md`：历史优化建议及当前落地状态
 - `../APM_对比报告.docx`、`../APM_框架对比报告.docx`：可分发报告
 - `../generate_report.py`：两份 DOCX 的可维护生成源
-- `../记录.zip`、`../绘制.jpeg`：历史参考资料，不作为当前代码证明
+- 历史原始附件已移除；当前事实来源为源码和维护中的 Markdown 文档
 
 ## 文档规则
 
