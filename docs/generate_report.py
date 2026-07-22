@@ -81,7 +81,7 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "164", "159 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "100", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
+        ("测试文件", "102", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -113,6 +113,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "smoke/24h/72h 缺时长、重启、功耗或物理机证据即失败"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -246,7 +247,7 @@ def build_architecture_report() -> Document:
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
             "apm-bundle 只聚合发布依赖，不承载运行时实现，也不自动应用慢方法插件。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
-            "apm-benchmark 不进入 Maven publication，并用固定 time/allocation 预算把物理设备测量变成失败门。",
+            "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")
@@ -271,6 +272,8 @@ def build_architecture_report() -> Document:
         "./gradlew -p apm-plugin test",
         "./gradlew :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin",
         "./gradlew :apm-benchmark:verifyReleasePerformanceBudgets",
+        "python -m unittest discover -s apm-benchmark/tests -p test_*.py",
+        "./gradlew :apm-benchmark:verifyDeviceSoakFromResults -PapmDeviceSoakResults=<json> -PapmDeviceSoakProfile=<profile>",
         "./gradlew lintDebug",
         "./gradlew assembleRelease",
         "./gradlew publishToMavenLocal",

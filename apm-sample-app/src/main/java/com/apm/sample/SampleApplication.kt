@@ -1,6 +1,7 @@
 package com.apm.sample
 
 import android.app.Application
+import android.os.SystemClock
 import com.apm.anr.AnrConfig
 import com.apm.anr.AnrModule
 import com.apm.battery.BatteryConfig
@@ -34,9 +35,23 @@ import com.apm.threadmonitor.ThreadMonitorConfig
 import com.apm.threadmonitor.ThreadMonitorModule
 import com.apm.webview.WebviewConfig
 import com.apm.webview.WebviewModule
+import com.apm.model.ApmEvent
+import com.apm.uploader.ApmUploader
 
 /** Application that demonstrates explicit registration of every SDK monitor. */
 class SampleApplication : Application() {
+
+    /** Whether this process initialized the SDK for a device-soak A/B phase. */
+    internal var soakSdkEnabled: Boolean = true
+        private set
+
+    /** Whether this process uses a deliberately failing collector transport. */
+    internal var soakOfflineCollector: Boolean = false
+        private set
+
+    /** Main-thread elapsed time spent inside [Apm.init], or zero for the control process. */
+    internal var apmInitDurationNs: Long = 0L
+        private set
 
     /** 内存模块引用，供 MainActivity 调用 captureOnce。 */
     lateinit var memoryModule: MemoryModule
@@ -70,15 +85,34 @@ class SampleApplication : Application() {
     lateinit var batteryModule: BatteryModule
         private set
 
+    /** Initializes either the SDK-enabled sample runtime or a zero-SDK A/B control process. */
     override fun onCreate() {
         super.onCreate()
 
+        val soakPreferences = getSharedPreferences(SOAK_PREFERENCES_NAME, MODE_PRIVATE)
+        soakSdkEnabled = soakPreferences.getBoolean(SOAK_SDK_ENABLED_KEY, true)
+        soakOfflineCollector = soakPreferences.getBoolean(SOAK_OFFLINE_COLLECTOR_KEY, false)
+
+        // The control process deliberately skips every SDK allocation and module registration.
+        // MainActivity recognizes soak intents before touching the lateinit demo modules below.
+        if (!soakSdkEnabled) {
+            return
+        }
+
         // 1. 初始化 APM 框架
+        val initStartedNs = SystemClock.elapsedRealtimeNanos()
         Apm.init(
             application = this,
             config = ApmConfig(
-                endpoint = "logcat://sample",
-                debugLogging = true,
+                endpoint = if (soakOfflineCollector) "" else "logcat://sample",
+                uploader = if (soakOfflineCollector) OfflineSoakUploader else null,
+                debugLogging = !soakOfflineCollector,
+                maxRetries = if (soakOfflineCollector) SOAK_MAX_RETRIES else DEFAULT_MAX_RETRIES,
+                retryBaseDelayMs = if (soakOfflineCollector) {
+                    SOAK_RETRY_DELAY_MS
+                } else {
+                    DEFAULT_RETRY_DELAY_MS
+                },
                 defaultContext = mapOf(
                     "appId" to packageName,
                     "buildType" to if (BuildConfig.DEBUG) "debug" else "release"
@@ -88,6 +122,7 @@ class SampleApplication : Application() {
                 }
             )
         )
+        apmInitDurationNs = (SystemClock.elapsedRealtimeNanos() - initStartedNs).coerceAtLeast(0L)
 
         // 2. 注册 Memory 模块
         memoryModule = MemoryModule(
@@ -171,5 +206,34 @@ class SampleApplication : Application() {
 
         // 16. 注册渲染监控模块
         Apm.register(RenderModule(RenderConfig()))
+    }
+
+    /** Failing transport used to exercise the durable outbox without changing device networking. */
+    private object OfflineSoakUploader : ApmUploader {
+        /** Keeps every accepted event in the durable retry path. */
+        override fun upload(event: ApmEvent): Boolean = false
+    }
+
+    companion object {
+        /** App-private preferences edited by the exported sample Activity for the next process. */
+        internal const val SOAK_PREFERENCES_NAME = "apm-device-soak"
+
+        /** Boolean preference selecting the SDK-enabled or control process. */
+        internal const val SOAK_SDK_ENABLED_KEY = "sdk-enabled"
+
+        /** Boolean preference selecting a failing collector transport. */
+        internal const val SOAK_OFFLINE_COLLECTOR_KEY = "offline-collector"
+
+        /** Retries retained long enough for a 72-hour offline campaign. */
+        private const val SOAK_MAX_RETRIES = 10_000
+
+        /** One-minute retry cadence limits transport churn during an offline campaign. */
+        private const val SOAK_RETRY_DELAY_MS = 60_000L
+
+        /** Interactive sample default matching [ApmConfig]. */
+        private const val DEFAULT_MAX_RETRIES = 3
+
+        /** Interactive sample retry delay matching [ApmConfig]. */
+        private const val DEFAULT_RETRY_DELAY_MS = 1_000L
     }
 }

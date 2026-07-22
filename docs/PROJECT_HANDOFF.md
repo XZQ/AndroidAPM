@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 164：159 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 100 |
+| 测试/benchmark 文件 | 102 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -176,7 +176,9 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-22 的第十四批 cross-layer byte-budget 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 core 27 suites / 194 tests，0 failures/errors/skips，lint 为 `No issues found`；`:apm-storage:testDebugUnitTest :apm-storage:lintDebug --rerun-tasks --no-daemon` 通过 storage 6 suites / 37 tests，0 failures/errors/skips，lint 为 `No issues found`。覆盖 dispatcher count/byte 双准入、多 victim 优先级淘汰、`queueBytes`、IPC pending/event/file/directory 四层预算、lock-free pending + 单一 fixed-delay writer、critical 精确拒绝原因、流式 ready-file 读取及既有 SQLite 双字节预算。同一源码完整刷新通过根 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，全部 0 failures/errors/skips；当前根 Android + model 为 101 suites / 682 tests，plugin 18 tests 独立报告，取代 630-test 根基线。`python docs/verify_docs.py` 通过 43 Markdown / 47 links。
 
-设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
+2026-07-22 的第十五批 physical-device-soak gate 定向验证：JDK 17.0.14 下 14 个 host Python tests 全部通过；`:apm-sample-app:assembleDebug :apm-sample-app:lintDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过，sample lint 为 0 errors / 25 warnings。Sample 支持零 SDK control、永远失败的 offline uploader、有界主线程合成事件与 app-private 进程结果；host runner 跨冷进程采启动、SDK init、CPU、PSS、disk、app UID power、charge counter 与 thermal。`smoke`/`24h`/`72h` profile 对物理机、实际时长、重启、离线模式、资源字段和长稳功耗 fail closed。`python docs/verify_docs.py` 通过 43 Markdown / 48 links。该结果不替代第十四批 636-test 全根基线。
+
+设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。新的 device-soak runner 尝试安装 5,916,050 字节 sample debug APK 时被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，未进入明确限定为 `com.apm.sample.debug` 的数据清理与 acquisition；早先 benchmark 安装也被同一策略拒绝。emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 microbenchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation/host 入口已有可执行证据，物理 smoke 与 24/72 小时仍需设备允许安装后真正跑满，不能使用模拟器数值替代。
 
 ## 新电脑接手
 
@@ -195,6 +197,7 @@ git log --oneline -n 10
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
 ./gradlew.bat :apm-benchmark:verifyReleasePerformanceBudgets
+python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 ```
 
 6. 发布相关变更再执行：
@@ -206,7 +209,7 @@ git log --oneline -n 10
 
 ## 后续优先级
 
-客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
+客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。首次物理 smoke 与 24/72 小时接受结果仍必须由允许安装测试 APK 的专用真机真正产生，不能把 host tests 或模拟器 parser 证据伪装成发布通过。
 
 ## Git 与文档策略
 

@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "smoke": {
+      "minObservedDurationSeconds": 20,
+      "minProcessStarts": 2,
+      "requirePhysicalDevice": true,
+      "requireOfflineCollector": true,
+      "requirePowerEvidence": false,
+      "maxStartupDeltaMs": 250,
+      "maxSdkInitMs": 200,
+      "maxMainThreadOperationP95Us": 2000,
+      "maxCpuAveragePercent": 20,
+      "maxPssGrowthKb": 65536,
+      "maxDiskGrowthBytes": 73400320,
+      "maxChargeConsumptionMahPerHour": 300,
+      "maxThermalStatus": 3
+    },
+    "24h": {
+      "minObservedDurationSeconds": 86400,
+      "minProcessStarts": 24,
+      "requirePhysicalDevice": true,
+      "requireOfflineCollector": true,
+      "requirePowerEvidence": true,
+      "maxStartupDeltaMs": 250,
+      "maxSdkInitMs": 200,
+      "maxMainThreadOperationP95Us": 2000,
+      "maxCpuAveragePercent": 10,
+      "maxPssGrowthKb": 65536,
+      "maxDiskGrowthBytes": 73400320,
+      "maxChargeConsumptionMahPerHour": 300,
+      "maxThermalStatus": 3
+    },
+    "72h": {
+      "minObservedDurationSeconds": 259200,
+      "minProcessStarts": 12,
+      "requirePhysicalDevice": true,
+      "requireOfflineCollector": true,
+      "requirePowerEvidence": true,
+      "maxStartupDeltaMs": 250,
+      "maxSdkInitMs": 200,
+      "maxMainThreadOperationP95Us": 2000,
+      "maxCpuAveragePercent": 10,
+      "maxPssGrowthKb": 65536,
+      "maxDiskGrowthBytes": 73400320,
+      "maxChargeConsumptionMahPerHour": 300,
+      "maxThermalStatus": 3
+    }
+  }
+}

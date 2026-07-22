@@ -15,6 +15,15 @@ val connectedBenchmarkResults = layout.buildDirectory.dir(
 /** Checked-in absolute release budgets for the measured SDK hot paths. */
 val benchmarkBudgets = layout.projectDirectory.file("benchmark-budgets.json")
 
+/** Checked-in end-to-end device-soak budgets for smoke, 24-hour, and 72-hour profiles. */
+val deviceSoakBudgets = layout.projectDirectory.file("device-soak-budgets.json")
+
+/** Host artifact supplied to the standalone device-soak verification task. */
+val deviceSoakResults = providers.gradleProperty("apmDeviceSoakResults")
+
+/** Named budget profile supplied with a host device-soak artifact. */
+val deviceSoakProfile = providers.gradleProperty("apmDeviceSoakProfile")
+
 /** Applies the common fail-closed host verifier command to a Gradle Exec task. */
 fun Exec.configureBenchmarkBudgetVerification() {
     inputs.file(benchmarkBudgets)
@@ -47,6 +56,32 @@ tasks.register<Exec>("verifyReleasePerformanceBudgets") {
     description = "Runs Release microbenchmarks on a connected device and enforces release budgets."
     dependsOn("connectedReleaseAndroidTest")
     configureBenchmarkBudgetVerification()
+}
+
+/** Fail-closed verifier for an already collected end-to-end physical-device campaign. */
+tasks.register<Exec>("verifyDeviceSoakFromResults") {
+    group = "verification"
+    description = "Checks a physical-device smoke/24h/72h artifact against checked-in budgets."
+    inputs.file(deviceSoakBudgets)
+    outputs.upToDateWhen { false }
+
+    // Properties stay mandatory so a missing or stale implicit artifact can never pass.
+    doFirst {
+        val resultPath = deviceSoakResults.orNull
+            ?: error("Set -PapmDeviceSoakResults=<result.json>")
+        val profile = deviceSoakProfile.orNull
+            ?: error("Set -PapmDeviceSoakProfile=smoke|24h|72h")
+        commandLine(
+            benchmarkPython.get(),
+            layout.projectDirectory.file("verify_device_soak.py").asFile.absolutePath,
+            "--budgets",
+            deviceSoakBudgets.asFile.absolutePath,
+            "--results",
+            file(resultPath).absolutePath,
+            "--profile",
+            profile
+        )
+    }
 }
 
 java {

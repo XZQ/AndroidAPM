@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，100 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。cross-layer byte-budget 定向验证另通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests，两个 lint 均为 `No issues found`。
+> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。cross-layer byte-budget 定向验证另通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests，两个 lint 均为 `No issues found`；后续 physical-device-soak host gate 14 tests 与 sample/benchmark 构建链通过。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -25,13 +25,13 @@
 
 ## 1. 总评
 
-**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、跨层资源硬上限）。R1–R12 以及后续 strict/wire/critical/time/byte-budget 客户端闭环项均已实现或采用明确有界方案；仍需生产 Collector、专用真机 runner 和设备矩阵完成外部验收。
+**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、跨层资源硬上限）。R1–R12 以及后续 strict/wire/critical/time/byte-budget/physical-soak 客户端闭环项均已实现或采用明确有界方案；仍需生产 Collector、允许安装的专用真机和设备矩阵执行外部验收。
 
 **闭环后综合评分：4.9 / 5.0**。剩余扣分来自单 dispatcher worker 的已知吞吐上限、已冻结 typed wire V2 尚需生产 Collector 部署，以及预算 gate 尚未在接受的物理设备上形成首个发布基线；这些不再是未实现的客户端代码缺口。
 
 | 维度 | 评分 | 一句话 |
 |---|---:|---|
-| P1 观察者效应 | 4.7 | 固定 time/allocation 预算门 + 模块高水位隔离 + 8 MiB dispatcher 字节门已落地；单 worker 吞吐上限仍明确存在 |
+| P1 观察者效应 | 4.8 | microbenchmark + 端到端 A/B/长稳失败门、模块高水位隔离和 8 MiB dispatcher 字节门已落地；单 worker 上限仍明确存在 |
 | P2 投递可靠性 | 4.8 | outbox claim/lease 教科书级，几乎挑不出毛病 |
 | P3 隐私安全 | 4.8 | PII 默认开启，并覆盖文本规则与高置信敏感字段名；自定义业务字段仍需接入方治理 |
 | P4 测量方法学 | 4.8 | epoch/单调职责分离；FPS 按真实 interval/elapsed time 计算并按刷新率封顶；真机方法学仍需设备矩阵 |
@@ -86,7 +86,7 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 
 | 项 | 当前状态 | 闭环实现 | 主要提交 |
 |---|---|---|---|
-| R1 | 客户端完成；物理基线待外部 runner | 固定 median time/allocation 预算、host verifier、缺项/坏指标/超限失败、默认拒绝 emulator | `c2eba30` |
+| R1 | 客户端完成；物理执行待设备解禁 | 固定 microbenchmark 预算 + 启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h A/B gate；缺项/坏指标/时长不足/超限/emulator 均失败 | `c2eba30` + 当前源码 |
 | R2 | 完成 | PII 默认开启；文本正则 + 高置信字段名直接遮蔽，包括数值敏感值 | `2823038` |
 | R3 | 有界闭环 | 2048 条 + 8 MiB 双预算；75% 高水位后限制单模块 NORMAL/LOW 占总容量 50%，HIGH/CRITICAL 可多 victim 淘汰；单 worker 上限如实保留 | `b0ea7fa` + 当前源码 |
 | R4 | 完成 | 同步 provider 契约化；新增 `ASYNC_CACHED`、LKG、合并刷新和生命周期 | `f2414df` |
@@ -102,7 +102,7 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 ### P0（建议尽快处理）
 
 **R1. 开销预算 + CI 回归门——已完成客户端 gate**
-`apm-benchmark/benchmark-budgets.json` 固定 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations。`:apm-benchmark:verifyReleasePerformanceBudgets` 串联 connected benchmark 与 fail-closed verifier；缺项、坏 JSON、坏指标、超预算或 emulator 证据都会失败。当前 Xiaomi 安装仍被设备策略阻止，因此“首次接受真机通过”是外部设备验收，不伪装成已发生。
+`apm-benchmark/benchmark-budgets.json` 固定 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations。`:apm-benchmark:verifyReleasePerformanceBudgets` 串联 connected benchmark 与 fail-closed verifier。新增 `device-soak-budgets.json`、sample A/B probe、host runner 与 verifier：SDK-disabled control 和 SDK-enabled/失败 uploader 冷进程构造相同 map，采启动、`Apm.init`、主线程 P95、CPU、PSS、app-private disk、UID power 与 thermal，并在 smoke/24h/72h profile 中强制实际时长与重启次数。长 profile 无 app UID 或外部功耗仪证据即失败。当前 Xiaomi 安装 sample APK 仍被设备策略阻止，因此“首次接受真机通过”和 24/72 小时运行是外部设备验收，不伪装成已发生。
 
 **R2. PII 默认与字段级保护——已完成**
 `enablePiiSanitization=true` 是当前默认值。dispatcher 在 durable encode 之前执行脱敏：手机号/邮箱/身份证/URL credential 等文本模式继续生效，高置信字段名（authorization、token、password、API key、cookie、phone/email 等）直接遮蔽整个值，因此数值型或不匹配正则的敏感值也不会漏过。关闭仍是显式 opt-out，并要求接入方隐私评审。
@@ -162,18 +162,19 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 13 | 关键事件 hand-off + loss reason/priority | P1 | Crash/ANR 同步本地接管；drop 三维计数并显式保留 unknown |
 | 14 | 时间语义 + 直接事件快照 | P1 | epoch/单调职责分离；异步 hand-off 冻结 fields/context/extras |
 | 15 | dispatcher / multi-process / IPC / SQLite 字节预算 | P1 | 8 MiB dispatcher；4 MiB/256 KiB/1 MiB/16 MiB IPC；256 KiB/64 MiB SQLite |
+| 16 | 真机 A/B / 离线 / 重启 / 长稳门禁 | P1 | smoke/24h/72h profile、完整资源采集与 fail-closed verifier 已实现；物理执行待设备解禁 |
 
 ---
 
 ## 5. 闭环验证与局限
 
 - **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：最新 cross-layer byte-budget 源码在 JDK 17.0.14 下通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests，均 0 failures/errors/skips；两个 lint 报告均为 `No issues found`。此前 time-semantics、R1 host gate、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
-- **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 47 个本地链接。
-- **仍需真机/外部系统**：接受物理设备上的预算 gate、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵、生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。模拟器 benchmark 只证明 instrumentation/parser 链路，不能替代物理性能结论。
+- **定向测试/构建**：最新 physical-device-soak gate 的 14 个 host tests 通过；sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings。此前 cross-layer byte-budget 通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests；time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
+- **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 48 个本地链接。
+- **仍需真机/外部系统**：在允许安装测试 APK 的物理设备上真正执行 smoke/24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。当前 Xiaomi 返回 `INSTALL_FAILED_USER_RESTRICTED`；host tests 或模拟器只证明代码链路，不能替代物理性能结论。
 
 ---
 
 ## 6. 一句话结论
 
-**客户端实现已经形成跨层闭环：低开销有固定预算与失败门，dispatcher/IPC/SQLite 分别按真实资源维度限界，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地。** 这使 SDK 达到“可进入生产接入与真实设备/服务端验收”的水平；是否正式上线仍必须由接入方完成 Collector、合规、真机预算、OEM 长稳和告警闭环，不能仅凭客户端单测替代。
+**客户端实现已经形成跨层闭环：低开销同时有 microbenchmark 与端到端 A/B/离线/重启/长稳失败门，dispatcher/IPC/SQLite 分别按真实资源维度限界，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地。** 这使 SDK 达到“可进入生产接入与真实设备/服务端验收”的水平；是否正式上线仍必须由接入方完成 Collector、合规、真机跑满预算、OEM 长稳和告警闭环，不能仅凭客户端单测替代。

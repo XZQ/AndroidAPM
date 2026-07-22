@@ -9,6 +9,9 @@ import android.database.sqlite.SQLiteOpenHelper
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
+import android.os.SystemClock
+import android.util.Log
 import android.webkit.WebView
 import android.widget.Button
 import android.widget.TextView
@@ -16,6 +19,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import com.apm.core.Apm
 import com.apm.core.diagnostics.ApmDiagnostics
+import com.apm.model.ApmPriority
 import com.apm.sqlite.ApmSQLiteDatabase
 import java.io.File
 import java.util.concurrent.ExecutorService
@@ -23,9 +27,13 @@ import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 /** Interactive integration surface for the SDK's explicit host-side APIs. */
 class MainActivity : AppCompatActivity() {
+    /** Whether the interactive demo resources were initialized for normal sample use. */
+    private var interactiveDemoInitialized = false
+
     /** Memory retained intentionally until the user clears the demo bucket. */
     private val leakBucket = ArrayList<ByteArray>()
 
@@ -66,12 +74,58 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Fixed rolling latency reservoir used without per-event object allocation. */
+    private val soakLatencySamplesNs = LongArray(SOAK_LATENCY_SAMPLE_CAPACITY)
+
+    /** Total operations observed during the current soak segment. */
+    private var soakOperationCount = 0L
+
+    /** Requested end time for the current soak segment. */
+    private var soakEndElapsedMs = 0L
+
+    /** Segment start time used to report actual observed duration. */
+    private var soakStartedElapsedMs = 0L
+
+    /** Process age at segment start, including Application initialization. */
+    private var soakProcessAgeAtStartMs = 0L
+
+    /** Synthetic event rate applied once per main-thread tick. */
+    private var soakEventsPerSecond = 0
+
+    /** Stable host-supplied identity for one process segment. */
+    private var soakRunId = ""
+
+    /** Keeps the control workload observable to the runtime optimizer. */
+    private var soakControlBlackhole = 0
+
+    /** Main-thread fixed-rate workload used by device-soak profiles. */
+    private val soakWorkloadTask = object : Runnable {
+        /** Executes one bounded event burst or publishes the final result. */
+        override fun run() {
+            if (SystemClock.elapsedRealtime() >= soakEndElapsedMs) {
+                finishSoakProbe()
+                return
+            }
+            repeat(soakEventsPerSecond) {
+                runOneSoakOperation()
+            }
+            mainHandler.postDelayed(this, SOAK_TICK_INTERVAL_MS)
+        }
+    }
+
     /** Creates the sample UI and wires every explicit integration entry point. */
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         eventsView = findViewById(R.id.eventsView)
+        if (applySoakConfigurationForNextProcess(intent)) {
+            return
+        }
+        if (startSoakProbeIfRequested(intent)) {
+            return
+        }
+
         databaseHelper = DemoDatabaseHelper(this)
         monitoredDatabase = ApmSQLiteDatabase(
             databaseHelper.writableDatabase,
@@ -85,13 +139,16 @@ class MainActivity : AppCompatActivity() {
         configureExplicitIntegrationActions()
         configureDiagnosticsActions()
         configureWebView()
+        interactiveDemoInitialized = true
     }
 
     /** Starts the live recent-event refresh while the activity is visible. */
     override fun onStart() {
         super.onStart()
-        mainHandler.removeCallbacks(refreshTask)
-        mainHandler.post(refreshTask)
+        if (interactiveDemoInitialized) {
+            mainHandler.removeCallbacks(refreshTask)
+            mainHandler.post(refreshTask)
+        }
     }
 
     /** Stops UI refresh work when the activity is no longer visible. */
@@ -103,18 +160,155 @@ class MainActivity : AppCompatActivity() {
     /** Releases every host-owned resource and reverses explicit monitor registration. */
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
-        sampleApplication.threadMonitorModule.unregisterThreadPool(SAMPLE_THREAD_POOL_NAME)
+        if (interactiveDemoInitialized) {
+            sampleApplication.threadMonitorModule.unregisterThreadPool(SAMPLE_THREAD_POOL_NAME)
+            sampleApplication.webviewModule.uninstall(demoWebView)
+            demoWebView.destroy()
+            databaseHelper.close()
+        }
         monitoredThreadPool.shutdownNow()
         sampleExecutor.shutdownNow()
-        sampleApplication.webviewModule.uninstall(demoWebView)
-        demoWebView.destroy()
-        databaseHelper.close()
         super.onDestroy()
     }
 
     /** Returns the process application with its registered monitor references. */
     private val sampleApplication: SampleApplication
         get() = application as SampleApplication
+
+    /** Applies host-requested A/B flags synchronously for the next cold process launch. */
+    private fun applySoakConfigurationForNextProcess(sourceIntent: Intent): Boolean {
+        val changesSdkMode = sourceIntent.hasExtra(EXTRA_SOAK_SET_SDK_ENABLED)
+        val changesOfflineMode = sourceIntent.hasExtra(EXTRA_SOAK_SET_OFFLINE_COLLECTOR)
+        if (!changesSdkMode && !changesOfflineMode) {
+            return false
+        }
+        val preferences = getSharedPreferences(
+            SampleApplication.SOAK_PREFERENCES_NAME,
+            Context.MODE_PRIVATE
+        )
+        val editor = preferences.edit()
+        if (changesSdkMode) {
+            editor.putBoolean(
+                SampleApplication.SOAK_SDK_ENABLED_KEY,
+                sourceIntent.getBooleanExtra(EXTRA_SOAK_SET_SDK_ENABLED, true)
+            )
+        }
+        if (changesOfflineMode) {
+            editor.putBoolean(
+                SampleApplication.SOAK_OFFLINE_COLLECTOR_KEY,
+                sourceIntent.getBooleanExtra(EXTRA_SOAK_SET_OFFLINE_COLLECTOR, false)
+            )
+        }
+        // commit() makes the next force-stop/cold-start transition deterministic for the host gate.
+        val committed = editor.commit()
+        val status = JSONObject()
+            .put("committed", committed)
+            .put(
+                "sdkEnabled",
+                preferences.getBoolean(SampleApplication.SOAK_SDK_ENABLED_KEY, true)
+            )
+            .put(
+                "offlineCollector",
+                preferences.getBoolean(SampleApplication.SOAK_OFFLINE_COLLECTOR_KEY, false)
+            )
+        eventsView.text = status.toString()
+        Log.i(SOAK_LOG_TAG, SOAK_CONFIG_MARKER + status.toString())
+        return true
+    }
+
+    /** Starts a bounded main-thread workload when the host supplies soak arguments. */
+    private fun startSoakProbeIfRequested(sourceIntent: Intent): Boolean {
+        if (!sourceIntent.hasExtra(EXTRA_SOAK_DURATION_SECONDS)) {
+            return false
+        }
+        val durationSeconds = sourceIntent.getLongExtra(EXTRA_SOAK_DURATION_SECONDS, 0L)
+            .coerceIn(MIN_SOAK_DURATION_SECONDS, MAX_SOAK_DURATION_SECONDS)
+        soakEventsPerSecond = sourceIntent.getIntExtra(
+            EXTRA_SOAK_EVENTS_PER_SECOND,
+            DEFAULT_SOAK_EVENTS_PER_SECOND
+        ).coerceIn(MIN_SOAK_EVENTS_PER_SECOND, MAX_SOAK_EVENTS_PER_SECOND)
+        soakRunId = sourceIntent.getStringExtra(EXTRA_SOAK_RUN_ID).orEmpty()
+            .take(MAX_SOAK_RUN_ID_LENGTH)
+        soakOperationCount = 0L
+        soakLatencySamplesNs.fill(0L)
+        soakStartedElapsedMs = SystemClock.elapsedRealtime()
+        soakEndElapsedMs = soakStartedElapsedMs + durationSeconds * MILLIS_PER_SECOND
+        soakProcessAgeAtStartMs = (
+            soakStartedElapsedMs - Process.getStartElapsedRealtime()
+            ).coerceAtLeast(0L)
+        eventsView.text = "Device soak running: $soakRunId"
+        mainHandler.post(soakWorkloadTask)
+        return true
+    }
+
+    /** Executes one identical synthetic operation with only [Apm.emit] differing in control mode. */
+    private fun runOneSoakOperation() {
+        val sequence = soakOperationCount
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        val fields = mapOf<String, Any?>(
+            "sequence" to sequence,
+            "runId" to soakRunId,
+            "payload" to SOAK_PAYLOAD
+        )
+        if (sampleApplication.soakSdkEnabled) {
+            Apm.emit(
+                module = SOAK_EVENT_MODULE,
+                name = SOAK_EVENT_NAME,
+                priority = ApmPriority.LOW,
+                fields = fields
+            )
+        } else {
+            // The control process retains the same map construction without entering the SDK.
+            soakControlBlackhole = soakControlBlackhole xor fields.hashCode()
+        }
+        val elapsedNs = (SystemClock.elapsedRealtimeNanos() - startedNs).coerceAtLeast(0L)
+        val sampleIndex = (sequence % SOAK_LATENCY_SAMPLE_CAPACITY).toInt()
+        soakLatencySamplesNs[sampleIndex] = elapsedNs
+        soakOperationCount += 1L
+    }
+
+    /** Writes one compact segment result for `adb run-as` retrieval and Logcat diagnosis. */
+    private fun finishSoakProbe() {
+        mainHandler.removeCallbacks(soakWorkloadTask)
+        val observedDurationMs = (
+            SystemClock.elapsedRealtime() - soakStartedElapsedMs
+            ).coerceAtLeast(0L)
+        val sampleCount = soakOperationCount.coerceAtMost(SOAK_LATENCY_SAMPLE_CAPACITY.toLong()).toInt()
+        val sortedSamples = soakLatencySamplesNs.copyOf(sampleCount).apply { sort() }
+        val result = JSONObject()
+            .put("schemaVersion", SOAK_RESULT_SCHEMA_VERSION)
+            .put("runId", soakRunId)
+            .put("sdkEnabled", sampleApplication.soakSdkEnabled)
+            .put("offlineCollector", sampleApplication.soakOfflineCollector)
+            .put("pid", Process.myPid())
+            .put("processAgeAtStartMs", soakProcessAgeAtStartMs)
+            .put("initDurationNs", sampleApplication.apmInitDurationNs)
+            .put("observedDurationMs", observedDurationMs)
+            .put("operationCount", soakOperationCount)
+            .put("latencySampleCount", sampleCount)
+            .put("operationP50Ns", percentile(sortedSamples, PERCENTILE_50))
+            .put("operationP95Ns", percentile(sortedSamples, PERCENTILE_95))
+            .put("operationMaxNs", sortedSamples.lastOrNull() ?: 0L)
+        val serialized = result.toString()
+        try {
+            // This small write happens after the measured interval and survives process restart.
+            File(filesDir, SOAK_RESULT_FILE_NAME).writeText(serialized, Charsets.UTF_8)
+        } catch (error: Exception) {
+            Log.e(SOAK_LOG_TAG, "Failed to persist device-soak result", error)
+        }
+        Log.i(SOAK_LOG_TAG, SOAK_RESULT_MARKER + serialized)
+        eventsView.text = serialized
+    }
+
+    /** Returns one nearest-rank percentile from an already sorted primitive sample array. */
+    private fun percentile(sortedSamples: LongArray, percentile: Int): Long {
+        if (sortedSamples.isEmpty()) {
+            return 0L
+        }
+        val rank = ((sortedSamples.size * percentile + PERCENT_DENOMINATOR - 1) /
+            PERCENT_DENOMINATOR).coerceIn(1, sortedSamples.size)
+        return sortedSamples[rank - 1]
+    }
 
     /** Wires allocation, cleanup, snapshot, and lifecycle-leak demonstrations. */
     private fun configureMemoryActions() {
@@ -350,6 +544,56 @@ class MainActivity : AppCompatActivity() {
     }
 
     companion object {
+        /** Intent extra that selects SDK-enabled or control mode for the next process. */
+        private const val EXTRA_SOAK_SET_SDK_ENABLED = "apm_soak_set_sdk_enabled"
+        /** Intent extra that selects the offline collector for the next process. */
+        private const val EXTRA_SOAK_SET_OFFLINE_COLLECTOR = "apm_soak_set_offline_collector"
+        /** Intent extra containing one process-segment duration in seconds. */
+        private const val EXTRA_SOAK_DURATION_SECONDS = "apm_soak_duration_seconds"
+        /** Intent extra containing the synthetic main-thread event rate. */
+        private const val EXTRA_SOAK_EVENTS_PER_SECOND = "apm_soak_events_per_second"
+        /** Intent extra containing the stable host run identity. */
+        private const val EXTRA_SOAK_RUN_ID = "apm_soak_run_id"
+        /** Logcat tag reserved for host-side soak orchestration. */
+        private const val SOAK_LOG_TAG = "AndroidAPM-Soak"
+        /** Machine-readable prefix for persisted mode changes. */
+        private const val SOAK_CONFIG_MARKER = "APM_SOAK_CONFIG="
+        /** Machine-readable prefix for completed segment summaries. */
+        private const val SOAK_RESULT_MARKER = "APM_SOAK_RESULT="
+        /** App-private result retrieved through `adb exec-out run-as`. */
+        private const val SOAK_RESULT_FILE_NAME = "apm-device-soak-result.json"
+        /** Current host/device result schema. */
+        private const val SOAK_RESULT_SCHEMA_VERSION = 1
+        /** Smallest accepted process-segment duration. */
+        private const val MIN_SOAK_DURATION_SECONDS = 1L
+        /** Longest supported campaign segment, equal to 72 hours. */
+        private const val MAX_SOAK_DURATION_SECONDS = 72L * 60L * 60L
+        /** Default synthetic event rate per second. */
+        private const val DEFAULT_SOAK_EVENTS_PER_SECOND = 10
+        /** Smallest synthetic event rate accepted from the host. */
+        private const val MIN_SOAK_EVENTS_PER_SECOND = 1
+        /** Largest bounded main-thread event rate accepted from the host. */
+        private const val MAX_SOAK_EVENTS_PER_SECOND = 1_000
+        /** Maximum primitive latency samples retained per process segment. */
+        private const val SOAK_LATENCY_SAMPLE_CAPACITY = 4_096
+        /** Main-thread workload cadence in milliseconds. */
+        private const val SOAK_TICK_INTERVAL_MS = 1_000L
+        /** Milliseconds represented by one second. */
+        private const val MILLIS_PER_SECOND = 1_000L
+        /** Maximum host run-identity length persisted into events. */
+        private const val MAX_SOAK_RUN_ID_LENGTH = 128
+        /** Median nearest-rank percentile. */
+        private const val PERCENTILE_50 = 50
+        /** Tail nearest-rank percentile. */
+        private const val PERCENTILE_95 = 95
+        /** Percentage denominator used by nearest-rank calculation. */
+        private const val PERCENT_DENOMINATOR = 100
+        /** Dedicated module name for synthetic soak events. */
+        private const val SOAK_EVENT_MODULE = "device_soak"
+        /** Dedicated event name for synthetic soak operations. */
+        private const val SOAK_EVENT_NAME = "synthetic_main_thread"
+        /** Bounded payload shared by control and SDK-enabled workloads. */
+        private const val SOAK_PAYLOAD = "bounded-offline-probe"
         /** Event panel refresh interval in milliseconds. */
         private const val REFRESH_INTERVAL_MS = 2_000L
         /** Number of recent events displayed on screen. */
