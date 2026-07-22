@@ -91,6 +91,14 @@ data class ApmConfig(
     val maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
     /** SQLite 活跃 payload 总量预算；超限时按低优先级、旧事件优先淘汰。 */
     val maxStoredPayloadBytes: Long = DEFAULT_MAX_STORED_PAYLOAD_BYTES,
+    /** Dispatcher queued-event retained-byte budget in addition to the fixed event count. */
+    val maxDispatcherQueueBytes: Long = DEFAULT_MAX_DISPATCHER_QUEUE_BYTES,
+    /** Non-uploader process pending-event byte budget before IPC serialization. */
+    val maxIpcPendingBytes: Long = DEFAULT_MAX_IPC_PENDING_BYTES,
+    /** Maximum bytes in one atomically published IPC hand-off file. */
+    val maxIpcFileBytes: Long = DEFAULT_MAX_IPC_FILE_BYTES,
+    /** Maximum published IPC bytes retained across all SDK hand-off files. */
+    val maxIpcDirectoryBytes: Long = DEFAULT_MAX_IPC_DIRECTORY_BYTES,
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
     /** 业务上下文提供者；调用位置和新鲜度由 [bizContextCaptureMode] 控制。 */
@@ -194,6 +202,18 @@ data class ApmConfig(
 
         /** Default live SQLite payload budget: 64 MiB. */
         private const val DEFAULT_MAX_STORED_PAYLOAD_BYTES = 64L * 1024L * 1024L
+
+        /** Default process-local dispatcher retention budget: 8 MiB. */
+        private const val DEFAULT_MAX_DISPATCHER_QUEUE_BYTES = 8L * 1024L * 1024L
+
+        /** Default non-uploader pending-event retention budget: 4 MiB. */
+        private const val DEFAULT_MAX_IPC_PENDING_BYTES = 4L * 1024L * 1024L
+
+        /** Default atomic IPC file budget: 1 MiB. */
+        private const val DEFAULT_MAX_IPC_FILE_BYTES = 1L * 1024L * 1024L
+
+        /** Default total published IPC directory budget: 16 MiB. */
+        private const val DEFAULT_MAX_IPC_DIRECTORY_BYTES = 16L * 1024L * 1024L
 
         /** Default queue pressure level that activates noisy-module isolation. */
         private const val DEFAULT_DISPATCHER_HIGH_WATERMARK_PERCENT = 75

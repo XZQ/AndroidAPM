@@ -51,14 +51,20 @@ class ApmContext internal constructor(
      *
      * @param priority 入队前已知的事件优先级
      * @param sourceModule 入队前已知的来源模块，用于共享队列的 noisy-neighbor 隔离
+     * @param estimatedBytes conservative retained-byte reservation for dispatcher admission
      * @param eventFactory 事件构建工厂（纯函数，可在任意线程执行）
      */
-    internal fun emitLazy(priority: ApmPriority, sourceModule: String, eventFactory: () -> ApmEvent) {
+    internal fun emitLazy(
+        priority: ApmPriority,
+        sourceModule: String,
+        estimatedBytes: Long,
+        eventFactory: () -> ApmEvent
+    ) {
         if (processCoordinator != null && !isUploaderProcess) {
             // IPC 写文件需要完整事件，立即构建
             processCoordinator.writeEvent(eventFactory())
         } else {
-            dispatcher.dispatchLazy(priority, sourceModule, eventFactory)
+            dispatcher.dispatchLazy(priority, sourceModule, estimatedBytes, eventFactory)
         }
     }
 
@@ -71,11 +77,14 @@ class ApmContext internal constructor(
     fun emitCriticalSync(event: ApmEvent): Boolean {
         return if (processCoordinator != null && !isUploaderProcess) {
             selfMonitor?.recordEmit()
-            val handedOff = processCoordinator.writeEventSync(event)
-            if (!handedOff) {
-                selfMonitor?.recordDrop(event.priority, SdkDropReason.IPC_HANDOFF_FAILURE)
+            val result = processCoordinator.writeEventSyncWithResult(event)
+            if (!result.success) {
+                selfMonitor?.recordDrop(
+                    event.priority,
+                    result.dropReason ?: SdkDropReason.IPC_HANDOFF_FAILURE
+                )
             }
-            handedOff
+            result.success
         } else {
             dispatcher.dispatchCriticalSync(event)
         }

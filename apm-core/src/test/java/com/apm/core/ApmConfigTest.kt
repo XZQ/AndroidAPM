@@ -112,6 +112,10 @@ class ApmConfigTest {
         assertEquals(256 * 1024, config.maxEventPayloadBytes)
         assertEquals(64L * 1024L * 1024L, config.maxStoredPayloadBytes)
         assertEquals(1024 * 1024, config.maxUploadBatchBytes)
+        assertEquals(8L * 1024L * 1024L, config.maxDispatcherQueueBytes)
+        assertEquals(4L * 1024L * 1024L, config.maxIpcPendingBytes)
+        assertEquals(1L * 1024L * 1024L, config.maxIpcFileBytes)
+        assertEquals(16L * 1024L * 1024L, config.maxIpcDirectoryBytes)
     }
 
     /** 默认 dispatcher 在 75% 水位限制单模块占用到队列容量的 50%。 */

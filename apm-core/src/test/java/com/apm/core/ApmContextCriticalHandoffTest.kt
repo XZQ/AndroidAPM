@@ -49,6 +49,53 @@ class ApmContextCriticalHandoffTest {
         }
     }
 
+    /** Critical IPC byte rejection is counted once with the exact file-budget reason. */
+    @Test
+    fun `critical ipc byte rejection preserves exact reason`() {
+        val ipcDirectory = createTempDirectory("apm-critical-ipc-budget").toFile()
+        val coordinator = ProcessEventCoordinator(
+            ipcDir = ipcDirectory,
+            isUploaderProcess = false,
+            maxEventPayloadBytes = 1024 * 1024,
+            maxFileBytes = 64L,
+            maxDirectoryBytes = 1024L
+        )
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(NoOpStore, NoOpUploader, NoOpLogger, selfMonitor = selfMonitor)
+        try {
+            coordinator.start()
+            val context = ApmContext(
+                application = RuntimeEnvironment.getApplication(),
+                config = ApmConfig(),
+                processName = "remote",
+                logger = NoOpLogger,
+                dispatcher = dispatcher,
+                processCoordinator = coordinator,
+                isUploaderProcess = false
+            ).also { it.selfMonitor = selfMonitor }
+
+            assertFalse(
+                context.emitCriticalSync(
+                    ApmEvent(
+                        module = "anr",
+                        name = "oversized_anr",
+                        priority = ApmPriority.CRITICAL,
+                        fields = mapOf("stack" to "x".repeat(256))
+                    )
+                )
+            )
+
+            assertEquals(1L, selfMonitor.getTotalDropCount())
+            assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.IPC_FILE_BYTE_BUDGET))
+            assertEquals(0L, selfMonitor.getDropCount(SdkDropReason.IPC_HANDOFF_FAILURE))
+            assertEquals(1L, selfMonitor.getDropCount(ApmPriority.CRITICAL))
+        } finally {
+            coordinator.stop()
+            dispatcher.shutdown()
+            ipcDirectory.deleteRecursively()
+        }
+    }
+
     /** Stateless event store unused by the remote-process IPC branch. */
     private object NoOpStore : EventStore {
         /** Accepts an event if unexpectedly invoked. */

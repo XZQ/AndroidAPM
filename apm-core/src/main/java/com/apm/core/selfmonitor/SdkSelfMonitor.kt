@@ -44,6 +44,9 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     /** 当前队列大小快照（由外部定期更新）。 */
     private val currentQueueSize = AtomicInteger(0)
 
+    /** Current dispatcher retained-byte reservation snapshot. */
+    private val currentQueueBytes = AtomicLong(0L)
+
     /** SDK 内部错误计数（监控模块捕获并降级处理的异常）。 */
     private val internalErrorCount = AtomicLong(0L)
 
@@ -177,6 +180,12 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
         currentQueueSize.set(size)
     }
 
+    /** Updates count and retained-byte pressure snapshots from the dispatcher. */
+    fun updateQueuePressure(size: Int, bytes: Long) {
+        currentQueueSize.set(size.coerceAtLeast(0))
+        currentQueueBytes.set(bytes.coerceAtLeast(0L))
+    }
+
     /**
      * 生成当前周期的健康报告。
      * 读取所有计数器快照并重置归零（用于下一周期）。
@@ -206,6 +215,7 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
             emitCount = emit,
             dropCount = drop,
             queueSize = currentQueueSize.get(),
+            queueBytes = currentQueueBytes.get(),
             avgUploadLatencyMs = avgLatency,
             maxUploadLatencyMs = maxLatency,
             internalErrorCount = internalErrors,

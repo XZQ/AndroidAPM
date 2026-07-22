@@ -79,6 +79,7 @@ Apm.init(application, config)
 - 捕获 `Thread.currentThread().name`
 - 按 `BizContextCaptureMode` 现场调用 provider 或 O(1) 读取异步 LKG，并取得不可变快照
 - 复制顶层 `fields` / `extras`，冻结本次发生时刻的 payload map
+- 用 `ApmEventSizeEstimator` 对已冻结字符串、标量和 map 做保守 retained-memory 估算，不执行 durable 编码
 - 创建 lazy event factory 并非阻塞入队
 
 event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。
@@ -89,24 +90,26 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 `ASYNC_CACHED` 用 `BizContextSnapshotSource` 在 `apm-biz-context` 单线程 executor 立即异步首刷并按配置周期刷新。provider 返回值复制后通过 `AtomicReference` 发布；失败只记录 `biz_context_provider` internal error，保留 last-known-good，不用空值覆盖。emit 只读取原子快照，不执行宿主代码；代价是首次成功前为空、正常最多滞后一个刷新周期。`bizContextRefreshIntervalMs` 运行时约束到 100 ms–24 h；`Apm.refreshBizContext()` 可在登录/退出/租户切换后请求即时后台刷新，`AtomicBoolean` 最多允许一个显式 pending 任务，避免请求风暴形成无界队列。stop 和 init rollback 都会关闭该 executor。
 
-`emitCriticalSync` 不走 lazy queue：调用方较低 priority 自动提升为 CRITICAL，立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。Crash/ANR 均使用该入口；它绕过 sampling/aggregation/rate limit 且不执行网络请求。非 uploader 进程同步 IPC 失败会进入 `IPC_HANDOFF_FAILURE` reason/priority 计数。
+`emitCriticalSync` 不走 lazy queue：调用方较低 priority 自动提升为 CRITICAL，立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。Crash/ANR 均使用该入口；它绕过 sampling/aggregation/rate limit 且不执行网络请求。非 uploader 进程同步 IPC 失败会把 `IPC_FILE_BYTE_BUDGET` / `IPC_DIRECTORY_BYTE_BUDGET` 等准确 reason 与 CRITICAL priority 计数一次；无法细分的发布失败才使用 `IPC_HANDOFF_FAILURE`。
 
 ## 5. Dispatcher
 
 ### 队列与 worker
 
 - `ArrayBlockingQueue<QueuedEvent>`
-- capacity：2048
+- capacity：2048 events + 默认 8 MiB estimated retained bytes
 - producer：`tryLock` + `offer`，永不等待；锁竞争时立即 drop + self-monitor
 - 默认 noisy-neighbor 门禁：队列达到 75% 后，同一来源模块若已占总容量 50%，后续 NORMAL/LOW 立即 drop；HIGH/CRITICAL 绕过
 - 每个排队模块使用 O(1) 占用计数；offer 前登记，offer 失败/优先级淘汰/worker drain 时释放，空模块键删除
-- overflow：高优先级可替换最旧的最低优先级事件；同级先到先得
+- `queuedBytes` 在 admission lock 下随 offer/drain/淘汰同步更新，并暴露给 `sdk_health`
+- overflow：高优先级可替换足够数量的最旧最低优先级事件，使条数和字节同时满足；同级先到先得
+- 单事件估算超过总预算时以 `DISPATCHER_BYTE_BUDGET` 立即拒绝，不进入队列
 - admission lock 同时覆盖 remove + offer，避免替换空位被并发 producer 抢占
 - worker poll：100 ms
 - 每轮：首条 + `drainTo`，最多 32 条
 - shutdown：不再接收，继续排空已接受事件，最多等待 3 秒
 
-公共配置为 `enableDispatcherModuleIsolation=true`、`dispatcherIsolationHighWatermarkPercent=75`、`dispatcherMaxModuleQueueSharePercent=50`；两个百分比运行时约束到 1–100，单模块占比不会高于高水位。关闭隔离时不维护模块占用 map，恢复原有全容量准入语义。该门禁只隔离共享入口容量，worker 仍单线程顺序执行以下 pipeline；它不构成多 worker 或按模块并行化声明。
+公共配置为 `maxDispatcherQueueBytes=8388608`、`enableDispatcherModuleIsolation=true`、`dispatcherIsolationHighWatermarkPercent=75`、`dispatcherMaxModuleQueueSharePercent=50`；两个百分比运行时约束到 1–100，单模块占比不会高于高水位。关闭模块隔离时不维护模块占用 map，但条数/字节总预算仍生效。该门禁只隔离共享入口容量，worker 仍单线程顺序执行以下 pipeline；它不构成多 worker 或按模块并行化声明。
 
 ### 批处理顺序
 
@@ -170,15 +173,16 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 开启后：
 
 - main process：dispatcher + scan executor
-- child process：write executor，不直接调用 uploader
-- 普通事件：buffer 100 行或 500 ms
-- critical：同步单文件
+- child process：write executor，不直接调用 uploader；普通 producer 通过 lock-free queue + 原子 4 MiB 估算字节预算准入，不等待 writer IO
+- 普通事件：唯一 500 ms fixed-delay task 取出 pending，单轮最多 16,384 条并按 100 行/文件字节拆分；不为每个事件提交 executor task
+- critical：同步单文件，并返回准确预算/发布失败原因
 - payload：`ApmEventCodec` 后 Base64，每行一个事件
-- publish：unique `.tmp` -> `.ipc`
+- raw event：默认最大 256 KiB
+- publish：单 ready 文件默认最大 1 MiB；unique `.tmp` -> 在跨进程锁内检查 16 MiB ready-directory 预算 -> `.ipc`
 - scan：5 秒
 - age limit：5 分钟
 
-主进程 decode 后添加 `extras["ipc_source"]="remote_process"` 再进入 dispatcher。
+主进程先按 ready 文件实际大小拒绝超限文件，再流式逐行检查行数/行长/解码 payload，避免 `readLines()` 构造无界 List；decode 后添加 `extras["ipc_source"]="remote_process"` 再进入 dispatcher。容量拒绝分别记录 `IPC_PENDING_BYTE_BUDGET`、`IPC_FILE_BYTE_BUDGET` 或 `IPC_DIRECTORY_BYTE_BUDGET`。
 
 ## 9. 限流、灰度与动态配置
 
@@ -218,10 +222,11 @@ PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身
 - drop count/rate
 - dispatcher module-isolation drop count（同时计入总 drop）
 - queue size
+- queue estimated bytes
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`，并把固定 `SdkDropReason` 与 LOW/NORMAL/HIGH/CRITICAL 计数展开为 `dropReason.*` / `dropPriority.*` 数值字段。队列竞争/满/优先级淘汰/模块隔离、处理失败、采样、限流、storage reject/failure/evict、non-durable uploader reject、outbox prune、consent erase 和 critical IPC failure 均有明确 reason；兼容层只返回总数时进入 `dropPriority.unattributed`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`queueBytes`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`，并把固定 `SdkDropReason` 与 LOW/NORMAL/HIGH/CRITICAL 计数展开为 `dropReason.*` / `dropPriority.*` 数值字段。队列竞争/满/字节预算/优先级淘汰/模块隔离、处理失败、采样、限流、storage reject/failure/evict、non-durable uploader reject、outbox prune、consent erase，以及 IPC pending/file/directory budget/critical failure 均有明确 reason；兼容层只返回总数时进入 `dropPriority.unattributed`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。
 
 `AutoThrottleController` 根据 drop rate/upload latency 维护完整降级集合：drop rate > 50% 或平均上传延迟 > 10 秒立即关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块。恢复阈值采用迟滞：连续 3 个周期 drop rate <= 20% 且平均上传延迟 <= 3 秒才释放；迟滞区间或再次退化会重置计数。`Apm` 在 `initLock` 下镜像该集合，后注册和动态配置不能绕过；恢复仍通过 `startModule` 重查进程、签名配置和灰度门禁。健康事件的 telemetry 副本仍经过同一 dispatcher，但 HIGH 优先级可在入口满载时替换更低优先级事件。
 

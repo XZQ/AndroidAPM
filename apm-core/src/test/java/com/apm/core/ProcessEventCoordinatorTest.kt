@@ -1,6 +1,8 @@
 package com.apm.core
 
 import com.apm.model.ApmEvent
+import com.apm.core.selfmonitor.SdkDropReason
+import com.apm.model.ApmPriority
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -53,6 +55,95 @@ class ProcessEventCoordinatorTest {
             assertEquals(1, readyFiles.size)
             assertEquals(0, tempFiles.size)
             coordinator.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** Pending retention is bounded before any writer task can accumulate. */
+    @Test
+    fun `pending byte budget rejects oversized retained event`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-pending-budget").toFile()
+        try {
+            val drops = mutableListOf<Pair<ApmPriority, SdkDropReason>>()
+            val coordinator = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = false,
+                maxPendingBytes = 1L
+            )
+            coordinator.onDrop = { priority, reason -> drops += priority to reason }
+            coordinator.start()
+
+            coordinator.writeEvent(
+                ApmEvent(module = "ipc", name = "pending", priority = ApmPriority.HIGH)
+            )
+
+            assertEquals(0, coordinator.pendingBufferSize())
+            assertEquals(0L, coordinator.pendingBufferBytes())
+            assertEquals(
+                listOf(ApmPriority.HIGH to SdkDropReason.IPC_PENDING_BYTE_BUDGET),
+                drops
+            )
+            coordinator.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** One encoded line larger than the atomic file budget is rejected without a temp residue. */
+    @Test
+    fun `ipc file byte budget rejects oversized encoded event`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-file-budget").toFile()
+        try {
+            val coordinator = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = false,
+                maxEventPayloadBytes = 1024 * 1024,
+                maxFileBytes = 64L,
+                maxDirectoryBytes = 1024L
+            )
+            coordinator.start()
+
+            val result = coordinator.writeEventSyncWithResult(
+                ApmEvent(module = "ipc", name = "file-budget", fields = mapOf("value" to "x".repeat(256)))
+            )
+
+            assertFalse(result.success)
+            assertEquals(SdkDropReason.IPC_FILE_BYTE_BUDGET, result.dropReason)
+            assertEquals(0, dir.listFilesByExtension(READY_EXTENSION).size)
+            assertEquals(0, dir.listFilesByExtension(TEMP_EXTENSION).size)
+            coordinator.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /** A process-shared directory lock prevents a second file from exceeding the byte budget. */
+    @Test
+    fun `ipc directory byte budget rejects new ready file`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-directory-budget").toFile()
+        val event = ApmEvent(module = "ipc", name = "directory-budget")
+        try {
+            val firstWriter = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            firstWriter.start()
+            assertTrue(firstWriter.writeEventSync(event))
+            firstWriter.stop()
+            val existingFileBytes = dir.listFilesByExtension(READY_EXTENSION).single().length()
+
+            val secondWriter = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = false,
+                maxFileBytes = existingFileBytes,
+                maxDirectoryBytes = existingFileBytes
+            )
+            secondWriter.start()
+            val result = secondWriter.writeEventSyncWithResult(event)
+
+            assertFalse(result.success)
+            assertEquals(SdkDropReason.IPC_DIRECTORY_BYTE_BUDGET, result.dropReason)
+            assertEquals(1, dir.listFilesByExtension(READY_EXTENSION).size)
+            assertEquals(0, dir.listFilesByExtension(TEMP_EXTENSION).size)
+            secondWriter.stop()
         } finally {
             dir.deleteRecursively()
         }

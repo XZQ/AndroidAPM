@@ -10,6 +10,8 @@ enum class SdkDropReason {
     DISPATCHER_ADMISSION_BUSY,
     /** The bounded dispatcher queue had no lower-priority victim or free slot. */
     DISPATCHER_QUEUE_FULL,
+    /** The dispatcher retained-byte budget could not admit the event. */
+    DISPATCHER_BYTE_BUDGET,
     /** An older lower-priority queued event was evicted for more valuable work. */
     DISPATCHER_PRIORITY_EVICTION,
     /** One NORMAL/LOW module exceeded its protected high-water queue share. */
@@ -33,5 +35,11 @@ enum class SdkDropReason {
     /** Consent revocation intentionally erased queued telemetry. */
     CONSENT_REVOKED,
     /** A non-uploader process could not publish a critical IPC hand-off file. */
-    IPC_HANDOFF_FAILURE
+    IPC_HANDOFF_FAILURE,
+    /** A non-uploader process exhausted its pending-event retained-byte budget. */
+    IPC_PENDING_BYTE_BUDGET,
+    /** One encoded event or atomic IPC file exceeded its configured byte budget. */
+    IPC_FILE_BYTE_BUDGET,
+    /** Published IPC files exhausted the process-shared directory byte budget. */
+    IPC_DIRECTORY_BYTE_BUDGET
 }

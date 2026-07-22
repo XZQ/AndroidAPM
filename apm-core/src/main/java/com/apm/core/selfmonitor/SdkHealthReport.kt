@@ -23,6 +23,8 @@ data class SdkHealthReport(
     val dropCount: Long,
     /** 当前上传队列大小。 */
     val queueSize: Int,
+    /** Current dispatcher retained-byte reservation. */
+    val queueBytes: Long = 0L,
     /** 采集周期内平均上传延迟（毫秒）。 */
     val avgUploadLatencyMs: Long,
     /** 采集周期内最大上传延迟（毫秒）。 */
@@ -77,6 +79,7 @@ data class SdkHealthReport(
             FIELD_DROP_COUNT to dropCount,
             FIELD_DROP_RATE to dropRateValue,
             FIELD_QUEUE_SIZE to queueSize,
+            FIELD_QUEUE_BYTES to queueBytes,
             FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
             FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
             FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
@@ -103,6 +106,7 @@ data class SdkHealthReport(
         append(' ').append(FIELD_DROP_COUNT).append('=').append(dropCount)
         append(' ').append(FIELD_DROP_RATE).append('=').append(String.format(Locale.ROOT, "%.4f", dropRate))
         append(' ').append(FIELD_QUEUE_SIZE).append('=').append(queueSize)
+        append(' ').append(FIELD_QUEUE_BYTES).append('=').append(queueBytes)
         append(' ').append(FIELD_AVG_UPLOAD_LATENCY_MS).append('=').append(avgUploadLatencyMs)
         append(' ').append(FIELD_MAX_UPLOAD_LATENCY_MS).append('=').append(maxUploadLatencyMs)
         append(' ').append(FIELD_INTERNAL_ERROR_COUNT).append('=').append(internalErrorCount)
@@ -133,6 +137,8 @@ data class SdkHealthReport(
         private const val FIELD_DROP_COUNT = "dropCount"
         /** 字段：队列大小。 */
         private const val FIELD_QUEUE_SIZE = "queueSize"
+        /** Field: dispatcher retained-byte reservation. */
+        private const val FIELD_QUEUE_BYTES = "queueBytes"
         /** 字段：丢弃率。 */
         private const val FIELD_DROP_RATE = "dropRate"
         /** 字段：平均上传延迟。 */

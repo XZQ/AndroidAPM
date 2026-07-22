@@ -161,6 +161,76 @@ class ApmDispatcherTest {
         assertEquals(1L, selfMonitor.getDropCount(ApmPriority.LOW))
     }
 
+    /** A single event larger than the retained-byte budget must fail before queue visibility. */
+    @Test
+    fun `dispatcher rejects event larger than byte budget`() {
+        val event = createEvent("oversized-memory", fields = mapOf("value" to "x".repeat(4_096)))
+        val selfMonitor = SdkSelfMonitor()
+        val store = RecordingStore()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
+            maxQueuedBytes = ApmEventSizeEstimator.estimate(event) - 1L
+        )
+
+        dispatcher.dispatch(event)
+        dispatcher.shutdown()
+
+        assertTrue(store.events.isEmpty())
+        assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.DISPATCHER_BYTE_BUDGET))
+        assertEquals(1L, selfMonitor.getDropCount(ApmPriority.NORMAL))
+    }
+
+    /** Byte pressure may evict multiple lower-priority events to preserve one critical signal. */
+    @Test
+    fun `critical event evicts enough low priority bytes`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val lowOne = createEvent(
+            "low-bytes-1",
+            priority = ApmPriority.LOW,
+            fields = mapOf("value" to "l".repeat(100))
+        )
+        val lowTwo = lowOne.copy(name = "low-bytes-2")
+        val critical = createEvent(
+            "critical-bytes",
+            priority = ApmPriority.CRITICAL,
+            fields = mapOf("value" to "c".repeat(800))
+        )
+        val lowBytes = ApmEventSizeEstimator.estimate(lowOne) + ApmEventSizeEstimator.estimate(lowTwo)
+        val criticalBytes = ApmEventSizeEstimator.estimate(critical)
+        val byteBudget = maxOf(lowBytes, criticalBytes) + 1L
+        assertTrue(byteBudget < criticalBytes + minOf(
+            ApmEventSizeEstimator.estimate(lowOne),
+            ApmEventSizeEstimator.estimate(lowTwo)
+        ))
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
+            queueCapacity = 10,
+            maxQueuedBytes = byteBudget
+        )
+
+        dispatcher.dispatch(createEvent("blocking"))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.dispatch(lowOne)
+        dispatcher.dispatch(lowTwo)
+        dispatcher.dispatch(critical)
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(listOf("blocking", "critical-bytes"), store.events.map(ApmEvent::name))
+        assertEquals(2L, selfMonitor.getDropCount(SdkDropReason.DISPATCHER_PRIORITY_EVICTION))
+        assertEquals(2L, selfMonitor.getDropCount(ApmPriority.LOW))
+    }
+
     /** A noisy NORMAL module must leave pressured queue capacity for peers and critical work. */
     @Test
     fun `module isolation preserves shared capacity under queue pressure`() {

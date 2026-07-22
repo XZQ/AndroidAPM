@@ -145,13 +145,14 @@ class SdkSelfMonitorTest {
         assertEquals(0L, report2.dropCount)
     }
 
-    /** updateQueueSize 应更新队列大小快照。 */
+    /** Queue pressure snapshots preserve both count and retained bytes. */
     @Test
-    fun `updateQueueSize updates snapshot`() {
+    fun `updateQueuePressure updates snapshots`() {
         val monitor = SdkSelfMonitor()
-        monitor.updateQueueSize(42)
+        monitor.updateQueuePressure(42, 8_192L)
         val report = monitor.generateReport()
         assertEquals(42, report.queueSize)
+        assertEquals(8_192L, report.queueBytes)
     }
 
     /** SdkHealthReport 的 dropRate 应正确计算。 */
@@ -187,6 +188,7 @@ class SdkSelfMonitorTest {
             emitCount = 100L,
             dropCount = 10L,
             queueSize = 5,
+            queueBytes = 2_048L,
             avgUploadLatencyMs = 200L,
             maxUploadLatencyMs = 800L
         )
@@ -197,6 +199,7 @@ class SdkSelfMonitorTest {
         assertNotNull(event.fields["emitCount"])
         assertNotNull(event.fields["dropCount"])
         assertNotNull(event.fields["queueSize"])
+        assertEquals(2_048L, event.fields["queueBytes"])
     }
 
     /** Runtime health fields must include internal and diagnostics-sink failures. */
@@ -250,6 +253,7 @@ class SdkSelfMonitorTest {
             emitCount = 10L,
             dropCount = 2L,
             queueSize = 3,
+            queueBytes = 1_024L,
             avgUploadLatencyMs = 4L,
             maxUploadLatencyMs = 5L,
             internalErrorCount = 6L,
@@ -261,6 +265,7 @@ class SdkSelfMonitorTest {
         val summary = report.toDiagnosticSummary()
 
         assertTrue(summary.contains("emitCount=10"))
+        assertTrue(summary.contains("queueBytes=1024"))
         assertTrue(summary.contains("dropRate=0.2000"))
         assertTrue(summary.contains("internalErrorCount=6"))
         assertTrue(summary.contains("dispatcherModuleIsolationDropCount=7"))

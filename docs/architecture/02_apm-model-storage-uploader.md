@@ -139,6 +139,8 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - capacity：50,000 行 + 64 MiB live payload 逻辑预算；不包含 SQLite page/WAL 物理开销
 - overflow eviction：任一维度超限时 priority ASC, timestamp ASC，返回实际淘汰数与可观测 priority counts
 - recent debug view：timestamp DESC，从 payload decode 后渲染 Line Protocol
+
+这两项 SQLite 字节限制是 durable 层的最后一道预算，不替代 core 的 8 MiB dispatcher estimated-retained budget 或 multi-process IPC 的 4 MiB pending / 256 KiB raw event / 1 MiB file / 16 MiB directory 限制。各层使用自己的实际资源度量：dispatcher 估算 retained memory，IPC 对 encoded/file bytes 做精确检查，SQLite 对 codec payload bytes 做事务内精确检查；不能把同一个近似值冒充所有层的真实占用。
 - corrupted payload：记录 id 后隔离删除
 - claim order：priority DESC, timestamp ASC；写事务覆盖 select + owner/expiry update
 - prune/容量淘汰跳过尚未过期的活动 claim，因此可在 lease 释放/过期前临时超出逻辑预算

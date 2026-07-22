@@ -2,14 +2,24 @@ package com.apm.core
 
 import android.content.Context
 import android.util.Base64
+import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventCodec
+import com.apm.model.ApmPriority
 import java.io.File
-import java.io.FileWriter
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.io.OutputStreamWriter
+import java.io.RandomAccessFile
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.locks.ReentrantLock
+import java.util.concurrent.locks.ReentrantReadWriteLock
 
 /**
  * IPC artifacts removed during process-local consent revocation.
@@ -22,6 +32,14 @@ internal data class IpcConsentCleanupResult(
     val allFilesCleared: Boolean
 )
 
+/** Internal result preserving the exact reason for a synchronous IPC hand-off rejection. */
+internal data class IpcWriteResult(
+    /** Whether every supplied event reached an atomically published ready file. */
+    val success: Boolean,
+    /** Stable loss reason when [success] is false. */
+    val dropReason: SdkDropReason? = null
+)
+
 /**
  * 多进程事件协调器。
  *
@@ -31,10 +49,12 @@ internal data class IpcConsentCleanupResult(
  *
  * 文件命名：apm-ipc-{sessionId}-{sequence}.ipc
  * 每个发布文件保存至多 [maxLinesPerFile] 行 Base64 包裹的可逆事件 payload：
- * 普通事件先进入短暂缓冲，按行数或 [WRITE_FLUSH_DELAY_MS] 定时合批发布，
- * 大幅减少高频子进程事件的文件数与扫描开销；critical 事件立即单文件发布。
+ * 普通事件先进入带字节预算的 lock-free 缓冲，由唯一 [WRITE_FLUSH_DELAY_MS] 周期任务
+ * 取出并按行数/文件字节拆批，大幅减少高频子进程事件的文件数、任务数与扫描开销；
+ * critical 事件立即单文件发布。
  *
- * 线程安全：普通写操作使用单线程执行器串行化，critical 写操作可同步发布。
+ * 线程安全：普通 producer 在非等待锁内合并缓冲，单线程执行器序列化 flush；critical
+ * 写操作同步发布。ready-directory 预算检查、发布和 consent 清理共用跨进程文件锁。
  */
 class ProcessEventCoordinator internal constructor(
     /** 共享 IPC 目录：{cacheDir}/apm-ipc/。 */
@@ -46,7 +66,15 @@ class ProcessEventCoordinator internal constructor(
     /** 单个 IPC 文件最大行数：缓冲达到该行数立即合批发布。 */
     private val maxLinesPerFile: Int = DEFAULT_MAX_LINES_PER_FILE,
     /** IPC 文件最大保留时间（毫秒），过期清理。 */
-    private val maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS
+    private val maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS,
+    /** Maximum retained bytes waiting for the single IPC writer. */
+    maxPendingBytes: Long = DEFAULT_MAX_PENDING_BYTES,
+    /** Maximum durable-codec bytes accepted for one IPC event. */
+    maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+    /** Maximum ASCII payload bytes in one ready IPC file. */
+    maxFileBytes: Long = DEFAULT_MAX_FILE_BYTES,
+    /** Maximum bytes retained by all ready IPC files in the shared directory. */
+    maxDirectoryBytes: Long = DEFAULT_MAX_DIRECTORY_BYTES
 ) {
     /**
      * Creates a coordinator rooted at the app cache directory.
@@ -56,20 +84,47 @@ class ProcessEventCoordinator internal constructor(
      * @param scanIntervalMs IPC 文件扫描间隔（毫秒）
      * @param maxLinesPerFile 单个 IPC 文件最大行数（合批阈值）
      * @param maxFileAgeMs IPC 文件最大保留时间（毫秒）
+     * @param maxPendingBytes pending-event retained-byte budget
+     * @param maxEventPayloadBytes exact durable-codec limit for one event
+     * @param maxFileBytes atomic ready-file byte limit
+     * @param maxDirectoryBytes aggregate ready-file byte limit
      */
     constructor(
         context: Context,
         isUploaderProcess: Boolean,
         scanIntervalMs: Long = DEFAULT_SCAN_INTERVAL_MS,
         maxLinesPerFile: Int = DEFAULT_MAX_LINES_PER_FILE,
-        maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS
+        maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS,
+        maxPendingBytes: Long = DEFAULT_MAX_PENDING_BYTES,
+        maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+        maxFileBytes: Long = DEFAULT_MAX_FILE_BYTES,
+        maxDirectoryBytes: Long = DEFAULT_MAX_DIRECTORY_BYTES
     ) : this(
         ipcDir = File(context.cacheDir, IPC_DIR_NAME).apply { mkdirs() },
         isUploaderProcess = isUploaderProcess,
         scanIntervalMs = scanIntervalMs,
         maxLinesPerFile = maxLinesPerFile,
-        maxFileAgeMs = maxFileAgeMs
+        maxFileAgeMs = maxFileAgeMs,
+        maxPendingBytes = maxPendingBytes,
+        maxEventPayloadBytes = maxEventPayloadBytes,
+        maxFileBytes = maxFileBytes,
+        maxDirectoryBytes = maxDirectoryBytes
     )
+
+    /** Effective positive pending-event budget. */
+    private val effectiveMaxPendingBytes = maxPendingBytes.coerceAtLeast(MIN_BYTE_BUDGET)
+
+    /** Effective positive line-count split threshold. */
+    private val effectiveMaxLinesPerFile = maxLinesPerFile.coerceAtLeast(1)
+
+    /** Effective positive exact binary event budget. */
+    private val effectiveMaxEventPayloadBytes = maxEventPayloadBytes.coerceAtLeast(1)
+
+    /** Effective positive per-file budget. */
+    private val effectiveMaxFileBytes = maxFileBytes.coerceAtLeast(MIN_BYTE_BUDGET)
+
+    /** Effective directory budget, never smaller than one allowed file. */
+    private val effectiveMaxDirectoryBytes = maxDirectoryBytes.coerceAtLeast(effectiveMaxFileBytes)
 
     /** 写操作执行器，保证串行写入。 */
     private val writeExecutor: ScheduledExecutorService =
@@ -81,18 +136,43 @@ class ProcessEventCoordinator internal constructor(
     /** 上传进程消费事件时的回调。 */
     var onRemoteEvent: ((ApmEvent) -> Unit)? = null
 
+    /** Records one asynchronously rejected event with its exact priority and budget boundary. */
+    internal var onDrop: ((ApmPriority, SdkDropReason) -> Unit)? = null
+
     /** 是否已启动。 */
     @Volatile
     private var started = false
 
-    /** 待发布事件缓冲（合批用），由 [pendingLock] 保护。 */
-    private val pendingEvents = ArrayList<ApmEvent>()
+    /** Sticky local gate preventing a writer from publishing after consent erase begins. */
+    @Volatile
+    private var consentRevoked = false
 
-    /** 缓冲访问锁。 */
-    private val pendingLock = Any()
+    /** One pending event and the conservative retained-byte reservation charged at admission. */
+    private data class PendingEvent(
+        /** Frozen event awaiting writer-thread serialization. */
+        val event: ApmEvent,
+        /** Retained-byte reservation released when the batch leaves memory. */
+        val estimatedBytes: Long
+    )
 
-    /** 是否已调度延迟 flush（由 [pendingLock] 保护）。 */
-    private var flushScheduled = false
+    /** Lock-free pending buffer: producers never wait behind writer disk IO. */
+    private val pendingEvents = ConcurrentLinkedQueue<PendingEvent>()
+
+    /** Exact pending-event count paired with [pendingEvents] for O(1) diagnostics/tests. */
+    private val pendingEventCount = AtomicInteger()
+
+    /** Retained bytes currently reserved by [pendingEvents]. */
+    private val pendingBytes = AtomicLong()
+
+    /** Separates normal producer/flush readers from consent-revocation cleanup. */
+    private val lifecycleLock = ReentrantReadWriteLock()
+
+    /** Serializes scheduled and explicit drains without involving producer admission. */
+    private val flushExecutionLock = ReentrantLock()
+
+    /** One fixed-delay writer task replaces one executor task per event. */
+    @Volatile
+    private var pendingFlush: ScheduledFuture<*>? = null
 
     init {
         // 确保显式目录构造器和 Context 构造器都拥有可写目录。
@@ -118,6 +198,19 @@ class ProcessEventCoordinator internal constructor(
                 scanIntervalMs,
                 TimeUnit.MILLISECONDS
             )
+        } else {
+            // One recurring task bounds executor work independently of event rate.
+            try {
+                pendingFlush = writeExecutor.scheduleWithFixedDelay(
+                    { flushPendingEvents() },
+                    WRITE_FLUSH_DELAY_MS,
+                    WRITE_FLUSH_DELAY_MS,
+                    TimeUnit.MILLISECONDS
+                )
+            } catch (error: RejectedExecutionException) {
+                started = false
+                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
+            }
         }
     }
 
@@ -137,47 +230,64 @@ class ProcessEventCoordinator internal constructor(
 
         // Serialization runs later on the IPC writer, so freeze producer-owned maps now.
         val eventSnapshot = snapshotEvent(event)
-
-        try {
-            writeExecutor.execute {
-                try {
-                    // 进入合批缓冲：按行数阈值或定时器触发批量发布
-                    bufferEvent(eventSnapshot)
-                } catch (e: Exception) {
-                    // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
-                    Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
-                }
+        val estimatedBytes = ApmEventSizeEstimator.estimate(eventSnapshot)
+        // Consent cleanup takes the write side only after closing the volatile admission gate.
+        val producerLock = lifecycleLock.readLock()
+        if (!producerLock.tryLock()) {
+            val reason = if (consentRevoked) {
+                SdkDropReason.CONSENT_REVOKED
+            } else {
+                SdkDropReason.IPC_HANDOFF_FAILURE
             }
-        } catch (error: RejectedExecutionException) {
-            // Consent revocation may close the writer between the started check and submission.
-            Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
+            onDrop?.invoke(eventSnapshot.priority, reason)
+            return
+        }
+        try {
+            if (!started || consentRevoked) {
+                return
+            }
+            if (!reservePendingBytes(estimatedBytes)) {
+                onDrop?.invoke(eventSnapshot.priority, SdkDropReason.IPC_PENDING_BYTE_BUDGET)
+                return
+            }
+            pendingEvents.offer(PendingEvent(eventSnapshot, estimatedBytes))
+            pendingEventCount.incrementAndGet()
+        } finally {
+            producerLock.unlock()
         }
     }
 
-    /**
-     * 把事件放入合批缓冲。
-     * 达到 [maxLinesPerFile] 行立即发布；否则调度一次延迟 flush 兜底。
-     *
-     * @param event 待发布事件
-     */
-    private fun bufferEvent(event: ApmEvent) {
-        val shouldFlushNow: Boolean
-        synchronized(pendingLock) {
-            pendingEvents.add(event)
-            shouldFlushNow = pendingEvents.size >= maxLinesPerFile
-            // 未达到行数阈值时安排定时 flush，保证低频事件的发布延迟有上界
-            if (!shouldFlushNow && !flushScheduled) {
-                flushScheduled = true
-                writeExecutor.schedule(
-                    { flushPendingEvents() },
-                    WRITE_FLUSH_DELAY_MS,
-                    TimeUnit.MILLISECONDS
-                )
+    /** Atomically reserves pending retained bytes without locking a host producer. */
+    private fun reservePendingBytes(estimatedBytes: Long): Boolean {
+        if (estimatedBytes > effectiveMaxPendingBytes) {
+            return false
+        }
+        while (true) {
+            val current = pendingBytes.get()
+            if (current > effectiveMaxPendingBytes - estimatedBytes) {
+                return false
+            }
+            if (pendingBytes.compareAndSet(current, current + estimatedBytes)) {
+                return true
             }
         }
-        if (shouldFlushNow) {
-            flushPendingEvents()
+    }
+
+    /** Releases one previously reserved pending-event weight. */
+    private fun releasePendingBytes(estimatedBytes: Long) {
+        pendingBytes.updateAndGet { current -> (current - estimatedBytes).coerceAtLeast(0L) }
+    }
+
+    /** Drops every pending event after the writer becomes unavailable or consent is revoked. */
+    private fun dropAllPending(reason: SdkDropReason) {
+        while (true) {
+            val pending = pendingEvents.poll() ?: break
+            pendingEventCount.decrementAndGet()
+            releasePendingBytes(pending.estimatedBytes)
+            onDrop?.invoke(pending.event.priority, reason)
         }
+        pendingEventCount.set(0)
+        pendingBytes.set(0L)
     }
 
     /**
@@ -185,20 +295,36 @@ class ProcessEventCoordinator internal constructor(
      * 缓冲为空时为 no-op；发布失败记入自监控。
      */
     private fun flushPendingEvents() {
-        val batch: List<ApmEvent>
-        synchronized(pendingLock) {
-            flushScheduled = false
+        val lifecycleRead = lifecycleLock.readLock()
+        lifecycleRead.lock()
+        flushExecutionLock.lock()
+        try {
             if (pendingEvents.isEmpty()) {
                 return
             }
-            batch = ArrayList(pendingEvents)
-            pendingEvents.clear()
-        }
-        try {
-            publishBatchFile(batch)
-        } catch (e: Exception) {
-            // 发布失败丢弃该批（IPC 尽力而为），记入自监控
-            Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
+            val batch = ArrayList<ApmEvent>()
+            var batchReservedBytes = 0L
+            while (batch.size < MAX_PENDING_EVENTS_PER_FLUSH) {
+                val pending = pendingEvents.poll() ?: break
+                pendingEventCount.decrementAndGet()
+                batchReservedBytes += pending.estimatedBytes
+                batch += pending.event
+            }
+            try {
+                publishBatchFiles(batch, recordAsyncDrops = true)
+            } catch (e: Exception) {
+                // 发布失败丢弃该批（IPC 尽力而为），记入自监控
+                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
+                for (event in batch) {
+                    onDrop?.invoke(event.priority, SdkDropReason.IPC_HANDOFF_FAILURE)
+                }
+            } finally {
+                // Keep in-flight objects charged so queue + active batch never exceed 4 MiB.
+                releasePendingBytes(batchReservedBytes)
+            }
+        } finally {
+            flushExecutionLock.unlock()
+            lifecycleRead.unlock()
         }
     }
 
@@ -216,7 +342,14 @@ class ProcessEventCoordinator internal constructor(
      *
      * @return 缓冲事件数
      */
-    internal fun pendingBufferSize(): Int = synchronized(pendingLock) { pendingEvents.size }
+    internal fun pendingBufferSize(): Int {
+        return pendingEventCount.get().coerceAtLeast(0)
+    }
+
+    /** Returns the retained-byte reservation currently waiting for IPC serialization. */
+    internal fun pendingBufferBytes(): Long {
+        return pendingBytes.get().coerceAtLeast(0L)
+    }
 
     /**
      * 同步发布 critical 事件到 IPC 文件。
@@ -225,50 +358,182 @@ class ProcessEventCoordinator internal constructor(
      * @return true 表示事件文件已完整发布
      */
     fun writeEventSync(event: ApmEvent): Boolean {
+        return writeEventSyncWithResult(event).success
+    }
+
+    /** Synchronously publishes one critical event while preserving a stable rejection reason. */
+    internal fun writeEventSyncWithResult(event: ApmEvent): IpcWriteResult {
         if (isUploaderProcess) {
-            return false
+            return IpcWriteResult(false, SdkDropReason.IPC_HANDOFF_FAILURE)
         }
-        synchronized(pendingLock) {
-            if (!started) {
-                return false
+        val lifecycleRead = lifecycleLock.readLock()
+        lifecycleRead.lock()
+        try {
+            if (!started || consentRevoked) {
+                return IpcWriteResult(false, SdkDropReason.IPC_HANDOFF_FAILURE)
             }
             // Serialize against consent cleanup so every completed file is deleted before return.
             return try {
-                publishBatchFile(listOf(event))
+                publishBatchFiles(listOf(snapshotEvent(event)), recordAsyncDrops = false)
             } catch (error: Exception) {
                 Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
-                false
+                IpcWriteResult(false, SdkDropReason.IPC_HANDOFF_FAILURE)
             }
+        } finally {
+            lifecycleRead.unlock()
         }
     }
 
     /**
-     * 将一批事件写入临时文件并原子发布为可消费文件（每事件一行）。
+     * Encodes a batch once, isolates oversized events, and splits ready files by line and bytes.
      *
-     * @param events 待发布事件批次
-     * @return true 表示发布成功
+     * @param events events awaiting publication
+     * @param recordAsyncDrops whether rejected events should be recorded through [onDrop]
+     * @return complete publication result and first stable failure reason
      */
-    private fun publishBatchFile(events: List<ApmEvent>): Boolean {
+    private fun publishBatchFiles(events: List<ApmEvent>, recordAsyncDrops: Boolean): IpcWriteResult {
         if (events.isEmpty()) {
-            return true
+            return IpcWriteResult(true)
         }
+        val currentLines = ArrayList<EncodedLine>()
+        var currentFileBytes = 0L
+        var firstFailure: SdkDropReason? = null
+
+        /** Records one isolated failure without preventing valid peer publication. */
+        fun reject(event: ApmEvent, reason: SdkDropReason) {
+            if (firstFailure == null) {
+                firstFailure = reason
+            }
+            if (recordAsyncDrops) {
+                onDrop?.invoke(event.priority, reason)
+            }
+        }
+
+        /** Publishes the current bounded file and attributes any rejection to every member. */
+        fun flushCurrent() {
+            if (currentLines.isEmpty()) {
+                return
+            }
+            val reason = publishEncodedFile(currentLines)
+            if (reason != null) {
+                for (line in currentLines) {
+                    reject(line.event, reason)
+                }
+            }
+            currentLines.clear()
+            currentFileBytes = 0L
+        }
+
+        for (event in events) {
+            val payload = try {
+                ApmEventCodec.encode(event)
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
+                reject(event, SdkDropReason.IPC_HANDOFF_FAILURE)
+                continue
+            }
+            if (payload.size > effectiveMaxEventPayloadBytes) {
+                reject(event, SdkDropReason.IPC_FILE_BYTE_BUDGET)
+                continue
+            }
+            val text = encodePayload(payload)
+            val encodedLineBytes = text.length.toLong() + LINE_TERMINATOR_BYTES
+            if (encodedLineBytes > effectiveMaxFileBytes) {
+                reject(event, SdkDropReason.IPC_FILE_BYTE_BUDGET)
+                continue
+            }
+            if (currentLines.isNotEmpty() &&
+                (currentLines.size >= effectiveMaxLinesPerFile ||
+                    currentFileBytes > effectiveMaxFileBytes - encodedLineBytes)
+            ) {
+                flushCurrent()
+            }
+            currentLines += EncodedLine(event, text)
+            currentFileBytes += encodedLineBytes
+        }
+        flushCurrent()
+        return IpcWriteResult(firstFailure == null, firstFailure)
+    }
+
+    /** One already-encoded ASCII IPC line and its source event for exact loss attribution. */
+    private data class EncodedLine(
+        /** Source event retained only until the bounded file is published. */
+        val event: ApmEvent,
+        /** Base64 text without a line terminator. */
+        val text: String
+    )
+
+    /** Writes one bounded temp file and atomically publishes it under the directory budget lock. */
+    private fun publishEncodedFile(lines: List<EncodedLine>): SdkDropReason? {
         val fileStem = nextFileStem()
         val tempFile = File(ipcDir, "$fileStem$IPC_TEMP_EXTENSION")
         val readyFile = File(ipcDir, "$fileStem$IPC_FILE_EXTENSION")
-        // 临时文件使用独占名称；写完后才让扫描端看到 .ipc。
-        FileWriter(tempFile, false).use { writer ->
-            for (event in events) {
-                writer.append(encodePayload(ApmEventCodec.encode(event)))
-                writer.append('\n')
+        var fallbackTempFile: File? = null
+        return try {
+            FileOutputStream(tempFile, false).use { output ->
+                val writer = OutputStreamWriter(output, Charsets.US_ASCII)
+                for (line in lines) {
+                    writer.append(line.text)
+                    writer.append('\n')
+                }
+                writer.flush()
+                // A published critical file must not depend only on userspace buffering.
+                output.fd.sync()
             }
-        }
-        return if (tempFile.renameTo(readyFile)) {
-            true
-        } else {
-            // 某些文件系统 rename 失败时退化为复制后删除，仍保持扫描端只看 .ipc。
-            tempFile.copyTo(readyFile, overwrite = true)
-            tempFile.delete()
-            true
+            val incomingBytes = tempFile.length()
+            if (incomingBytes > effectiveMaxFileBytes) {
+                return SdkDropReason.IPC_FILE_BYTE_BUDGET
+            }
+            val lockFile = File(ipcDir, IPC_BUDGET_LOCK_FILE)
+            RandomAccessFile(lockFile, LOCK_FILE_MODE).channel.use { channel ->
+                channel.lock().use {
+                    // Revocation sets the sticky gate before waiting on this publication lock.
+                    if (consentRevoked) {
+                        return SdkDropReason.CONSENT_REVOKED
+                    }
+                    var publishedBytes = 0L
+                    val readyFiles = ipcDir.listFiles { file ->
+                        file.name.startsWith(IPC_FILE_PREFIX) && file.name.endsWith(IPC_FILE_EXTENSION)
+                    }.orEmpty()
+                    for (file in readyFiles) {
+                        val length = file.length()
+                        if (length > effectiveMaxDirectoryBytes - publishedBytes) {
+                            return SdkDropReason.IPC_DIRECTORY_BYTE_BUDGET
+                        }
+                        publishedBytes += length
+                    }
+                    if (publishedBytes > effectiveMaxDirectoryBytes - incomingBytes) {
+                        return SdkDropReason.IPC_DIRECTORY_BYTE_BUDGET
+                    }
+                    if (!tempFile.renameTo(readyFile)) {
+                        // Never expose a partially copied ready file: copy and sync another temp,
+                        // then publish it only after its length has been verified.
+                        val fallback = File(ipcDir, "$fileStem$IPC_COPY_TEMP_SUFFIX$IPC_TEMP_EXTENSION")
+                        fallbackTempFile = fallback
+                        FileInputStream(tempFile).use { input ->
+                            FileOutputStream(fallback, false).use { output ->
+                                input.copyTo(output)
+                                output.fd.sync()
+                            }
+                        }
+                        if (fallback.length() != incomingBytes || !fallback.renameTo(readyFile)) {
+                            return SdkDropReason.IPC_HANDOFF_FAILURE
+                        }
+                        tempFile.delete()
+                    }
+                }
+            }
+            null
+        } finally {
+            // Every failed path removes payload-bearing temporary data.
+            if (tempFile.exists()) {
+                tempFile.delete()
+            }
+            fallbackTempFile?.let { fallback ->
+                if (fallback.exists()) {
+                    fallback.delete()
+                }
+            }
         }
     }
 
@@ -303,6 +568,15 @@ class ProcessEventCoordinator internal constructor(
                     val fileAgeMs = now - file.lastModified()
                     // 清理过期文件
                     if (fileAgeMs > maxFileAgeMs) {
+                        file.delete()
+                        continue
+                    }
+                    if (file.length() > effectiveMaxFileBytes) {
+                        // Never allocate an unbounded read buffer for a corrupt or foreign file.
+                        Apm.recordInternalError(
+                            ERROR_TAG_IPC_CONSUME_FILE,
+                            IllegalArgumentException("IPC file exceeds byte budget")
+                        )
                         file.delete()
                         continue
                     }
@@ -354,18 +628,28 @@ class ProcessEventCoordinator internal constructor(
      * @param file IPC 文件
      */
     private fun consumeFile(file: File) {
-        val lines = file.readLines()
-        for (line in lines) {
-            if (line.isBlank()) {
-                continue
-            }
-            try {
-                // Decode the complete event so no fields are lost across processes.
-                val event = parseLineProtocol(line)
-                event?.let { onRemoteEvent?.invoke(it) }
-            } catch (e: Exception) {
-                // 单行解析失败跳过该行，但记入自监控（可能是编码不兼容）
-                Apm.recordInternalError(ERROR_TAG_IPC_PARSE_LINE, e)
+        var observedLines = 0
+        file.bufferedReader(Charsets.UTF_8).useLines { lines ->
+            for (line in lines) {
+                if (line.isBlank()) {
+                    continue
+                }
+                observedLines += 1
+                if (observedLines > effectiveMaxLinesPerFile || line.length.toLong() > effectiveMaxFileBytes) {
+                    Apm.recordInternalError(
+                        ERROR_TAG_IPC_PARSE_LINE,
+                        IllegalArgumentException("IPC line exceeds configured bounds")
+                    )
+                    break
+                }
+                try {
+                    // Decode the complete event so no fields are lost across processes.
+                    val event = parseLineProtocol(line)
+                    event?.let { onRemoteEvent?.invoke(it) }
+                } catch (e: Exception) {
+                    // 单行解析失败跳过该行，但记入自监控（可能是编码不兼容）
+                    Apm.recordInternalError(ERROR_TAG_IPC_PARSE_LINE, e)
+                }
             }
         }
     }
@@ -378,6 +662,9 @@ class ProcessEventCoordinator internal constructor(
      */
     private fun parseLineProtocol(line: String): ApmEvent? {
         val payload = decodePayload(line)
+        require(payload.size <= effectiveMaxEventPayloadBytes) {
+            "IPC event payload exceeds byte budget"
+        }
         val event = ApmEventCodec.decode(payload)
         return event.copy(extras = event.extras + ("ipc_source" to "remote_process"))
     }
@@ -443,6 +730,8 @@ class ProcessEventCoordinator internal constructor(
      */
     fun stop() {
         started = false
+        pendingFlush?.cancel(false)
+        pendingFlush = null
         // 关闭前提交最终 flush，避免缓冲中的事件丢失
         runCatching { writeExecutor.execute { flushPendingEvents() } }
         writeExecutor.shutdown()
@@ -465,30 +754,32 @@ class ProcessEventCoordinator internal constructor(
      * @return deletion count and completeness for the local IPC directory
      */
     internal fun stopAndClearForConsentRevocation(): IpcConsentCleanupResult {
+        consentRevoked = true
         started = false
-        synchronized(pendingLock) {
-            pendingEvents.clear()
-            flushScheduled = false
-        }
-        // Cancel queued writes before waiting for any in-flight file operation to finish.
-        writeExecutor.shutdownNow()
-        scanExecutor?.shutdownNow()
-        var writersStopped = false
-        var scannerStopped = scanExecutor == null
+        pendingFlush?.cancel(false)
+        pendingFlush = null
+        val lifecycleWrite = lifecycleLock.writeLock()
+        lifecycleWrite.lock()
         try {
-            writersStopped = writeExecutor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-            scannerStopped = scanExecutor?.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: true
-        } catch (_: InterruptedException) {
-            Thread.currentThread().interrupt()
+            dropAllPending(SdkDropReason.CONSENT_REVOKED)
+            // Cancel queued writes after every active producer/flush has left the read side.
+            writeExecutor.shutdownNow()
+            scanExecutor?.shutdownNow()
+            var writersStopped = false
+            var scannerStopped = scanExecutor == null
+            try {
+                writersStopped = writeExecutor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+                scannerStopped = scanExecutor?.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: true
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            scanExecutor = null
+            dropAllPending(SdkDropReason.CONSENT_REVOKED)
+            val cleanup = clearIpcFilesForConsentRevocation()
+            return cleanup.copy(allFilesCleared = cleanup.allFilesCleared && writersStopped && scannerStopped)
+        } finally {
+            lifecycleWrite.unlock()
         }
-        scanExecutor = null
-        synchronized(pendingLock) {
-            // An in-flight buffer callback may have raced the first clear before observing shutdown.
-            pendingEvents.clear()
-            flushScheduled = false
-        }
-        val cleanup = clearIpcFilesForConsentRevocation()
-        return cleanup.copy(allFilesCleared = cleanup.allFilesCleared && writersStopped && scannerStopped)
     }
 
     /** Deletes every ready or temporary SDK hand-off file after IPC executors have stopped. */
@@ -504,6 +795,23 @@ class ProcessEventCoordinator internal constructor(
 
         /** Performs best-effort deletion after active writers have stopped or before SDK init. */
         private fun clearIpcFilesForConsentRevocation(ipcDirectory: File): IpcConsentCleanupResult {
+            ipcDirectory.mkdirs()
+            val lockFile = File(ipcDirectory, IPC_BUDGET_LOCK_FILE)
+            return try {
+                RandomAccessFile(lockFile, LOCK_FILE_MODE).channel.use { channel ->
+                    channel.lock().use {
+                        clearIpcPayloadFiles(ipcDirectory)
+                    }
+                }
+            } catch (_: Exception) {
+                // A failed coordination lock makes completeness unknowable even if fallback
+                // deletion currently observes no payload files.
+                clearIpcPayloadFiles(ipcDirectory).copy(allFilesCleared = false)
+            }
+        }
+
+        /** Deletes currently visible payload-bearing IPC artifacts while publication is excluded. */
+        private fun clearIpcPayloadFiles(ipcDirectory: File): IpcConsentCleanupResult {
             val files = ipcDirectory.listFiles { file ->
                 file.name.startsWith(IPC_FILE_PREFIX) &&
                     (file.name.endsWith(IPC_FILE_EXTENSION) || file.name.endsWith(IPC_TEMP_EXTENSION))
@@ -540,6 +848,12 @@ class ProcessEventCoordinator internal constructor(
         private const val IPC_FILE_EXTENSION = ".ipc"
         /** 临时文件扩展名。 */
         private const val IPC_TEMP_EXTENSION = ".tmp"
+        /** Distinguishes the fully copied fallback temp from the original writer temp. */
+        private const val IPC_COPY_TEMP_SUFFIX = "-copy"
+        /** Cross-process file lock protecting the aggregate ready-file byte budget. */
+        private const val IPC_BUDGET_LOCK_FILE = "apm-ipc-budget.lock"
+        /** Read/write mode needed by the shared file-lock channel. */
+        private const val LOCK_FILE_MODE = "rw"
         /** 默认扫描间隔：5 秒。 */
         private const val DEFAULT_SCAN_INTERVAL_MS = 5000L
         /** 合批缓冲的定时 flush 延迟（毫秒）。 */
@@ -548,6 +862,20 @@ class ProcessEventCoordinator internal constructor(
         private const val DEFAULT_MAX_LINES_PER_FILE = 100
         /** 文件最大保留时间：5 分钟。 */
         private const val DEFAULT_MAX_FILE_AGE_MS = 300_000L
+        /** Default pending-event retained-byte budget: 4 MiB. */
+        private const val DEFAULT_MAX_PENDING_BYTES = 4L * 1024L * 1024L
+        /** Hard per-tick drain count paired with the 256-byte minimum retained estimate. */
+        private const val MAX_PENDING_EVENTS_PER_FLUSH = 16_384
+        /** Default exact binary event budget aligned with SQLite soft admission. */
+        private const val DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
+        /** Default atomic ready-file budget: 1 MiB. */
+        private const val DEFAULT_MAX_FILE_BYTES = 1L * 1024L * 1024L
+        /** Default shared ready-file directory budget: 16 MiB. */
+        private const val DEFAULT_MAX_DIRECTORY_BYTES = 16L * 1024L * 1024L
+        /** Smallest effective configurable byte budget. */
+        private const val MIN_BYTE_BUDGET = 1L
+        /** One ASCII line-feed byte appended after every Base64 payload. */
+        private const val LINE_TERMINATOR_BYTES = 1L
         /** 写线程名。 */
         private const val THREAD_NAME_WRITE = "apm-ipc-write"
         /** 扫描线程名。 */

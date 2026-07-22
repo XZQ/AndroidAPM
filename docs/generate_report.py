@@ -80,7 +80,7 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "163", "158 Kotlin + 4 C + 1 proto"),
+        ("主源码", "164", "159 Kotlin + 4 C + 1 proto"),
         ("测试文件", "100", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -112,6 +112,7 @@ def add_capability_table(document: Document) -> None:
         ("关键事件与损失证据", "Crash/ANR sync hand-off、drop reason/priority", "绕过共享队列且不做网络；未知 priority 显式 unattributed"),
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
+        ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -186,7 +187,7 @@ def build_status_report() -> Document:
             "Strict production profile 在创建 SDK 资源前校验显式 consent、HTTPS/自定义 uploader、SQLite、PII 与 debug logging。",
             "Consent revoke 不做优雅 drain；停止 delivery 后清理活动队列、SQLite/File outbox 与 IPC hand-off 文件。",
             "V2 protobuf envelope 按实际编码字节拆批；2xx 只有 schema、batchId 和事件数精确 ACK 才删除 outbox。",
-            "内存队列有界，批处理在专用工作循环完成，避免调用方同步执行数据库写入。",
+            "Dispatcher 同时受 2048 条和 8 MiB 估算字节预算约束；IPC 与 SQLite 另按 encoded/file/durable bytes 独立限界。",
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",

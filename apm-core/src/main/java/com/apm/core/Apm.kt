@@ -271,6 +271,7 @@ object Apm {
             ),
             uploadBatchSize = config.uploadBatchSize,
             uploadLeaseDurationMs = config.uploadLeaseDurationMs,
+            maxQueuedBytes = config.maxDispatcherQueueBytes,
             enableModuleIsolation = config.enableDispatcherModuleIsolation,
             moduleIsolationHighWatermarkPercent = config.dispatcherIsolationHighWatermarkPercent,
             maxModuleQueueSharePercent = config.dispatcherMaxModuleQueueSharePercent
@@ -278,9 +279,17 @@ object Apm {
         stagedDispatcher = dispatcher
         val isUploaderProcess = application.isMainProcessCompat()
         val processCoordinator = if (config.enableMultiProcessCoordination) {
-            val coordinator = ProcessEventCoordinator(application, isUploaderProcess)
+            val coordinator = ProcessEventCoordinator(
+                context = application,
+                isUploaderProcess = isUploaderProcess,
+                maxPendingBytes = config.maxIpcPendingBytes,
+                maxEventPayloadBytes = config.maxEventPayloadBytes,
+                maxFileBytes = config.maxIpcFileBytes,
+                maxDirectoryBytes = config.maxIpcDirectoryBytes
+            )
             stagedCoordinator = coordinator
             coordinator.onRemoteEvent = dispatcher::dispatch
+            coordinator.onDrop = { priority, reason -> selfMonitor?.recordDrop(priority, reason) }
             coordinator.start()
             coordinator
         } else {
@@ -433,7 +442,18 @@ object Apm {
         // before handing it to a lazy worker so later mutation cannot rewrite the captured event.
         val fieldSnapshot = snapshotEventFields(fields)
         val extrasSnapshot = snapshotEventExtras(extras)
-        currentState.context.emitLazy(priority, module) {
+        val estimatedBytes = ApmEventSizeEstimator.estimate(
+            module = module,
+            name = name,
+            processName = currentState.context.processName,
+            threadName = threadName,
+            scene = scene,
+            fields = fieldSnapshot,
+            primaryContext = currentState.context.config.defaultContext,
+            secondaryContext = bizContext,
+            extras = extrasSnapshot
+        )
+        currentState.context.emitLazy(priority, module, estimatedBytes) {
             buildEvent(
                 currentState, module, name, kind, severity, priority, scene, foreground,
                 fieldSnapshot, extrasSnapshot, timestamp, threadName, bizContext

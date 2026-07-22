@@ -57,8 +57,9 @@ internal data class ConsentStorageCleanupResult(
  *   聚合、限流、脱敏、序列化、存储全部推迟到 "apm-dispatcher" worker 线程；
  * - worker 每轮从队列批量取出至多 [MAX_BATCH_DRAIN] 条事件，
  *   经 [EventStore.appendBatch] 单事务落盘，摊薄每条事件的写入开销；
- * - 队列容量固定为 [QUEUE_CAPACITY]，满时允许高优先级事件替换最低优先级事件，
- *   同级事件保持先到先得，杜绝无界积压导致的 OOM。
+ * - 队列容量固定为 [QUEUE_CAPACITY]，并另施加 retained-byte 估算预算；压力下允许
+ *   高优先级事件替换足够数量的最低优先级事件，同级保持先到先得，杜绝大事件在
+ *   条数有界的外观下造成无界内存积压。
  *
  * 集成 SDK 自监控：在每个关键节点调用 [SdkSelfMonitor] 记录指标。
  */
@@ -87,6 +88,8 @@ internal class ApmDispatcher(
     uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS,
     /** Bounded ingress capacity; exposed internally for deterministic pressure tests. */
     queueCapacity: Int = QUEUE_CAPACITY,
+    /** Retained-byte budget for queued event payloads and lazy-event captures. */
+    maxQueuedBytes: Long = DEFAULT_MAX_QUEUED_BYTES,
     /** Whether one noisy NORMAL/LOW module is isolated after the shared queue reaches high water. */
     enableModuleIsolation: Boolean = true,
     /** Queue occupancy percentage that activates per-module isolation. */
@@ -114,7 +117,9 @@ internal class ApmDispatcher(
         /** Admission priority known before a lazy event is resolved. */
         val priority: ApmPriority,
         /** Source module known before lazy resolution and used for noisy-neighbor isolation. */
-        val sourceModule: String
+        val sourceModule: String,
+        /** Conservative retained-byte admission weight reserved while this element is queued. */
+        val estimatedBytes: Long
     ) {
         /**
          * 解析出最终事件（可能触发延迟构建）。
@@ -126,6 +131,9 @@ internal class ApmDispatcher(
 
     /** Effective positive ingress capacity shared by the queue and isolation thresholds. */
     private val effectiveQueueCapacity = queueCapacity.coerceAtLeast(1)
+
+    /** Effective positive retained-byte budget applied independently of event count. */
+    private val effectiveMaxQueuedBytes = maxQueuedBytes.coerceAtLeast(MIN_QUEUED_BYTES)
 
     /** Whether per-module queue isolation is enabled. */
     private val moduleIsolationEnabled = enableModuleIsolation
@@ -160,6 +168,10 @@ internal class ApmDispatcher(
 
     /** Per-module queued occupancy guarded by [admissionLock]. */
     private val queuedModuleCounts = HashMap<String, Int>()
+
+    /** Total reserved retained bytes guarded by [admissionLock]. */
+    @Volatile
+    private var queuedBytes = 0L
 
     /** worker 循环运行标志。 */
     @Volatile
@@ -206,7 +218,8 @@ internal class ApmDispatcher(
                                     event = event,
                                     preAggregated = true,
                                     priority = event.priority,
-                                    sourceModule = normalizedModule(event.module)
+                                    sourceModule = normalizedModule(event.module),
+                                    estimatedBytes = ApmEventSizeEstimator.estimate(event)
                                 )
                             )
                         },
@@ -228,21 +241,23 @@ internal class ApmDispatcher(
      * 调用线程只做入队，聚合/限流/脱敏/存储全部在 worker 线程执行。
      */
     fun dispatch(event: ApmEvent) {
-        // Directly constructed module events may still reference mutable host maps.
-        val eventSnapshot = snapshotEvent(event)
         selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件，避免关闭期间出现尾部写入。
         if (shutdown) {
-            logger.d("Dispatcher already shutdown, drop ${eventSnapshot.module}/${eventSnapshot.name}")
-            selfMonitor?.recordDrop(eventSnapshot.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
+            logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
+            selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
+
+        // Directly constructed module events may still reference mutable host maps.
+        val eventSnapshot = snapshotEvent(event)
 
         enqueue(
             QueuedEvent(
                 event = eventSnapshot,
                 priority = eventSnapshot.priority,
-                sourceModule = normalizedModule(eventSnapshot.module)
+                sourceModule = normalizedModule(eventSnapshot.module),
+                estimatedBytes = ApmEventSizeEstimator.estimate(eventSnapshot)
             )
         )
     }
@@ -254,11 +269,13 @@ internal class ApmDispatcher(
      *
      * @param priority 入队前已知的事件优先级，用于队列压力下的准入决策
      * @param sourceModule 入队前已知的来源模块，用于共享队列的 noisy-neighbor 隔离
+     * @param estimatedBytes conservative retained-byte weight captured before lazy construction
      * @param eventFactory 事件构建工厂，须为纯函数（可安全在 worker 线程执行）
      */
     fun dispatchLazy(
         priority: ApmPriority = ApmPriority.NORMAL,
         sourceModule: String = UNKNOWN_SOURCE_MODULE,
+        estimatedBytes: Long = DEFAULT_LAZY_EVENT_ESTIMATE_BYTES,
         eventFactory: () -> ApmEvent
     ) {
         selfMonitor?.recordEmit()
@@ -274,7 +291,8 @@ internal class ApmDispatcher(
                 event = null,
                 eventFactory = eventFactory,
                 priority = priority,
-                sourceModule = normalizedModule(sourceModule)
+                sourceModule = normalizedModule(sourceModule),
+                estimatedBytes = estimatedBytes.coerceAtLeast(MIN_EVENT_ESTIMATE_BYTES)
             )
         )
     }
@@ -293,6 +311,16 @@ internal class ApmDispatcher(
             return
         }
         try {
+            // A single event can never fit this queue regardless of priority or evictions.
+            if (queued.estimatedBytes > effectiveMaxQueuedBytes) {
+                logger.d(
+                    "Dispatcher event exceeds byte budget, drop priority=${queued.priority} " +
+                        "estimatedBytes=${queued.estimatedBytes}"
+                )
+                selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_BYTE_BUDGET)
+                return
+            }
+
             // Once the shared queue is pressured, preserve capacity for other modules without
             // weakening delivery of HIGH/CRITICAL signals from the noisy module.
             if (shouldIsolateModule(queued)) {
@@ -309,40 +337,52 @@ internal class ApmDispatcher(
                 return
             }
 
-            // Preserve older work at the same priority, but let a more valuable incoming event
-            // evict the oldest event at the lowest available priority.
-            var evictionCandidate: QueuedEvent? = null
-            for (existing in queue) {
-                if (existing.priority.value >= queued.priority.value) {
-                    continue
-                }
-                if (evictionCandidate == null || existing.priority.value < evictionCandidate.priority.value) {
-                    evictionCandidate = existing
+            val bytePressure = !hasByteCapacity(queued.estimatedBytes)
+            val needsQueueSlot = queue.remainingCapacity() == 0
+            val bytesToFree = if (bytePressure) {
+                queuedBytes - (effectiveMaxQueuedBytes - queued.estimatedBytes)
+            } else {
+                0L
+            }
+            val evictionCandidates = queue
+                .filter { existing -> existing.priority.value < queued.priority.value }
+                .sortedBy(QueuedEvent::priority)
+            val selectedVictims = ArrayList<QueuedEvent>()
+            var selectedBytes = 0L
+            // Byte pressure may require multiple lower-priority victims, unlike count pressure.
+            for (candidate in evictionCandidates) {
+                selectedVictims += candidate
+                selectedBytes += candidate.estimatedBytes
+                if ((!needsQueueSlot || selectedVictims.isNotEmpty()) && selectedBytes >= bytesToFree) {
+                    break
                 }
             }
-            if (evictionCandidate != null && queue.remove(evictionCandidate)) {
-                decrementQueuedModule(evictionCandidate.sourceModule)
+            val canReplace = (!needsQueueSlot || selectedVictims.isNotEmpty()) && selectedBytes >= bytesToFree
+            if (canReplace) {
+                for (victim in selectedVictims) {
+                    if (removeTracked(victim)) {
+                        logger.d(
+                            "Dispatcher capacity eviction priority=${victim.priority} " +
+                                "for priority=${queued.priority}"
+                        )
+                        selfMonitor?.recordDrop(
+                            victim.priority,
+                            SdkDropReason.DISPATCHER_PRIORITY_EVICTION
+                        )
+                    }
+                }
                 if (offerTracked(queued)) {
-                    logger.d(
-                        "Dispatcher queue full, evict priority=${evictionCandidate.priority} " +
-                            "for priority=${queued.priority}"
-                    )
-                    selfMonitor?.recordDrop(
-                        evictionCandidate.priority,
-                        SdkDropReason.DISPATCHER_PRIORITY_EVICTION
-                    )
                     return
                 }
-                // Keep accounting explicit if a defensive replacement offer ever fails after
-                // the victim was removed.
-                selfMonitor?.recordDrop(
-                    evictionCandidate.priority,
-                    SdkDropReason.DISPATCHER_PRIORITY_EVICTION
-                )
             }
 
-            logger.d("Dispatcher queue full, drop priority=${queued.priority}")
-            selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_QUEUE_FULL)
+            val reason = if (!hasByteCapacity(queued.estimatedBytes)) {
+                SdkDropReason.DISPATCHER_BYTE_BUDGET
+            } else {
+                SdkDropReason.DISPATCHER_QUEUE_FULL
+            }
+            logger.d("Dispatcher capacity full, drop priority=${queued.priority} reason=$reason")
+            selfMonitor?.recordDrop(queued.priority, reason)
         } finally {
             admissionLock.unlock()
         }
@@ -361,13 +401,33 @@ internal class ApmDispatcher(
 
     /** Offers one element and atomically publishes its per-module occupancy before visibility. */
     private fun offerTracked(queued: QueuedEvent): Boolean {
+        if (!hasByteCapacity(queued.estimatedBytes)) {
+            return false
+        }
         incrementQueuedModule(queued.sourceModule)
         if (queue.offer(queued)) {
+            queuedBytes += queued.estimatedBytes
             return true
         }
         // Roll back the reservation when the bounded queue rejected the element.
         decrementQueuedModule(queued.sourceModule)
         return false
+    }
+
+    /** Returns whether one retained-byte reservation fits without integer overflow. */
+    private fun hasByteCapacity(estimatedBytes: Long): Boolean {
+        return estimatedBytes <= effectiveMaxQueuedBytes &&
+            queuedBytes <= effectiveMaxQueuedBytes - estimatedBytes
+    }
+
+    /** Removes one queued victim and releases both count and byte occupancy. */
+    private fun removeTracked(queued: QueuedEvent): Boolean {
+        if (!queue.remove(queued)) {
+            return false
+        }
+        decrementQueuedModule(queued.sourceModule)
+        queuedBytes = (queuedBytes - queued.estimatedBytes).coerceAtLeast(0L)
+        return true
     }
 
     /** Increments one module occupancy while [admissionLock] is held. */
@@ -393,13 +453,11 @@ internal class ApmDispatcher(
 
     /** Releases occupancy for a worker-drained batch before running the potentially slow pipeline. */
     private fun releaseQueueOccupancy(batch: List<QueuedEvent>) {
-        if (!moduleIsolationEnabled) {
-            return
-        }
         admissionLock.lock()
         try {
             for (queued in batch) {
                 decrementQueuedModule(queued.sourceModule)
+                queuedBytes = (queuedBytes - queued.estimatedBytes).coerceAtLeast(0L)
             }
         } finally {
             admissionLock.unlock()
@@ -463,7 +521,7 @@ internal class ApmDispatcher(
             processBatch(drainBuffer)
 
             // 更新队列积压快照供自监控上报
-            selfMonitor?.updateQueueSize(queue.size)
+            selfMonitor?.updateQueuePressure(queue.size, queuedBytes)
         }
     }
 
@@ -700,6 +758,7 @@ internal class ApmDispatcher(
             val priorityCounts = queue.groupingBy(QueuedEvent::priority).eachCount()
             queue.clear()
             queuedModuleCounts.clear()
+            queuedBytes = 0L
             selfMonitor?.recordDropsByPriority(
                 totalCount = discarded,
                 priorityCounts = priorityCounts,
@@ -775,6 +834,18 @@ internal class ApmDispatcher(
 
         /** 有界事件队列容量：满时丢弃新事件（背压保护）。 */
         private const val QUEUE_CAPACITY = 2_048
+
+        /** Default dispatcher retained-byte budget: 8 MiB. */
+        private const val DEFAULT_MAX_QUEUED_BYTES = 8L * 1024L * 1024L
+
+        /** Lowest effective queue-byte budget after runtime clamping. */
+        private const val MIN_QUEUED_BYTES = 1L
+
+        /** Conservative weight for internal lazy factories without captured payload metadata. */
+        private const val DEFAULT_LAZY_EVENT_ESTIMATE_BYTES = 1_024L
+
+        /** Lowest reservation applied to an explicitly supplied lazy-event estimate. */
+        private const val MIN_EVENT_ESTIMATE_BYTES = 256L
 
         /** Default queue pressure percentage that activates per-module isolation. */
         private const val DEFAULT_MODULE_ISOLATION_HIGH_WATERMARK_PERCENT = 75

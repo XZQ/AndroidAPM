@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，163 个主源码文件，100 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 630 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 676 tests，plugin 独立报告。time-semantics/event-snapshot 定向验证另覆盖 core 与 15 个监控/扩展模块，共 77 suites / 527 tests，根 lint 通过。
+> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，100 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。cross-layer byte-budget 定向验证另通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests，两个 lint 均为 `No issues found`。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -25,17 +25,17 @@
 
 ## 1. 总评
 
-**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、资源硬上限）。本次列出的 R1–R12 客户端改进均已实现或以明确的有界替代方案闭环；仍需生产 Collector、专用真机 runner 和设备矩阵完成外部验收。
+**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、跨层资源硬上限）。R1–R12 以及后续 strict/wire/critical/time/byte-budget 客户端闭环项均已实现或采用明确有界方案；仍需生产 Collector、专用真机 runner 和设备矩阵完成外部验收。
 
 **闭环后综合评分：4.9 / 5.0**。剩余扣分来自单 dispatcher worker 的已知吞吐上限、已冻结 typed wire V2 尚需生产 Collector 部署，以及预算 gate 尚未在接受的物理设备上形成首个发布基线；这些不再是未实现的客户端代码缺口。
 
 | 维度 | 评分 | 一句话 |
 |---|---:|---|
-| P1 观察者效应 | 4.6 | 固定 time/allocation 预算门 + 模块高水位隔离已落地；单 worker 吞吐上限仍明确存在 |
+| P1 观察者效应 | 4.7 | 固定 time/allocation 预算门 + 模块高水位隔离 + 8 MiB dispatcher 字节门已落地；单 worker 吞吐上限仍明确存在 |
 | P2 投递可靠性 | 4.8 | outbox claim/lease 教科书级，几乎挑不出毛病 |
 | P3 隐私安全 | 4.8 | PII 默认开启，并覆盖文本规则与高置信敏感字段名；自定义业务字段仍需接入方治理 |
 | P4 测量方法学 | 4.8 | epoch/单调职责分离；FPS 按真实 interval/elapsed time 计算并按刷新率封顶；真机方法学仍需设备矩阵 |
-| P5 资源有界 | 4.9 | 队列、payload、存储总量、大数解析与诊断均有明确上限，溢出受控 |
+| P5 资源有界 | 4.9 | dispatcher、IPC、durable payload、存储总量、大数解析与诊断均有条数/字节上限，溢出受控 |
 | P6 宿主安全 | 4.9 | fail-safe 边界近乎最佳实践 |
 | P7 模块化 | 4.8 | 内部分层保持独立，`apm-bundle` 提供单依赖分发入口 |
 | P8 自身可观测 | 4.9 | `sdk_health` 独立摘要 + HIGH 副本，并按稳定丢弃原因/优先级计数 |
@@ -48,8 +48,8 @@
 **A. 调用线程非阻塞，重活下沉且慢业务上下文可隔离（`Apm.kt` / `ApmDispatcher.kt`）**
 `Apm.emit` 捕获发生时刻、线程名及 payload 快照后走非等待准入，map 合并/事件构建交给 `apm-dispatcher`。业务上下文默认同步模式要求 O(1)/无 IO/无等待锁；`ASYNC_CACHED` 则只读取不可变 LKG，provider 在 `apm-biz-context` 后台刷新。这是兼顾发生时语义、兼容性和延迟安全的设计。
 
-**B. 有界队列 + offer-only 背压（`ApmDispatcher.kt:99`）**
-`ArrayBlockingQueue<QueuedEvent>(2048)`，入队只用 `offer`，满即丢并计入自监控，**永不阻塞业务线程**。溢出是"丢低价值事件"而非"无界积压 OOM"——符合 P1/P5。
+**B. 条数 + 字节双预算队列和 offer-only 背压（`ApmDispatcher.kt` / `ApmEventSizeEstimator.kt`）**
+`ArrayBlockingQueue<QueuedEvent>(2048)` 同时受默认 8 MiB estimated-retained budget 约束；调用线程只对冻结快照做保守大小估算，不执行 durable serialization。入队使用非等待 `tryLock` + `offer`，HIGH/CRITICAL 可在锁内淘汰足够数量的旧低优事件满足双预算，**永不等待 worker**。溢出是“按 reason 丢低价值事件”而非“让大事件把条数有界队列拖向 OOM”——符合 P1/P5。
 
 **C. SQLite outbox 的 claim/lease 是教科书级实现（`SQLiteEventStore.kt:235-301`）**
 - 写事务在 `SELECT` 候选行**之前**获取，杜绝多进程/多实例观察到同一批空闲行；
@@ -66,7 +66,7 @@
 Tink Ed25519 + 固定 32 字节 **pinned** raw key（非随响应下发）、`RAW` 输出前缀、对 **canonical JSON 字节**做 detached 验签；验签失败统一返回 `false` 不泄露"缺 key 还是签名错"；LKG 用 `SharedPreferences.commit()` 同步原子落盘（`RemoteConfigStore.kt:39-56`），保证进程死亡不会写出半个 revision。满足 P3。
 
 **F. 资源硬上限几乎全覆盖（架构文档 §9）**
-队列 2048 / drain 32 / 行 50,000 / 活跃 payload 64 MiB / durable 单事件 256 KiB / V2 HTTP envelope 默认 1 MiB、绝对 4 MiB / codec 2 MiB / map 4096 / big-number text 4096 字符 / 限流 LRU 256 / 非持久队列 500 / 诊断 200+256 记录各 4 MiB / IPC 100 行。溢出、拒绝和淘汰都有明确策略与健康计数。
+dispatcher 2048 条 + 8 MiB / drain 32 / IPC 4 MiB pending + 256 KiB raw event + 1 MiB file + 16 MiB ready directory / SQLite 50,000 行 + 64 MiB live payload + 256 KiB durable event / V2 HTTP envelope 默认 1 MiB、绝对 4 MiB / codec 2 MiB / map 4096 / big-number text 4096 字符 / 限流 LRU 256 / 非持久队列 500 / 诊断 200+256 记录各 4 MiB。普通 IPC 使用 lock-free pending 与单一周期 writer，ready 文件流式读取；溢出、拒绝和淘汰都有明确策略与健康计数。
 
 **G. 线程治理统一（`ApmExecutors.kt`）**
 全部 daemon 线程、`apm-` 前缀、后台 `MIN_PRIORITY` / 测量 `NORM_PRIORITY` 两级，便于 systrace/线程 dump 定位且不抢宿主 CPU。
@@ -88,7 +88,7 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 |---|---|---|---|
 | R1 | 客户端完成；物理基线待外部 runner | 固定 median time/allocation 预算、host verifier、缺项/坏指标/超限失败、默认拒绝 emulator | `c2eba30` |
 | R2 | 完成 | PII 默认开启；文本正则 + 高置信字段名直接遮蔽，包括数值敏感值 | `2823038` |
-| R3 | 有界闭环 | 75% 高水位后限制单模块 NORMAL/LOW 占总容量 50%，HIGH/CRITICAL 绕过；单 worker 上限如实保留 | `b0ea7fa` |
+| R3 | 有界闭环 | 2048 条 + 8 MiB 双预算；75% 高水位后限制单模块 NORMAL/LOW 占总容量 50%，HIGH/CRITICAL 可多 victim 淘汰；单 worker 上限如实保留 | `b0ea7fa` + 当前源码 |
 | R4 | 完成 | 同步 provider 契约化；新增 `ASYNC_CACHED`、LKG、合并刷新和生命周期 | `f2414df` |
 | R5 | 完成 | durable codec v3 typed scalar、v1/v2 兼容、任意对象字符串 fallback、未知 tag 拒绝 | `0f4ecb8` |
 | R6 | 完成 | 连续 3 个健康周期恢复，退化/迟滞周期重置 streak，恢复重查所有门禁 | `2823038` |
@@ -110,7 +110,7 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 ### P1（重要，规划处理）
 
 **R3. 单 dispatcher worker 的共享容量爆炸半径——已做有界隔离**
-worker 仍顺序执行，这是明确保留的 ordering/线程安全取舍；项目没有虚称多 worker 吞吐。入口在总队列达到 75% 后，已占总容量 50% 的同一模块不能再写 NORMAL/LOW，给其他模块保留容量；HIGH/CRITICAL 绕过门禁并可淘汰更低优先级事件。该方案解决 noisy-neighbor 容量挤占，不消除一次昂贵操作的瞬时 head-of-line blocking，后者由固定预算 gate、动态限流和文档边界共同约束。
+worker 仍顺序执行，这是明确保留的 ordering/线程安全取舍；项目没有虚称多 worker 吞吐。入口同时受 2048 条与默认 8 MiB 估算保留内存约束；总队列达到 75% 后，已占总容量 50% 的同一模块不能再写 NORMAL/LOW，给其他模块保留容量。HIGH/CRITICAL 绕过模块门禁，并可在 admission lock 内淘汰多个旧低优事件，直至条数和字节都满足。该方案解决 noisy-neighbor 与“大事件挤爆有界条数队列”的容量风险，不消除一次昂贵 worker 操作的瞬时 head-of-line blocking，后者由固定预算 gate、动态限流和文档边界共同约束。
 
 **R4. `bizContext` 调用线程风险——已完成双模式**
 `SYNCHRONOUS` 保留精确发生时快照与兼容性，但 KDoc/接入文档明确要求 O(1)、无 IO、无等待锁。`ASYNC_CACHED` 只在 emit 读取最近一次成功的不可变快照，provider 在 `apm-biz-context` 后台线程按有界周期运行；失败保留 LKG，显式 refresh 合并请求，stop 终止刷新。
@@ -161,13 +161,14 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 12 | HttpURLConnection 接入（R12） | P2 | 已实现显式 wrapper 与异常边界测试 |
 | 13 | 关键事件 hand-off + loss reason/priority | P1 | Crash/ANR 同步本地接管；drop 三维计数并显式保留 unknown |
 | 14 | 时间语义 + 直接事件快照 | P1 | epoch/单调职责分离；异步 hand-off 冻结 fields/context/extras |
+| 15 | dispatcher / multi-process / IPC / SQLite 字节预算 | P1 | 8 MiB dispatcher；4 MiB/256 KiB/1 MiB/16 MiB IPC；256 KiB/64 MiB SQLite |
 
 ---
 
 ## 5. 闭环验证与局限
 
-- **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 630 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：最新 time-semantics/event-snapshot 源码在 JDK 17.0.14 下通过 core 与 15 个监控/扩展模块共 77 suites / 527 tests，均 0 failures/errors/skips；根 `lintDebug --rerun-tasks` 通过。此前 R1 host gate、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
+- **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
+- **定向测试/构建**：最新 cross-layer byte-budget 源码在 JDK 17.0.14 下通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests，均 0 failures/errors/skips；两个 lint 报告均为 `No issues found`。此前 time-semantics、R1 host gate、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 47 个本地链接。
 - **仍需真机/外部系统**：接受物理设备上的预算 gate、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵、生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。模拟器 benchmark 只证明 instrumentation/parser 链路，不能替代物理性能结论。
 
@@ -175,4 +176,4 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 
 ## 6. 一句话结论
 
-**R1–R12 的客户端实现已经闭环：低开销现在有固定预算与失败门，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/payload/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地。** 这使 SDK 达到“可进入生产接入与真实设备/服务端验收”的水平；是否正式上线仍必须由接入方完成 Collector、合规、真机预算、OEM 长稳和告警闭环，不能仅凭客户端单测替代。
+**客户端实现已经形成跨层闭环：低开销有固定预算与失败门，dispatcher/IPC/SQLite 分别按真实资源维度限界，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地。** 这使 SDK 达到“可进入生产接入与真实设备/服务端验收”的水平；是否正式上线仍必须由接入方完成 Collector、合规、真机预算、OEM 长稳和告警闭环，不能仅凭客户端单测替代。
