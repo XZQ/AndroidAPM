@@ -22,7 +22,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
 - Main source files: `157` (`152` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `94`
+- Test/benchmark files: `95`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.
@@ -54,6 +54,8 @@ Fifth-batch business-context latency checks on `2026-07-22` used JDK `17.0.14`: 
 Sixth-batch consumer-distribution checks on `2026-07-22` used JDK `17.0.14`: the root `publishToMavenLocal --no-daemon` task passed, the isolated Maven consumer passed `clean assembleDebug --no-daemon` with only `com.apm:apm-bundle:0.1.0`, and focused `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon` passed. Maven Local contains `22` AAR, `24` JAR, and `23` POM files for `com.apm:*-0.1.0`; the bundle POM exposes all `22` runtime SDK artifacts, while the bundle AAR carries no SDK implementation classes. Documentation verification passed `41` Markdown files / `39` local links. This focused result validates local publication and transitive consumer compilation; Maven Central or another external repository remains unverified.
 
 Seventh-batch HttpURLConnection integration checks on `2026-07-22` used JDK `17.0.14`: `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon` passed `3` suites / `21` tests with zero failures/errors/skips, and the lint report says `No issues found`. Tests cover successful and HTTP-error responses, header/body transport failures, non-transport host exceptions, stopped-module execution, recoverable report failure isolation, and fatal VM error visibility. Documentation verification passed `41` Markdown files / `39` local links. This focused result validates the explicit public-API wrapper, not real proxy/TLS/OEM network behavior.
+
+Eighth-batch performance-budget checks on `2026-07-22` used JDK `17.0.14`: the five host verifier tests passed, existing emulator JSON exercised all three configured budget comparisons only with the explicit parser-only override, and `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` passed. The checked-in gate covers median time and allocations for durable encode/decode plus the 32-event SQLite transaction, fails on missing/malformed/over-budget evidence, and rejects emulator results by default. Documentation verification passed `42` Markdown files / `41` local links. An accepted physical-device gate run remains external validation because the visible Xiaomi device still blocks test-APK installation.
 
 ## Project Boundary
 

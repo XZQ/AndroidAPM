@@ -6,7 +6,7 @@
 
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、单依赖 `apm-bundle` 分发、稳定 eventId、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入和 benchmark harness 已有测试与本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、稳定 eventId、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；75% 高水位后，单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 157：152 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 94 |
+| 测试/benchmark 文件 | 95 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -149,6 +149,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-22 的第七批 HttpURLConnection integration 定向验证：JDK 17.0.14 下 `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon` 通过 3 suites / 21 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 41 Markdown / 39 links。显式 helper 只读取一次 `responseCode` 执行请求，把 status 交给宿主 block，不读取正文或 disconnect；测试证明 HTTP error 正常返回、headers/body transport IOException 保持原异常、非网络宿主异常不被误标、recoverable report 失败不覆盖宿主结果、fatal VM error 不被吞。真实代理/TLS/重定向/OEM 行为仍需集成验证。
 
+2026-07-22 的第八批 performance-budget 定向验证：JDK 17.0.14 下 5 个 host verifier unittest 通过，已有 emulator JSON 只在显式 parser-only override 下完成 3 个预算比较，`:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 通过。预算固定 durable encode/decode 与 32-event SQLite batch 的 median time/allocation 上限；Gradle release gate 默认拒绝 emulator，并对缺项、坏指标和超预算 fail closed。`python docs/verify_docs.py` 通过 42 Markdown / 41 links。当前物理设备安装策略仍阻止接受真机运行，因此这里只证明 gate 实现，不声明物理预算通过。
+
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
 ## 新电脑接手
@@ -167,6 +169,7 @@ git log --oneline -n 10
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
+./gradlew.bat :apm-benchmark:verifyReleasePerformanceBudgets
 ```
 
 6. 发布相关变更再执行：
@@ -178,7 +181,7 @@ git log --oneline -n 10
 
 ## 后续优先级
 
-客户端代码可独立完成的既定缺口已经收口，包括动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离和默认隐私保护。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议和验收条件推进。typed fields 也必须与 Collector 做版本化 schema 演进，不能在客户端静默改变 wire 类型；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。性能预算必须以接受的真机基线建立，不能把模拟器执行值伪装成发布门槛。
+客户端代码可独立完成的既定缺口已经收口，包括动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议和验收条件推进。typed fields 也必须与 Collector 做版本化 schema 演进，不能在客户端静默改变 wire 类型；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
 
 ## Git 与文档策略
 

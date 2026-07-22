@@ -11,7 +11,8 @@
 3. [model / storage / uploader](02_apm-model-storage-uploader.md)
 4. [签名远程配置](20_apm-remote-config.md)
 5. [单依赖分发 Bundle](21_apm-bundle.md)
-6. 当前任务对应的监控或扩展模块
+6. [性能预算门](22_apm-benchmark.md)
+7. 当前任务对应的监控或扩展模块
 
 ## 基础架构
 
@@ -22,6 +23,7 @@
 | [02_model-storage-uploader](02_apm-model-storage-uploader.md) | 事件模型、codec、SQLite outbox、HTTP、重试和确认 |
 | [20_apm-remote-config](20_apm-remote-config.md) | 短期鉴权、HTTPS/ETag、Ed25519、LKG、kill switch、采样/限流/endpoint |
 | [21_apm-bundle](21_apm-bundle.md) | 单依赖完整客户端分发、传递依赖边界与模块化取舍 |
+| [22_apm-benchmark](22_apm-benchmark.md) | AndroidX 热路径测量、固定发布预算与物理设备失败门 |
 
 ## 15 个监控模块
 

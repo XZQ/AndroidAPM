@@ -81,7 +81,7 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "157", "152 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "94", "JVM、Robolectric、instrumented benchmark、插件和 native 契约测试"),
+        ("测试文件", "95", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -238,7 +238,7 @@ def build_architecture_report() -> Document:
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
             "apm-bundle 只聚合发布依赖，不承载运行时实现，也不自动应用慢方法插件。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
-            "apm-benchmark 只生成设备测量入口，不进入 Maven publication。",
+            "apm-benchmark 不进入 Maven publication，并用固定 time/allocation 预算把物理设备测量变成失败门。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")
@@ -262,6 +262,7 @@ def build_architecture_report() -> Document:
         "./gradlew testDebugUnitTest",
         "./gradlew -p apm-plugin test",
         "./gradlew :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin",
+        "./gradlew :apm-benchmark:verifyReleasePerformanceBudgets",
         "./gradlew lintDebug",
         "./gradlew assembleRelease",
         "./gradlew publishToMavenLocal",

@@ -9,7 +9,7 @@
 - 同步日期：2026-07-22
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 157 个主源码文件：152 Kotlin + 4 C + 1 proto
-- 94 个测试/benchmark 文件
+- 95 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -79,7 +79,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
 | `apm-sample-app` | 15 个监控模块的本地演示；包含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，并显式配置 `logcat://sample` 输出 |
-| `apm-benchmark` | 非发布 AndroidX Microbenchmark；event codec 与 SQLite outbox 真机开销 harness |
+| `apm-benchmark` | 非发布 AndroidX Microbenchmark；event codec/SQLite outbox 固定时间与分配预算、物理设备失败门 |
 
 ## 快速接入
 
@@ -405,7 +405,10 @@ ApmDiagnostics.clearAllProcesses()
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
+./gradlew.bat :apm-benchmark:verifyReleasePerformanceBudgets
 ```
+
+最后一条命令用于专用物理设备 runner：它运行 AndroidX benchmark，再按仓库内固定预算检查 median time 与 allocation；缺项、坏 JSON、超预算或 emulator 证据都会失败。没有物理设备时可先运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，但不能据此声明真机预算通过。
 
 发布链验证：
 
@@ -418,9 +421,9 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 

@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "benchmarks": {
+    "com.apm.benchmark.EventCodecBenchmark.encodeDurableEvent": {
+      "operationCount": 1,
+      "maxMedianTimeNs": 30000,
+      "maxMedianAllocationCount": 48
+    },
+    "com.apm.benchmark.EventCodecBenchmark.decodeDurableEvent": {
+      "operationCount": 1,
+      "maxMedianTimeNs": 60000,
+      "maxMedianAllocationCount": 72
+    },
+    "com.apm.benchmark.SQLiteOutboxBenchmark.appendDispatcherBatch": {
+      "operationCount": 32,
+      "maxMedianTimeNs": 8000000,
+      "maxMedianAllocationCount": 2048
+    }
+  }
+}

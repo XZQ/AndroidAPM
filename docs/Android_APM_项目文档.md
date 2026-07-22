@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜27 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜94 个测试/benchmark 文件
+> 文档同步：2026-07-22｜27 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜95 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -53,7 +53,7 @@ monitor module
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
 | 主源码 | 157：152 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 94 |
+| 测试/benchmark 文件 | 95 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -106,7 +106,7 @@ monitor module
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
 | `build-logic` | Android library convention plugin |
 | `apm-sample-app` | 集成 15 个监控模块的演示应用；实际演示 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，并显式配置 `logcat://sample` 输出 |
-| `apm-benchmark` | 非发布 AndroidX Microbenchmark，覆盖 codec 与 SQLite outbox 热路径 |
+| `apm-benchmark` | 非发布 AndroidX Microbenchmark，覆盖 codec 与 SQLite outbox 热路径，并以固定时间/分配预算形成物理设备失败门 |
 
 ## 五、统一事件模型
 
@@ -247,7 +247,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十一、构建与发布
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`apm-plugin` 作为 included build 独立测试。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication，其 `verifyReleasePerformanceBudgets` 任务把 connected Release 测量与 fail-closed host verifier 串成单一物理设备门禁。`apm-plugin` 作为 included build 独立测试。
 
 2026-07-16 在 JDK 17.0.14 执行的开发验证：
 
@@ -289,6 +289,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第七批 HttpURLConnection integration 验证在 JDK 17.0.14 下执行 `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon`：3 suites / 21 tests，0 failures/errors/skips，lint 为 `No issues found`。测试覆盖成功和 HTTP error 返回、headers/body IOException、宿主非网络异常、停止态、report sink recoverable 失败隔离及 fatal VM error 可见性。`python docs/verify_docs.py` 通过 41 个 Markdown 文件和 39 个本地链接。该结果证明显式 helper 的执行/异常契约，不替代真实代理、TLS、重定向、OEM 网络栈集成测试。
 
+2026-07-22 的第八批 performance-budget 验证在 JDK 17.0.14 下执行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"`：5 tests 通过；已有 emulator JSON 仅通过显式 `--allow-emulator` 验证 3 个预算匹配与归一化输出；`:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 构建通过。固定预算覆盖 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations；缺项、坏指标、超预算和默认 emulator 检测都会使 gate 失败。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。物理机仍因安装策略不能产生接受结果，因此该增量证明门禁代码与构建入口，不伪装成真机预算已通过。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -297,7 +299,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-94 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算，以及两个真机 Microbenchmark 入口。
+95 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
 
 测试通过不能代替以下验证：
 
@@ -309,11 +311,11 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 CI，以及真机 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 
