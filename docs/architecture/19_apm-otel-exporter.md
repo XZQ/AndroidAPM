@@ -55,7 +55,7 @@ val mapped = bridge.export(event)
 - 不发送 OTLP HTTP/gRPC。
 - 不管理 BatchSpanProcessor、MetricReader、LogRecordProcessor。
 - 不注入/提取 W3C trace headers。
-- durable fields round-trip 后数值可能为 String，宿主需要 schema/coercion 策略。
+- codec v3 重放会恢复受支持标量类型；legacy v1/v2 行仍可能提供 String，宿主映射层需要兼容 schema/coercion。
 
 ## 测试
 

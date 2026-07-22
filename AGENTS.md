@@ -57,6 +57,8 @@ Seventh-batch HttpURLConnection integration checks on `2026-07-22` used JDK `17.
 
 Eighth-batch performance-budget checks on `2026-07-22` used JDK `17.0.14`: the five host verifier tests passed, existing emulator JSON exercised all three configured budget comparisons only with the explicit parser-only override, and `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` passed. The checked-in gate covers median time and allocations for durable encode/decode plus the 32-event SQLite transaction, fails on missing/malformed/over-budget evidence, and rejects emulator results by default. Documentation verification passed `42` Markdown files / `41` local links. An accepted physical-device gate run remains external validation because the visible Xiaomi device still blocks test-APK installation.
 
+Ninth-batch typed-durable-field checks on `2026-07-22` used JDK `17.0.14`: `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` passed model `4` suites / `40` tests and storage `6` suites / `36` tests with zero failures/errors/skips. Durable codec v3 preserves null, String, Boolean, Byte, Short, Int, Long, Float, Double, Char, BigInteger, and BigDecimal values; legacy v1/v2 payloads retain string semantics, unsupported objects fall back to bounded strings, arbitrary-precision parsing is capped at 4,096 characters, and unknown type tags reject only the corrupt event. Documentation verification passed `42` Markdown files / `41` local links. Line Protocol and Protobuf fields remain string-valued, so this change does not silently alter the collector wire contract.
+
 ## Project Boundary
 
 AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
@@ -78,6 +80,8 @@ monitor module
 Crash-class events can use synchronous local persistence. Optional multi-process forwarding publishes complete `.tmp` files as `.ipc` files before the uploader process consumes them.
 
 Delivery is acknowledged and at least once. Stable `eventId` survives Line Protocol, Protobuf field 14, durable codec, SQLite, and IPC. SQLite write transactions atomically claim rows with owner/expiry; only the owner may acknowledge or fail them, shutdown releases claims, and expired claims are reclaimable. Ambiguous network completion can still retransmit, so the collector must deduplicate by `eventId`.
+
+Durable codec format v3 adds explicit scalar type tags for event `fields` while continuing to read v1/v2 rows. Supported scalar types round-trip exactly; arbitrary objects deliberately degrade through `toString()` rather than Java serialization. Line Protocol and Protobuf transport remain `map<string,string>`, so typed durable recovery is a client-local compatibility improvement, not an unversioned wire-schema change.
 
 ## Integration Reality
 

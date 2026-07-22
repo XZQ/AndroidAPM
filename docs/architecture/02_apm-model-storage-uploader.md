@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-07-21
+> 同步日期：2026-07-22
 
 ## 1. 分层关系
 
@@ -53,16 +53,19 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 
 ### ApmEventCodec durable payload
 
-- 当前写 format version：2；兼容读 version 1
+- 当前写 format version：3；兼容读 version 1/2
 - 用于 SQLite/IPC 的完整事件恢复
 - codec payload 硬上限 2 MiB；SQLite 默认另施加 256 KiB durable 单事件软上限
 - string 最大 1 MiB
 - 每个 Map 最大 4096 项
+- BigInteger/BigDecimal decimal text 最大 4096 字符，先检查再进入大数 parser
 - enum 未知值回退默认
-- `fields` 通过 `Any?.toString()` 保存，重放后值类型为 String
-- version 2 保存 eventId；version 1 迁移行由 SQLite `event_id` 回填
+- version 3 每个 field 带类型 tag，原样恢复 null、String、Boolean、Byte、Short、Int、Long、Float、Double、Char、BigInteger、BigDecimal
+- 其他 arbitrary object 不做对象序列化，继续通过 `toString()` 降级成 bounded String
+- version 1/2 的 field 值按历史契约读取为 String；version 2 起保存 eventId，version 1 迁移行由 SQLite `event_id` 回填
+- 未知 version-3 type tag 使单个损坏 payload 解码失败，由 storage 隔离坏行，不猜测长度或类型
 
-因此 durable codec 保留事件结构，但不保留 arbitrary field 的原始数值/布尔类型。
+因此客户端 durable round-trip 对受支持标量类型保真，同时避免 Java/Kotlin 任意对象反序列化。Line Protocol 与 Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format v3 不改变 Collector wire contract。
 
 ## 4. EventStore 契约
 
@@ -234,17 +237,18 @@ claimPending(owner, lease)
 - restart replay
 - retry/TTL pruning
 - batch/Gzip/Retry-After
+- typed durable scalar fields with version-1/2 compatibility
 
 外部/协议缺口：
 
 - exactly-once server protocol and server-side eventId deduplication
-- typed durable field schema
+- typed wire fields（仅在 Collector 需要非字符串 field 时，通过新协议版本协商）
 - Token 签发/刷新/撤销与租户授权服务（客户端逐请求注入已完成）
 - collector compatibility/version negotiation
 
 ## 12. 测试
 
-`apm-model`：Line Protocol、codec 边界/回放、priority、Protobuf。
+`apm-model`：Line Protocol、codec v1/v2 兼容、v3 scalar type/value round-trip、未知 tag/fallback、priority、Protobuf。
 
 `apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/row+payload-byte eviction/单事件隔离/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 

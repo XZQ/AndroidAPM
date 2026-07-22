@@ -122,13 +122,15 @@ monitor module
 
 持久化 `ApmEventCodec`：
 
-- 当前写 format version 2，兼容读取 version 1
+- 当前写 format version 3，兼容读取 version 1/2
 - codec 硬上限 2 MiB；SQLite 默认 durable 单事件软上限 256 KiB
 - 单字符串最大 1 MiB
 - 单 Map 最大 4096 项
-- 可逆保存事件结构，但 `fields` 中任意值会通过 `toString()` 归一为字符串
+- v3 对 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger、BigDecimal 写显式类型标签并恢复原类型
+- BigInteger/BigDecimal 的 decimal text 最多 4096 字符，避免损坏行制造过量大数解析开销
+- v1/v2 `fields` 保持历史字符串语义；v3 遇到其他任意对象时仍安全降级为有界字符串，未知 tag 拒绝该损坏事件
 
-传输支持 Line Protocol 和零外部 runtime 依赖的 Protobuf writer；`eventId` 在 Line Protocol、Protobuf field 14、durable codec、SQLite 与多进程交接中保持稳定。服务端协议仍必须以该值实现幂等。
+传输支持 Line Protocol 和零外部 runtime 依赖的 Protobuf writer；两种 wire format 的 `fields` 仍按字符串输出，不因本地 codec v3 静默改变 Collector 契约。`eventId` 在 Line Protocol、Protobuf field 14、durable codec、SQLite 与多进程交接中保持稳定，服务端协议仍必须以该值实现幂等。
 
 ## 六、分发与宿主开销
 
@@ -291,6 +293,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第八批 performance-budget 验证在 JDK 17.0.14 下执行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"`：5 tests 通过；已有 emulator JSON 仅通过显式 `--allow-emulator` 验证 3 个预算匹配与归一化输出；`:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 构建通过。固定预算覆盖 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations；缺项、坏指标、超预算和默认 emulator 检测都会使 gate 失败。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。物理机仍因安装策略不能产生接受结果，因此该增量证明门禁代码与构建入口，不伪装成真机预算已通过。
 
+2026-07-22 的第九批 typed-durable-field 验证在 JDK 17.0.14 下执行 `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon`：model 4 suites / 40 tests、storage 6 suites / 36 tests，均为 0 failures/errors/skips，benchmark AndroidTest Kotlin 编译通过。测试覆盖 12 类受支持标量的值与运行时类型保真、任意对象字符串 fallback、4,096 字符大数边界、v1/v2 读取以及未知 v3 tag fail-closed；storage 全套证明 SQLite append/read/claim/replay 未回归。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。该变更只升级本地 durable payload，不改变 Line/Protobuf 字符串 wire map。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -299,7 +303,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-95 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
+95 个测试/benchmark 文件覆盖配置默认值、事件 identity/typed codec v1-v3/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
 
 测试通过不能代替以下验证：
 
@@ -311,9 +315,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
-一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
+本地 durable round-trip 已通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。Line Protocol 与 Protobuf 继续输出字符串 field map；如果未来需要 Collector 接收 typed wire fields，仍必须通过服务端协商的新协议版本演进，不能复用本次客户端本地格式升级静默改变传输。
 
 生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 

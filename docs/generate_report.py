@@ -183,7 +183,7 @@ def build_status_report() -> Document:
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
-            "持久化 codec 会把任意字段字符串化，强类型跨重启保真不是当前契约。",
+            "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
         ],
     )
     add_diagram(document, "android-apm-event-pipeline.png", "图 1：事件从采集到确认删除的真实管线")
