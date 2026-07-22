@@ -53,6 +53,8 @@ Fifth-batch business-context latency checks on `2026-07-22` used JDK `17.0.14`: 
 
 Sixth-batch consumer-distribution checks on `2026-07-22` used JDK `17.0.14`: the root `publishToMavenLocal --no-daemon` task passed, the isolated Maven consumer passed `clean assembleDebug --no-daemon` with only `com.apm:apm-bundle:0.1.0`, and focused `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon` passed. Maven Local contains `22` AAR, `24` JAR, and `23` POM files for `com.apm:*-0.1.0`; the bundle POM exposes all `22` runtime SDK artifacts, while the bundle AAR carries no SDK implementation classes. Documentation verification passed `41` Markdown files / `39` local links. This focused result validates local publication and transitive consumer compilation; Maven Central or another external repository remains unverified.
 
+Seventh-batch HttpURLConnection integration checks on `2026-07-22` used JDK `17.0.14`: `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon` passed `3` suites / `21` tests with zero failures/errors/skips, and the lint report says `No issues found`. Tests cover successful and HTTP-error responses, header/body transport failures, non-transport host exceptions, stopped-module execution, recoverable report failure isolation, and fatal VM error visibility. Documentation verification passed `41` Markdown files / `39` local links. This focused result validates the explicit public-API wrapper, not real proxy/TLS/OEM network behavior.
+
 ## Project Boundary
 
 AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
@@ -79,7 +81,7 @@ Delivery is acknowledged and at least once. Stable `eventId` survives Line Proto
 
 Registration alone does not make every monitor automatic:
 
-- Network requires the OkHttp interceptor/listener or manual completion callbacks.
+- Network requires the OkHttp interceptor/listener, explicit `traceHttpUrlConnection`, or manual completion callbacks. The HttpURLConnection helper executes by reading `responseCode`, does not consume/disconnect the host connection, reports only total duration/status/header-derived size, and is not a global hook.
 - SQLite requires `ApmSQLiteDatabase` or `onSqlExecuted` callbacks. Only wrapper `rawQuery` has the database handle, full SQL, and bound arguments needed for threshold-gated `EXPLAIN QUERY PLAN`; monitoring reports are isolated from host database results/exceptions.
 - IPC uses `traceBinderCall` or `onBinderCallComplete`; deprecated `enableBinderHook=false` does not use hidden APIs.
 - WebView uses explicit per-instance `install/uninstall`, delegate wrappers, `evaluateJavascript`, or callbacks; deprecated global `enableAutoRegister=false` does not take over arbitrary instances.

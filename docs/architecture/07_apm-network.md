@@ -4,9 +4,9 @@
 
 ## 目的与接入
 
-该模块记录请求汇总和 OkHttp 阶段耗时，但不会自动修改宿主 OkHttpClient。
+该模块记录请求汇总、OkHttp 阶段耗时和显式 HttpURLConnection 总耗时，但不会自动修改宿主 HTTP 客户端。
 
-三种入口：
+四种入口：
 
 ```kotlin
 val module = NetworkModule()
@@ -20,6 +20,24 @@ module.onRequestComplete(url, method, statusCode, durationMs)
 ```
 
 Interceptor 负责请求汇总；EventListener 默认 `reportSummary=false`，只负责 DNS/TCP/TLS/headers/body 阶段，避免双重汇总。也可由集成方调整所有权。
+
+非 OkHttp 调用可在完成连接配置后显式执行：
+
+```kotlin
+val connection = URL(endpoint).openConnection() as HttpURLConnection
+connection.requestMethod = "GET"
+
+val body = try {
+    module.traceHttpUrlConnection(connection) { traced, statusCode ->
+        val stream = if (statusCode >= 400) traced.errorStream else traced.inputStream
+        stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+    }
+} finally {
+    connection.disconnect()
+}
+```
+
+`traceHttpUrlConnection` 读取一次 `responseCode` 作为明确执行点，并将宿主 block 耗时计入 total duration。它不消费正文、不 disconnect、不改变超时/重定向配置，也不伪造 HttpURLConnection 无法提供的 DNS/TCP/TLS 分阶段数据。transport `IOException` 保留原异常并报告网络错误；headers 已收到后的宿主解析异常保留真实 HTTP outcome；监控报告的 recoverable 失败不会覆盖宿主结果。
 
 ## 采集
 
@@ -46,11 +64,13 @@ OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调�
 
 ## 边界
 
-- 只覆盖接入该 interceptor/listener 的 client。
+- 只覆盖接入该 interceptor/listener、显式 helper 或手动 callback 的请求；没有进程级全局 Hook。
 - 不读取 request/response body 内容，`maxPayloadSize` 当前用于 URL/error 文本截断，不是 body capture 大小。
+- HttpURLConnection response size 来自 `Content-Length`，未知/分块响应记为 0；需要实际 body 字节数时使用手动 `onRequestComplete`。
+- HttpURLConnection helper 不拥有 connection 生命周期；宿主必须在完成响应处理后自行 `disconnect`。
 - 不自动采集 URL query/header 中的敏感数据；生产应保持默认 PII sanitization 开启，并在接入层先行清理 URL。
 - EventListener 和 Interceptor 同时接入时应保持单一 summary owner。
 
 ## 测试
 
-Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override，以及请求与 phase URL/error 截断。内部 sink 使字段与 severity 可在 JVM 中直接断言；真实 OkHttp/连接池/代理/TLS/OEM 网络行为仍需集成测试。
+Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override、请求与 phase URL/error 截断，以及 HttpURLConnection 成功/HTTP error/transport exception/宿主异常/report failure/fatal 边界。内部 sink 和假 connection 使字段、severity、执行次数与异常身份可在 JVM 中直接断言；真实 OkHttp/HttpURLConnection/连接池/代理/TLS/重定向/OEM 网络行为仍需集成测试。

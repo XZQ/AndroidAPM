@@ -80,7 +80,8 @@ Apm.emit
 
 需要宿主接线：
 
-- Network：OkHttp Interceptor/EventListener 或手动 callback
+- Network：OkHttp Interceptor/EventListener、显式 `traceHttpUrlConnection` 或手动 callback
+- HttpURLConnection helper：读取 `responseCode` 执行，不读正文、不 disconnect、不提供伪分阶段数据
 - SQLite：`ApmSQLiteDatabase` 或 `onSqlExecuted`
 - IPC：`traceBinderCall` 或 `onBinderCallComplete`
 - WebView：对指定实例 `install/uninstall`、delegate wrapper 或页面/JS/资源 callback
@@ -145,6 +146,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 2026-07-22 的第五批 biz-context latency 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 24 suites / 172 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 Markdown / 37 links。测试覆盖同步不可变快照、异步 SDK 线程、首次空值/LKG、recoverable provider 失败、显式请求合并和公共 init/refresh/stop 生命周期。该结果证明异步模式 emit 不执行宿主 provider；同步兼容模式仍要求接入方履行 O(1)/无 IO/无等待锁契约。
 
 2026-07-22 的第六批 consumer distribution 定向验证：JDK 17.0.14 下根 `publishToMavenLocal --no-daemon`、隔离 consumer `clean assembleDebug --no-daemon` 与 `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon` 均通过。consumer 只声明 `com.apm:apm-bundle:0.1.0`；Maven Local 当前包含 22 AAR / 24 JAR / 23 POM，bundle POM 传递暴露 22 个 `com.apm` 运行时制品，AAR 不承载 SDK 实现类。`python docs/verify_docs.py` 通过 41 Markdown / 39 links。该结果只覆盖本地发布与单依赖消费，不代表外部 Maven 发布完成。
+
+2026-07-22 的第七批 HttpURLConnection integration 定向验证：JDK 17.0.14 下 `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon` 通过 3 suites / 21 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 41 Markdown / 39 links。显式 helper 只读取一次 `responseCode` 执行请求，把 status 交给宿主 block，不读取正文或 disconnect；测试证明 HTTP error 正常返回、headers/body transport IOException 保持原异常、非网络宿主异常不被误标、recoverable report 失败不覆盖宿主结果、fatal VM error 不被吞。真实代理/TLS/重定向/OEM 行为仍需集成验证。
 
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 

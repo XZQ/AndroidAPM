@@ -1,10 +1,13 @@
 package com.apm.network
 
+import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
-import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import com.apm.model.ApmSeverity
+import java.io.IOException
+import java.net.HttpURLConnection
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -38,8 +41,12 @@ import java.util.concurrent.atomic.AtomicLong
  * ```
  */
 class NetworkModule internal constructor(
+    /** Immutable behavior configuration for this module instance. */
     private val config: NetworkConfig,
-    private val reportSink: NetworkReportSink
+    /** Event destination, replaceable in JVM behavior tests. */
+    private val reportSink: NetworkReportSink,
+    /** Monotonic nanosecond clock used by explicit request tracing. */
+    private val monotonicNanos: () -> Long = System::nanoTime
 ) : ApmModule {
 
     /** Creates a network module that reports through the process-wide APM runtime. */
@@ -77,6 +84,73 @@ class NetworkModule internal constructor(
 
     override fun onStop() {
         started = false
+    }
+
+    /**
+     * Executes and traces one explicitly configured [HttpURLConnection].
+     *
+     * The host must configure method, headers, timeouts, redirect behavior, and request body before
+     * calling this method. The helper reads [HttpURLConnection.getResponseCode] exactly once to
+     * execute the request, then passes the received status to [block]. The block should consume the
+     * response body when total body-read time must be included. This method never disconnects the
+     * connection and never consumes response content on the host's behalf.
+     *
+     * Host return values and exceptions are preserved. An [IOException] while receiving headers or
+     * consuming the body is reported as a network error. A non-I/O exception thrown by [block] after
+     * headers were received preserves the HTTP outcome rather than being mislabeled as a transport
+     * failure. Recoverable telemetry failures are isolated and recorded as SDK internal errors.
+     *
+     * @param connection configured connection whose request should be executed
+     * @param requestSize known request-body size in bytes, or zero when unknown
+     * @param block host response handling, receiving the connection and HTTP status code
+     * @return the unmodified host result from [block]
+     */
+    @Throws(IOException::class)
+    fun <T> traceHttpUrlConnection(
+        connection: HttpURLConnection,
+        requestSize: Long = 0L,
+        block: (HttpURLConnection, Int) -> T
+    ): T {
+        // A disabled module preserves helper execution semantics without paying telemetry costs.
+        if (!started) {
+            val statusCode = connection.responseCode
+            return block(connection, statusCode)
+        }
+
+        val startedAtNanos = monotonicNanos()
+        val url = readConnectionUrlSafely(connection)
+        val method = readRequestMethodSafely(connection)
+        var statusCode = STATUS_CODE_NETWORK_ERROR
+        var responseSize = 0L
+        try {
+            // Reading responseCode is the explicit request execution point owned by this helper.
+            statusCode = connection.responseCode
+            responseSize = readResponseSizeSafely(connection)
+            val result = block(connection, statusCode)
+            reportHttpUrlConnectionSafely(
+                url = url,
+                method = method,
+                statusCode = statusCode,
+                durationMs = elapsedMillis(startedAtNanos),
+                requestSize = requestSize,
+                responseSize = responseSize,
+                error = null
+            )
+            return result
+        } catch (error: Exception) {
+            // Body-read IO failures are transport failures; host processing failures keep the HTTP result.
+            val isTransportFailure = error is IOException || statusCode == STATUS_CODE_NETWORK_ERROR
+            reportHttpUrlConnectionSafely(
+                url = url,
+                method = method,
+                statusCode = if (isTransportFailure) STATUS_CODE_NETWORK_ERROR else statusCode,
+                durationMs = elapsedMillis(startedAtNanos),
+                requestSize = requestSize,
+                responseSize = responseSize,
+                error = if (isTransportFailure) describeError(error) else null
+            )
+            throw error
+        }
     }
 
     /**
@@ -225,6 +299,75 @@ class NetworkModule internal constructor(
         )
     }
 
+    /** Reads the configured URL without allowing custom connection metadata failures to escape. */
+    private fun readConnectionUrlSafely(connection: HttpURLConnection): String {
+        return try {
+            connection.url?.toExternalForm().orEmpty()
+        } catch (error: Exception) {
+            // Metadata is optional telemetry and cannot prevent the host request from executing.
+            Apm.recordInternalError(ERROR_TAG_HTTP_URL_CONNECTION_METADATA, error)
+            ""
+        }
+    }
+
+    /** Reads the configured method without allowing custom connection metadata failures to escape. */
+    private fun readRequestMethodSafely(connection: HttpURLConnection): String {
+        return try {
+            connection.requestMethod ?: HTTP_METHOD_UNKNOWN
+        } catch (error: Exception) {
+            // Preserve host behavior even for a non-standard HttpURLConnection implementation.
+            Apm.recordInternalError(ERROR_TAG_HTTP_URL_CONNECTION_METADATA, error)
+            HTTP_METHOD_UNKNOWN
+        }
+    }
+
+    /** Reads header-derived response size and normalizes unknown negative lengths to zero. */
+    private fun readResponseSizeSafely(connection: HttpURLConnection): Long {
+        return try {
+            connection.contentLengthLong.coerceAtLeast(0L)
+        } catch (error: Exception) {
+            // Response length is diagnostic metadata; losing it must not alter response handling.
+            Apm.recordInternalError(ERROR_TAG_HTTP_URL_CONNECTION_METADATA, error)
+            0L
+        }
+    }
+
+    /** Reports one traced request without allowing recoverable monitoring failure to mask host behavior. */
+    private fun reportHttpUrlConnectionSafely(
+        url: String,
+        method: String,
+        statusCode: Int,
+        durationMs: Long,
+        requestSize: Long,
+        responseSize: Long,
+        error: String?
+    ) {
+        try {
+            onRequestComplete(
+                url = url,
+                method = method,
+                statusCode = statusCode,
+                durationMs = durationMs,
+                requestSize = requestSize.coerceAtLeast(0L),
+                responseSize = responseSize,
+                error = error
+            )
+        } catch (reportError: Exception) {
+            // APM collection is subordinate to the host network operation.
+            Apm.recordInternalError(ERROR_TAG_HTTP_URL_CONNECTION_REPORT, reportError)
+        }
+    }
+
+    /** Converts a monotonic nanosecond interval to a non-negative millisecond duration. */
+    private fun elapsedMillis(startedAtNanos: Long): Long {
+        return (monotonicNanos() - startedAtNanos).coerceAtLeast(0L) / NANOS_PER_MILLISECOND
+    }
+
+    /** Returns a normalized human-readable transport failure description. */
+    private fun describeError(error: Exception): String {
+        return error.message?.takeIf(String::isNotBlank) ?: error.javaClass.simpleName
+    }
+
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "network"
@@ -278,5 +421,15 @@ class NetworkModule internal constructor(
         private const val STATUS_CODE_SUCCESS_START = 200
         /** 成功状态码范围结束。 */
         private const val STATUS_CODE_SUCCESS_END = 299
+        /** Sentinel status used when no HTTP response was received. */
+        private const val STATUS_CODE_NETWORK_ERROR = -1
+        /** Method label used only when a custom connection cannot expose its configured method. */
+        private const val HTTP_METHOD_UNKNOWN = "UNKNOWN"
+        /** Number of nanoseconds in one millisecond. */
+        private const val NANOS_PER_MILLISECOND = 1_000_000L
+        /** Internal-error tag for optional HttpURLConnection metadata reads. */
+        private const val ERROR_TAG_HTTP_URL_CONNECTION_METADATA = "network_http_url_connection_metadata"
+        /** Internal-error tag for a request report that degraded after the host operation. */
+        private const val ERROR_TAG_HTTP_URL_CONNECTION_REPORT = "network_http_url_connection_report"
     }
 }

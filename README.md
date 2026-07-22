@@ -57,7 +57,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-crash` | Java crash、可选 Native signal、tombstone、ApplicationExitInfo | Java 默认开启；Native crash 默认关闭 |
 | `apm-anr` | `libapm-anr.so` SIGQUIT 标志 + Watchdog、堆栈采样、原因分类 | 注册后自动运行，Native 失败自动降级 Watchdog |
 | `apm-launch` | 进程真实启动基线、冷/热/温启动、首帧、阶段跟踪 | Activity 生命周期自动；ContentProvider/App 阶段需宿主调用 |
-| `apm-network` | OkHttp DNS→TCP→TLS→Body、慢请求和聚合 | 接入 Interceptor/EventListener，或手动回调 |
+| `apm-network` | OkHttp DNS→TCP→TLS→Body、HttpURLConnection 总耗时、慢请求和聚合 | 接入 Interceptor/EventListener、显式 `traceHttpUrlConnection`，或手动回调 |
 | `apm-fps` | Choreographer 一秒时间窗口 + FrameMetrics 原始类型滚动累计、掉帧分级 | Activity 生命周期自动 |
 | `apm-slow-method` | Looper Hook、栈采样、ASM 方法插桩 | 运行时注册；ASM 需应用 `com.apm.slow-method` 插件 |
 | `apm-io` | 流代理、主线程/慢 IO、FD/Closeable 泄漏、可选 PLT Hook | 包装流；Native 路径依赖运行时可解析 xhook |
@@ -254,6 +254,26 @@ val client = OkHttpClient.Builder()
     .build()
 ```
 
+不使用 OkHttp 时，可显式执行并追踪一个已配置好的 `HttpURLConnection`：
+
+```kotlin
+val connection = URL(endpoint).openConnection() as HttpURLConnection
+connection.requestMethod = "GET"
+connection.connectTimeout = 5_000
+connection.readTimeout = 10_000
+
+val body = try {
+    networkModule.traceHttpUrlConnection(connection) { traced, statusCode ->
+        val stream = if (statusCode >= 400) traced.errorStream else traced.inputStream
+        stream?.bufferedReader()?.use { it.readText() }.orEmpty()
+    }
+} finally {
+    connection.disconnect()
+}
+```
+
+该 helper 会读取一次 `responseCode` 作为请求执行点，block 耗时会计入总耗时；它不会替宿主读取正文或断开连接，也不会虚构 DNS/TCP/TLS 分阶段数据。宿主返回值与异常保持不变，监控上报的 recoverable 失败只进入 SDK 内部诊断。需要精确 request/response 字节数或自定义客户端生命周期时，继续使用 `onRequestComplete`。
+
 ### SQLite 监控
 
 ```kotlin
@@ -398,7 +418,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
