@@ -75,11 +75,17 @@ Apm.init(application, config)
 - 读取当前 state；未初始化直接返回
 - 捕获 `System.currentTimeMillis()`
 - 捕获 `Thread.currentThread().name`
-- 调用 `BizContextProvider.currentContext()` 并复制成不可变快照；异常记录 internal error 后降级为空上下文
+- 按 `BizContextCaptureMode` 现场调用 provider 或 O(1) 读取异步 LKG，并取得不可变快照
 - 复制顶层 `fields` / `extras`，冻结本次发生时刻的 payload map
 - 创建 lazy event factory 并非阻塞入队
 
 event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。
+
+### 业务上下文延迟边界
+
+`SYNCHRONOUS` 是兼容默认值：每次 emit 在调用线程取得精确事件时刻快照，因此 provider 契约必须是 O(1)、无 IO、无等待锁。把 provider 直接延迟到 dispatcher 会读取“处理时刻”而不是“发生时刻”的账号/租户状态，不能作为无损优化。
+
+`ASYNC_CACHED` 用 `BizContextSnapshotSource` 在 `apm-biz-context` 单线程 executor 立即异步首刷并按配置周期刷新。provider 返回值复制后通过 `AtomicReference` 发布；失败只记录 `biz_context_provider` internal error，保留 last-known-good，不用空值覆盖。emit 只读取原子快照，不执行宿主代码；代价是首次成功前为空、正常最多滞后一个刷新周期。`bizContextRefreshIntervalMs` 运行时约束到 100 ms–24 h；`Apm.refreshBizContext()` 可在登录/退出/租户切换后请求即时后台刷新，`AtomicBoolean` 最多允许一个显式 pending 任务，避免请求风暴形成无界队列。stop 和 init rollback 都会关闭该 executor。
 
 `emitCriticalSync` 不走 lazy queue：立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。
 

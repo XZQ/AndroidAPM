@@ -13,6 +13,9 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 
 /** Lifecycle tests for optional provider-based APM initialization. */
 @RunWith(RobolectricTestRunner::class)
@@ -63,6 +66,38 @@ class ApmInitProviderTest {
         assertFalse(Apm.isInitialized())
     }
 
+    /** Async business-context refresh is wired to public lifecycle and stops with APM. */
+    @Test
+    fun `async business context refresh follows apm lifecycle`() {
+        val firstRefresh = CountDownLatch(1)
+        val explicitRefresh = CountDownLatch(1)
+        val calls = AtomicInteger(0)
+        Apm.init(
+            application,
+            ApmConfig(
+                storageType = StorageType.FILE,
+                enableSelfMonitoring = false,
+                bizContextProvider = BizContextProvider {
+                    when (calls.incrementAndGet()) {
+                        1 -> firstRefresh.countDown()
+                        2 -> explicitRefresh.countDown()
+                        else -> Unit
+                    }
+                    mapOf("user" to "test")
+                },
+                bizContextCaptureMode = BizContextCaptureMode.ASYNC_CACHED,
+                bizContextRefreshIntervalMs = ONE_DAY_MS
+            )
+        )
+
+        assertTrue(firstRefresh.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(Apm.refreshBizContext())
+        assertTrue(explicitRefresh.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+
+        Apm.stop()
+        assertFalse(Apm.refreshBizContext())
+    }
+
     /** Creates the provider through the same lifecycle callback used by Android. */
     private fun createProvider(): ApmInitProvider =
         Robolectric.buildContentProvider(ApmInitProvider::class.java).create().get()
@@ -76,5 +111,11 @@ class ApmInitProviderTest {
     companion object {
         /** Manifest metadata key consumed by [ApmInitProvider]. */
         private const val CONFIG_CLASS_KEY = "com.apm.config_class"
+
+        /** Long cadence prevents a periodic refresh from racing the explicit lifecycle request. */
+        private const val ONE_DAY_MS = 24L * 60L * 60L * 1_000L
+
+        /** Maximum wait for one asynchronous provider callback. */
+        private const val AWAIT_TIMEOUT_SECONDS = 2L
     }
 }

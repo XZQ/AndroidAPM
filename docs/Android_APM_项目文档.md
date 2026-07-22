@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜26 个构建单元｜156 个主源码文件（151 Kotlin + 4 C + 1 proto）｜93 个测试/benchmark 文件
+> 文档同步：2026-07-22｜26 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜94 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -52,8 +52,8 @@ monitor module
 | root Gradle subproject | 24 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 26 |
-| 主源码 | 156：151 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 93 |
+| 主源码 | 157：152 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 94 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -131,7 +131,9 @@ monitor module
 
 ## 六、分发与宿主开销
 
-`Apm.init` 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名、业务上下文及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。宿主后续修改原 map 不会改写已发生事件，`bizContextProvider` 异常会记录 internal error 并降级为空上下文，不向业务调用栈外泄。队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；默认在总队列达到 75% 后，已占总容量 50% 的同一来源模块不能继续写入 NORMAL/LOW，给其他模块预留压力槽位。HIGH/CRITICAL 绕过该隔离门禁；满载时仍可原子替换队列内最旧的更低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。模块占用用有界队列内的 O(1) 计数维护，元素 drain 或淘汰时同步释放，不扫描 payload。
+`Apm.init` 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。业务上下文默认采用 `SYNCHRONOUS` 精确事件时刻快照，兼容既有语义，但 provider 必须 O(1)、无 IO、无等待锁。可能阻塞的 provider 应使用 `ASYNC_CACHED`：`apm-biz-context` 后台线程按 100 ms–24 h 有界周期刷新，emit 只原子读取最近一次成功的不可变快照；失败保留 LKG，首次成功前为空。登录、退出或租户切换可调用 `Apm.refreshBizContext()` 合并式触发后台刷新，重复调用不无界积压。两种模式都会复制宿主 map，后续修改不会改写已发生事件，recoverable provider 异常记录 internal error 而不向业务调用栈外泄。
+
+队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；默认在总队列达到 75% 后，已占总容量 50% 的同一来源模块不能继续写入 NORMAL/LOW，给其他模块预留压力槽位。HIGH/CRITICAL 绕过该隔离门禁；满载时仍可原子替换队列内最旧的更低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。模块占用用有界队列内的 O(1) 计数维护，元素 drain 或淘汰时同步释放，不扫描 payload。
 
 worker 单轮 drain 最多 32 条：
 
@@ -216,6 +218,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `enableDispatcherModuleIsolation` | true | 高水位隔离占用过多的 NORMAL/LOW 来源模块；HIGH/CRITICAL 绕过 |
 | `dispatcherIsolationHighWatermarkPercent` | 75 | 启动隔离的队列水位百分比，运行时约束 1–100 |
 | `dispatcherMaxModuleQueueSharePercent` | 50 | 压力期单模块占总容量上限，运行时不超过高水位 |
+| `bizContextCaptureMode` | `SYNCHRONOUS` | 精确事件时刻快照；provider 必须 O(1)/无 IO/无等待锁，慢 provider 使用 `ASYNC_CACHED` |
+| `bizContextRefreshIntervalMs` | 1000 ms | 异步缓存刷新周期，运行时约束到 100 ms–24 h |
 | `endpoint` | 空 | 安全丢弃、不输出 payload；Logcat 需显式 `logcat://...` |
 | `rateLimitEventsPerWindow` | 10/60s | 按 module/name 分桶 |
 | `enableAggregation` | false | 高频 metric 与 alert 去重不默认启用 |
@@ -278,6 +282,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第四批 dispatcher isolation hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：23 suites / 167 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。确定性压力测试覆盖默认模块隔离、其他模块容量保留、HIGH 绕过并淘汰旧低优事件、百分比约束、关闭开关、总 drop 与 `dispatcherModuleIsolationDropCount` 独立计数。该定向基线只证明共享入口的容量隔离，不替代全根结果、dispatcher 并行吞吐测量或真机性能预算。
 
+2026-07-22 的第五批 biz-context latency hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：24 suites / 172 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。测试覆盖同步不可变快照、异步 SDK 线程执行、首次空值/LKG、recoverable provider 失败、显式请求合并和公共 init/refresh/stop 生命周期。该定向基线证明 `ASYNC_CACHED` emit 不执行宿主 provider；`SYNCHRONOUS` 兼容模式仍依赖接入方遵守 O(1)/无 IO/无等待锁契约。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -286,7 +292,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-93 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算，以及两个真机 Microbenchmark 入口。
+94 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 
@@ -298,7 +304,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 

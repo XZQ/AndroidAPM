@@ -118,6 +118,15 @@ class ApmConfigTest {
         assertEquals(50, config.dispatcherMaxModuleQueueSharePercent)
     }
 
+    /** 默认业务上下文保持兼容的同步快照，并提供一秒异步刷新配置。 */
+    @Test
+    fun `default business context capture preserves synchronous semantics`() {
+        val config = ApmConfig()
+
+        assertEquals(BizContextCaptureMode.SYNCHRONOUS, config.bizContextCaptureMode)
+        assertEquals(1_000L, config.bizContextRefreshIntervalMs)
+    }
+
     /** 自定义参数应正确覆盖。 */
     @Test
     fun `custom values override defaults`() {
@@ -130,7 +139,9 @@ class ApmConfigTest {
             uploadLeaseDurationMs = 45_000L,
             enableDispatcherModuleIsolation = false,
             dispatcherIsolationHighWatermarkPercent = 80,
-            dispatcherMaxModuleQueueSharePercent = 40
+            dispatcherMaxModuleQueueSharePercent = 40,
+            bizContextCaptureMode = BizContextCaptureMode.ASYNC_CACHED,
+            bizContextRefreshIntervalMs = 5_000L
         )
         assertEquals("https://apm.example.com", config.endpoint)
         assertFalse(config.debugLogging)
@@ -141,6 +152,8 @@ class ApmConfigTest {
         assertFalse(config.enableDispatcherModuleIsolation)
         assertEquals(80, config.dispatcherIsolationHighWatermarkPercent)
         assertEquals(40, config.dispatcherMaxModuleQueueSharePercent)
+        assertEquals(BizContextCaptureMode.ASYNC_CACHED, config.bizContextCaptureMode)
+        assertEquals(5_000L, config.bizContextRefreshIntervalMs)
     }
 
     /** ProcessStrategy 枚举完整性。 */

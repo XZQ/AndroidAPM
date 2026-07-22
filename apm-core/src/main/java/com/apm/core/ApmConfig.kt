@@ -30,7 +30,12 @@ enum class StorageType {
  * 例如：当前用户 ID、设备 ID、AB 实验分组等。
  */
 fun interface BizContextProvider {
-    /** 返回当前业务上下文键值对，会被合并到每条事件的 globalContext 中。 */
+    /**
+     * 返回当前业务上下文键值对，会被合并到每条事件的 globalContext 中。
+     *
+     * [BizContextCaptureMode.SYNCHRONOUS] 下该方法运行在 emit 调用线程，必须是 O(1)、
+     * 无 IO、无等待锁；可能阻塞的实现应使用 [BizContextCaptureMode.ASYNC_CACHED]。
+     */
     fun currentContext(): Map<String, String>
 
     companion object {
@@ -64,7 +69,7 @@ data class ApmConfig(
     val maxStoredPayloadBytes: Long = DEFAULT_MAX_STORED_PAYLOAD_BYTES,
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
-    /** 业务上下文提供者，每次 emit 时动态获取。 */
+    /** 业务上下文提供者；调用位置和新鲜度由 [bizContextCaptureMode] 控制。 */
     val bizContextProvider: BizContextProvider = BizContextProvider.EMPTY,
 
     // --- Phase 5: 限流 ---
@@ -127,7 +132,11 @@ data class ApmConfig(
     /** 启动模块占用隔离的队列水位百分比；运行时约束到 1..100。 */
     val dispatcherIsolationHighWatermarkPercent: Int = DEFAULT_DISPATCHER_HIGH_WATERMARK_PERCENT,
     /** 单模块允许占用的队列百分比；运行时不超过高水位百分比。 */
-    val dispatcherMaxModuleQueueSharePercent: Int = DEFAULT_DISPATCHER_MAX_MODULE_SHARE_PERCENT
+    val dispatcherMaxModuleQueueSharePercent: Int = DEFAULT_DISPATCHER_MAX_MODULE_SHARE_PERCENT,
+    /** 业务上下文捕获模式；默认同步以保持现有事件时刻语义。 */
+    val bizContextCaptureMode: BizContextCaptureMode = BizContextCaptureMode.SYNCHRONOUS,
+    /** 异步缓存模式的 provider 刷新间隔；运行时约束到 100 ms..24 h。 */
+    val bizContextRefreshIntervalMs: Long = DEFAULT_BIZ_CONTEXT_REFRESH_INTERVAL_MS
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -160,9 +169,30 @@ data class ApmConfig(
         /** Default maximum queue share reserved for one NORMAL/LOW module under pressure. */
         private const val DEFAULT_DISPATCHER_MAX_MODULE_SHARE_PERCENT = 50
 
+        /** Default asynchronous business-context refresh interval: one second. */
+        private const val DEFAULT_BIZ_CONTEXT_REFRESH_INTERVAL_MS = 1_000L
+
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L
     }
+}
+
+/** Controls where and when [BizContextProvider] is evaluated. */
+enum class BizContextCaptureMode {
+    /**
+     * Captures an exact occurrence-time snapshot on the emit caller.
+     *
+     * This compatibility mode requires an O(1), non-blocking provider with no IO or contended locks.
+     */
+    SYNCHRONOUS,
+
+    /**
+     * Refreshes the provider on an SDK background executor and reads the last good snapshot on emit.
+     *
+     * Emit never calls the provider, but context can be stale by one refresh interval and is empty
+     * until the first successful refresh.
+     */
+    ASYNC_CACHED
 }
 
 /**

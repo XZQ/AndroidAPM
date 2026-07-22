@@ -8,8 +8,8 @@
 
 - 同步日期：2026-07-22
 - 26 个构建单元：24 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 156 个主源码文件：151 Kotlin + 4 C + 1 proto
-- 93 个测试/benchmark 文件
+- 157 个主源码文件：152 Kotlin + 4 C + 1 proto
+- 94 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -21,7 +21,7 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
 
 ```text
 监控模块
-  -> Apm.emit（调用线程捕获时间/线程/业务上下文及 payload 快照）
+  -> Apm.emit（调用线程捕获时间/线程及 payload；业务上下文按同步或异步缓存模式取不可变快照）
   -> 有界队列 2048（75% 高水位后，NORMAL/LOW 单模块默认最多占总容量 50%；高优事件仍可替换最低优先级事件；生产者永不等待）
   -> 可选聚合 -> 限流 -> 默认 PII 脱敏
   -> appendBatch（单轮最多 32 条）
@@ -163,6 +163,20 @@ class App : Application() {
 }
 ```
 
+### 业务上下文延迟安全
+
+`bizContextProvider` 默认使用 `SYNCHRONOUS`，以兼容现有的精确事件时刻语义；此模式会在 emit 调用线程执行 provider，因此 provider 必须是 O(1)、无 IO、无等待锁。可能访问磁盘、跨进程状态或竞争锁的 provider 应改用异步缓存：
+
+```kotlin
+ApmConfig(
+    bizContextProvider = BizContextProvider { accountStore.currentApmContext() },
+    bizContextCaptureMode = BizContextCaptureMode.ASYNC_CACHED,
+    bizContextRefreshIntervalMs = 1_000L
+)
+```
+
+异步模式只在 `apm-biz-context` SDK 线程刷新 provider；emit 只原子读取最近一次成功的不可变快照，provider 失败保留 last-known-good。首次刷新成功前上下文为空，正常情况下最多滞后一个刷新周期。登录、退出或切换租户后可调用 `Apm.refreshBizContext()` 请求一次合并式后台刷新；重复请求不会无界堆积，也不会在调用线程运行 provider。
+
 ### 生产鉴权与签名远程配置
 
 长期密钥不要写进 APK。`HttpHeaderProvider` 在每次上传和配置拉取前重新读取短期 Token；provider 失败或 Header 非法时上传返回失败，SQLite outbox 保留事件等待后续重试。Collector 协议身份使用静态非密钥 Header：
@@ -290,6 +304,8 @@ apmSlowMethod {
 | `enableDispatcherModuleIsolation` | `true` | 高水位时隔离占用过多的 NORMAL/LOW 来源模块；HIGH/CRITICAL 不受此门禁影响 |
 | `dispatcherIsolationHighWatermarkPercent` | `75` | 启动单模块隔离的共享队列水位百分比；运行时约束到 1–100 |
 | `dispatcherMaxModuleQueueSharePercent` | `50` | 压力期单模块最多占用的总队列容量百分比；运行时不超过高水位 |
+| `bizContextCaptureMode` | `SYNCHRONOUS` | 精确事件时刻快照；provider 必须 O(1)、无 IO、无等待锁；慢 provider 使用 `ASYNC_CACHED` |
+| `bizContextRefreshIntervalMs` | `1000` | 异步缓存刷新周期，运行时约束到 100 ms–24 h |
 | `enableAggregation` | `false` | 不聚合客户端指标 |
 | `enablePiiSanitization` | `true` | 默认按文本规则和高置信敏感字段名脱敏；关闭前必须完成隐私评审 |
 | `debugLogging` | `false` | 默认不输出 SDK 调试日志 |

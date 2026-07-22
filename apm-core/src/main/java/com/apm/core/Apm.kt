@@ -170,9 +170,17 @@ object Apm {
         var stagedDispatcher: ApmDispatcher? = null
         var stagedCoordinator: ProcessEventCoordinator? = null
         var stagedMonitoringExecutor: ScheduledExecutorService? = null
+        var stagedBizContextSource: BizContextSnapshotSource? = null
         try {
         // Self-monitoring exists before storage so capacity rejection and eviction are observable from first write.
         val selfMonitor = if (config.enableSelfMonitoring) SdkSelfMonitor() else null
+        val bizContextSource = BizContextSnapshotSource(
+            provider = config.bizContextProvider,
+            mode = config.bizContextCaptureMode,
+            refreshIntervalMs = config.bizContextRefreshIntervalMs,
+            onError = { error -> recordInternalError(ERROR_TAG_BIZ_CONTEXT, error) }
+        )
+        stagedBizContextSource = bizContextSource
         // 创建本地存储：根据配置选择文件存储或 SQLite 持久化存储
         val store: EventStore = when (config.storageType) {
             StorageType.SQLITE -> {
@@ -275,9 +283,13 @@ object Apm {
             store = store,
             dispatcher = dispatcher,
             processCoordinator = processCoordinator,
-            selfMonitorExecutor = monitoringExecutor
+            selfMonitorExecutor = monitoringExecutor,
+            bizContextSource = bizContextSource
         )
         state = newState
+
+        // Async mode starts only after state publication so failures reach both health and diagnostics.
+        bizContextSource.start()
 
         // A managed provider refreshes asynchronously. Cached verified values are already visible
         // to the initial module pass; later changes reconcile module lifecycle through the callback.
@@ -296,6 +308,7 @@ object Apm {
             // Publish nothing after failure and release completed stages in reverse ownership order.
             state = null
             cleanupInitializationFailure(
+                bizContextSource = stagedBizContextSource,
                 monitoringExecutor = stagedMonitoringExecutor,
                 coordinator = stagedCoordinator,
                 dispatcher = stagedDispatcher,
@@ -342,6 +355,7 @@ object Apm {
         cleanupSafely(ERROR_TAG_STOP_DYNAMIC_CONFIG) {
             (currentState.context.config.dynamicConfigProvider as? ManagedDynamicConfigProvider)?.stop()
         }
+        cleanupSafely(ERROR_TAG_STOP_BIZ_CONTEXT) { currentState.bizContextSource.stop() }
         cleanupSafely(ERROR_TAG_STOP_MONITOR) { currentState.selfMonitorExecutor?.shutdownNow() }
         cleanupSafely(ERROR_TAG_STOP_COORDINATOR) { currentState.processCoordinator?.stop() }
         currentState.startedModules.forEach { module ->
@@ -461,11 +475,19 @@ object Apm {
         )
     }
 
-    /** Captures an immutable host context without allowing provider failures into business code. */
+    /**
+     * Requests an immediate background business-context refresh in async cached mode.
+     *
+     * Calls are coalesced and never invoke [BizContextProvider] on the caller. Use this after
+     * login, logout, tenant switches, or other context changes to reduce periodic-cache staleness.
+     *
+     * @return true when a new refresh task was accepted
+     */
+    fun refreshBizContext(): Boolean = state?.bizContextSource?.requestRefresh() ?: false
+
+    /** Captures an immutable caller or cached context without allowing provider failures into business code. */
     private fun captureBizContext(currentState: State): Map<String, String> {
-        return captureBizContextSafely(currentState.context.config.bizContextProvider) { error ->
-            recordInternalError(ERROR_TAG_BIZ_CONTEXT, error)
-        }
+        return currentState.bizContextSource.capture()
     }
 
     /**
@@ -727,12 +749,14 @@ object Apm {
 
     /** Releases partially initialized resources in reverse ownership order. */
     private fun cleanupInitializationFailure(
+        bizContextSource: BizContextSnapshotSource?,
         monitoringExecutor: ScheduledExecutorService?,
         coordinator: ProcessEventCoordinator?,
         dispatcher: ApmDispatcher?,
         uploader: ApmUploader?,
         store: EventStore?
     ) {
+        cleanupSafely(ERROR_TAG_INIT_BIZ_CONTEXT) { bizContextSource?.stop() }
         cleanupSafely(ERROR_TAG_INIT_MONITOR) { monitoringExecutor?.shutdownNow() }
         cleanupSafely(ERROR_TAG_INIT_COORDINATOR) { coordinator?.stop() }
         if (dispatcher != null) {
@@ -764,6 +788,8 @@ object Apm {
         val processCoordinator: ProcessEventCoordinator?,
         /** SDK self-monitor scheduler. */
         val selfMonitorExecutor: ScheduledExecutorService?,
+        /** Business-context caller or asynchronous-cache source. */
+        val bizContextSource: BizContextSnapshotSource,
         /** Modules that completed initialization and start successfully. */
         val startedModules: CopyOnWriteArraySet<ApmModule> = CopyOnWriteArraySet(),
         /** Module names held stopped by auto-throttle; guarded by [initLock]. */
@@ -829,6 +855,8 @@ object Apm {
 
     /** Init rollback tag for the self-monitor executor. */
     private const val ERROR_TAG_INIT_MONITOR = "init_cleanup_monitor"
+    /** Init rollback tag for the business-context source. */
+    private const val ERROR_TAG_INIT_BIZ_CONTEXT = "init_cleanup_biz_context"
     /** Init rollback tag for the process coordinator. */
     private const val ERROR_TAG_INIT_COORDINATOR = "init_cleanup_coordinator"
     /** Init rollback tag for the dispatcher. */
@@ -839,6 +867,8 @@ object Apm {
     private const val ERROR_TAG_INIT_STORE = "init_cleanup_store"
     /** Shutdown tag for the self-monitor executor. */
     private const val ERROR_TAG_STOP_MONITOR = "stop_monitor"
+    /** Shutdown tag for the business-context source. */
+    private const val ERROR_TAG_STOP_BIZ_CONTEXT = "stop_biz_context"
     /** Shutdown tag for a managed dynamic-config provider. */
     private const val ERROR_TAG_STOP_DYNAMIC_CONFIG = "stop_dynamic_config"
     /** Shutdown tag for the process coordinator. */
