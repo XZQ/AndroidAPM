@@ -28,6 +28,8 @@ data class SdkHealthReport(
     val maxUploadLatencyMs: Long,
     /** 采集周期内 SDK 内部错误数（监控模块降级处理的异常）。 */
     val internalErrorCount: Long = 0L,
+    /** Dispatcher drops caused by one NORMAL/LOW module exceeding its pressure-time queue share. */
+    val dispatcherModuleIsolationDropCount: Long = 0L,
     /** Diagnostics records dropped by bounded queue pressure. */
     val diagnosticDroppedCount: Long = 0L,
     /** Diagnostics file-sink failures. */
@@ -64,6 +66,7 @@ data class SdkHealthReport(
                 FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
                 FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
                 FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
+                FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT to dispatcherModuleIsolationDropCount,
                 FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
                 FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
             )
@@ -79,6 +82,7 @@ data class SdkHealthReport(
         FIELD_AVG_UPLOAD_LATENCY_MS to avgUploadLatencyMs,
         FIELD_MAX_UPLOAD_LATENCY_MS to maxUploadLatencyMs,
         FIELD_INTERNAL_ERROR_COUNT to internalErrorCount,
+        FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT to dispatcherModuleIsolationDropCount,
         FIELD_DIAGNOSTIC_DROPPED_COUNT to diagnosticDroppedCount,
         FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
     )
@@ -92,6 +96,8 @@ data class SdkHealthReport(
         append(' ').append(FIELD_AVG_UPLOAD_LATENCY_MS).append('=').append(avgUploadLatencyMs)
         append(' ').append(FIELD_MAX_UPLOAD_LATENCY_MS).append('=').append(maxUploadLatencyMs)
         append(' ').append(FIELD_INTERNAL_ERROR_COUNT).append('=').append(internalErrorCount)
+        append(' ').append(FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT).append('=')
+            .append(dispatcherModuleIsolationDropCount)
         append(' ').append(FIELD_DIAGNOSTIC_DROPPED_COUNT).append('=').append(diagnosticDroppedCount)
         append(' ').append(FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT).append('=').append(diagnosticWriteFailureCount)
     }
@@ -115,6 +121,9 @@ data class SdkHealthReport(
         private const val FIELD_MAX_UPLOAD_LATENCY_MS = "maxUploadLatencyMs"
         /** 字段：内部错误数。 */
         private const val FIELD_INTERNAL_ERROR_COUNT = "internalErrorCount"
+        /** Field: dispatcher drops caused by noisy-neighbor module isolation. */
+        private const val FIELD_DISPATCHER_MODULE_ISOLATION_DROP_COUNT =
+            "dispatcherModuleIsolationDropCount"
         /** Field: diagnostics records dropped before file persistence. */
         private const val FIELD_DIAGNOSTIC_DROPPED_COUNT = "diagnosticDroppedCount"
         /** Field: diagnostics file-sink failures. */

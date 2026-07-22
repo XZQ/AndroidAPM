@@ -241,7 +241,10 @@ object Apm {
                 baseDelayMs = config.retryBaseDelayMs
             ),
             uploadBatchSize = config.uploadBatchSize,
-            uploadLeaseDurationMs = config.uploadLeaseDurationMs
+            uploadLeaseDurationMs = config.uploadLeaseDurationMs,
+            enableModuleIsolation = config.enableDispatcherModuleIsolation,
+            moduleIsolationHighWatermarkPercent = config.dispatcherIsolationHighWatermarkPercent,
+            maxModuleQueueSharePercent = config.dispatcherMaxModuleQueueSharePercent
         )
         stagedDispatcher = dispatcher
         val isUploaderProcess = application.isMainProcessCompat()
@@ -395,7 +398,7 @@ object Apm {
         // before handing it to a lazy worker so later mutation cannot rewrite the captured event.
         val fieldSnapshot = snapshotEventFields(fields)
         val extrasSnapshot = snapshotEventExtras(extras)
-        currentState.context.emitLazy(priority) {
+        currentState.context.emitLazy(priority, module) {
             buildEvent(
                 currentState, module, name, kind, severity, priority, scene, foreground,
                 fieldSnapshot, extrasSnapshot, timestamp, threadName, bizContext

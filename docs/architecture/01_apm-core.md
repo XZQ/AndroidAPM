@@ -90,11 +90,15 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 - `ArrayBlockingQueue<QueuedEvent>`
 - capacity：2048
 - producer：`tryLock` + `offer`，永不等待；锁竞争时立即 drop + self-monitor
+- 默认 noisy-neighbor 门禁：队列达到 75% 后，同一来源模块若已占总容量 50%，后续 NORMAL/LOW 立即 drop；HIGH/CRITICAL 绕过
+- 每个排队模块使用 O(1) 占用计数；offer 前登记，offer 失败/优先级淘汰/worker drain 时释放，空模块键删除
 - overflow：高优先级可替换最旧的最低优先级事件；同级先到先得
 - admission lock 同时覆盖 remove + offer，避免替换空位被并发 producer 抢占
 - worker poll：100 ms
 - 每轮：首条 + `drainTo`，最多 32 条
 - shutdown：不再接收，继续排空已接受事件，最多等待 3 秒
+
+公共配置为 `enableDispatcherModuleIsolation=true`、`dispatcherIsolationHighWatermarkPercent=75`、`dispatcherMaxModuleQueueSharePercent=50`；两个百分比运行时约束到 1–100，单模块占比不会高于高水位。关闭隔离时不维护模块占用 map，恢复原有全容量准入语义。该门禁只隔离共享入口容量，worker 仍单线程顺序执行以下 pipeline；它不构成多 worker 或按模块并行化声明。
 
 ### 批处理顺序
 
@@ -204,11 +208,12 @@ PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身
 
 - emit count
 - drop count/rate
+- dispatcher module-isolation drop count（同时计入总 drop）
 - queue size
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。存储层隔离拒绝与容量淘汰也会增加 drop 健康计数。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。存储层隔离拒绝与容量淘汰也会增加 drop 健康计数。
 
 `AutoThrottleController` 根据 drop rate/upload latency 维护完整降级集合：drop rate > 50% 或平均上传延迟 > 10 秒立即关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块。恢复阈值采用迟滞：连续 3 个周期 drop rate <= 20% 且平均上传延迟 <= 3 秒才释放；迟滞区间或再次退化会重置计数。`Apm` 在 `initLock` 下镜像该集合，后注册和动态配置不能绕过；恢复仍通过 `startModule` 重查进程、签名配置和灰度门禁。健康事件的 telemetry 副本仍经过同一 dispatcher，但 HIGH 优先级可在入口满载时替换更低优先级事件。
 

@@ -72,7 +72,13 @@ internal class ApmDispatcher(
     /** Duration for which one durable upload worker owns a claimed batch. */
     uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS,
     /** Bounded ingress capacity; exposed internally for deterministic pressure tests. */
-    queueCapacity: Int = QUEUE_CAPACITY
+    queueCapacity: Int = QUEUE_CAPACITY,
+    /** Whether one noisy NORMAL/LOW module is isolated after the shared queue reaches high water. */
+    enableModuleIsolation: Boolean = true,
+    /** Queue occupancy percentage that activates per-module isolation. */
+    moduleIsolationHighWatermarkPercent: Int = DEFAULT_MODULE_ISOLATION_HIGH_WATERMARK_PERCENT,
+    /** Maximum queue-capacity percentage available to one NORMAL/LOW module under pressure. */
+    maxModuleQueueSharePercent: Int = DEFAULT_MAX_MODULE_QUEUE_SHARE_PERCENT
 ) {
     /** Fail-safe resolver for signed sampling and rate-limit configuration. */
     private val dynamicEventPolicy = DynamicEventPolicy(dynamicConfigProvider) { error ->
@@ -92,7 +98,9 @@ internal class ApmDispatcher(
         /** true 表示事件已由聚合器输出，跳过聚合阶段。 */
         val preAggregated: Boolean = false,
         /** Admission priority known before a lazy event is resolved. */
-        val priority: ApmPriority
+        val priority: ApmPriority,
+        /** Source module known before lazy resolution and used for noisy-neighbor isolation. */
+        val sourceModule: String
     ) {
         /**
          * 解析出最终事件（可能触发延迟构建）。
@@ -102,11 +110,42 @@ internal class ApmDispatcher(
         fun resolve(): ApmEvent = event ?: checkNotNull(eventFactory).invoke()
     }
 
+    /** Effective positive ingress capacity shared by the queue and isolation thresholds. */
+    private val effectiveQueueCapacity = queueCapacity.coerceAtLeast(1)
+
+    /** Whether per-module queue isolation is enabled. */
+    private val moduleIsolationEnabled = enableModuleIsolation
+
+    /** Validated queue percentage at which noisy-neighbor isolation starts. */
+    private val effectiveModuleIsolationHighWatermarkPercent =
+        moduleIsolationHighWatermarkPercent.coerceIn(MIN_PERCENT, MAX_PERCENT)
+
+    /** Validated maximum share, never larger than the activation watermark. */
+    private val effectiveMaxModuleQueueSharePercent = maxModuleQueueSharePercent.coerceIn(
+        MIN_PERCENT,
+        effectiveModuleIsolationHighWatermarkPercent
+    )
+
+    /** Absolute queue size that activates module isolation. */
+    private val moduleIsolationHighWatermarkSize = percentOfCapacity(
+        effectiveQueueCapacity,
+        effectiveModuleIsolationHighWatermarkPercent
+    )
+
+    /** Absolute maximum queued events allowed for one NORMAL/LOW module under pressure. */
+    private val maxModuleQueueSize = percentOfCapacity(
+        effectiveQueueCapacity,
+        effectiveMaxModuleQueueSharePercent
+    )
+
     /** 待处理事件的有界队列（背压保护：满时丢弃并计数，绝不阻塞调用线程）。 */
-    private val queue = ArrayBlockingQueue<QueuedEvent>(queueCapacity.coerceAtLeast(1))
+    private val queue = ArrayBlockingQueue<QueuedEvent>(effectiveQueueCapacity)
 
     /** Makes producer admission and overflow replacement atomic without ever waiting. */
     private val admissionLock = ReentrantLock()
+
+    /** Per-module queued occupancy guarded by [admissionLock]. */
+    private val queuedModuleCounts = HashMap<String, Int>()
 
     /** worker 循环运行标志。 */
     @Volatile
@@ -152,7 +191,8 @@ internal class ApmDispatcher(
                                 QueuedEvent(
                                     event = event,
                                     preAggregated = true,
-                                    priority = event.priority
+                                    priority = event.priority,
+                                    sourceModule = normalizedModule(event.module)
                                 )
                             )
                         },
@@ -183,7 +223,13 @@ internal class ApmDispatcher(
         // 记录事件发射
         selfMonitor?.recordEmit()
 
-        enqueue(QueuedEvent(event = event, priority = event.priority))
+        enqueue(
+            QueuedEvent(
+                event = event,
+                priority = event.priority,
+                sourceModule = normalizedModule(event.module)
+            )
+        )
     }
 
     /**
@@ -192,10 +238,12 @@ internal class ApmDispatcher(
      * 调用线程只承担一次闭包分配 + 入队。
      *
      * @param priority 入队前已知的事件优先级，用于队列压力下的准入决策
+     * @param sourceModule 入队前已知的来源模块，用于共享队列的 noisy-neighbor 隔离
      * @param eventFactory 事件构建工厂，须为纯函数（可安全在 worker 线程执行）
      */
     fun dispatchLazy(
         priority: ApmPriority = ApmPriority.NORMAL,
+        sourceModule: String = UNKNOWN_SOURCE_MODULE,
         eventFactory: () -> ApmEvent
     ) {
         // stop 之后直接拒绝新事件
@@ -207,7 +255,14 @@ internal class ApmDispatcher(
         // 记录事件发射
         selfMonitor?.recordEmit()
 
-        enqueue(QueuedEvent(event = null, eventFactory = eventFactory, priority = priority))
+        enqueue(
+            QueuedEvent(
+                event = null,
+                eventFactory = eventFactory,
+                priority = priority,
+                sourceModule = normalizedModule(sourceModule)
+            )
+        )
     }
 
     /**
@@ -224,8 +279,19 @@ internal class ApmDispatcher(
             return
         }
         try {
+            // Once the shared queue is pressured, preserve capacity for other modules without
+            // weakening delivery of HIGH/CRITICAL signals from the noisy module.
+            if (shouldIsolateModule(queued)) {
+                logger.d(
+                    "Dispatcher module isolated, drop module=${queued.sourceModule} " +
+                        "priority=${queued.priority}"
+                )
+                selfMonitor?.recordDispatcherModuleIsolationDrop(queued.priority)
+                return
+            }
+
             // The common path remains one non-blocking offer after a non-waiting lock attempt.
-            if (queue.offer(queued)) {
+            if (offerTracked(queued)) {
                 return
             }
 
@@ -240,17 +306,81 @@ internal class ApmDispatcher(
                     evictionCandidate = existing
                 }
             }
-            if (evictionCandidate != null && queue.remove(evictionCandidate) && queue.offer(queued)) {
-                logger.d(
-                    "Dispatcher queue full, evict priority=${evictionCandidate.priority} " +
-                        "for priority=${queued.priority}"
-                )
+            if (evictionCandidate != null && queue.remove(evictionCandidate)) {
+                decrementQueuedModule(evictionCandidate.sourceModule)
+                if (offerTracked(queued)) {
+                    logger.d(
+                        "Dispatcher queue full, evict priority=${evictionCandidate.priority} " +
+                            "for priority=${queued.priority}"
+                    )
+                    selfMonitor?.recordDrop(evictionCandidate.priority)
+                    return
+                }
+                // Keep accounting explicit if a defensive replacement offer ever fails after
+                // the victim was removed.
                 selfMonitor?.recordDrop(evictionCandidate.priority)
-                return
             }
 
             logger.d("Dispatcher queue full, drop priority=${queued.priority}")
             selfMonitor?.recordDrop(queued.priority)
+        } finally {
+            admissionLock.unlock()
+        }
+    }
+
+    /** Returns true when a NORMAL/LOW source has consumed its pressure-time queue share. */
+    private fun shouldIsolateModule(queued: QueuedEvent): Boolean {
+        if (!moduleIsolationEnabled || queued.priority.value >= ApmPriority.HIGH.value) {
+            return false
+        }
+        if (queue.size < moduleIsolationHighWatermarkSize) {
+            return false
+        }
+        return (queuedModuleCounts[queued.sourceModule] ?: 0) >= maxModuleQueueSize
+    }
+
+    /** Offers one element and atomically publishes its per-module occupancy before visibility. */
+    private fun offerTracked(queued: QueuedEvent): Boolean {
+        incrementQueuedModule(queued.sourceModule)
+        if (queue.offer(queued)) {
+            return true
+        }
+        // Roll back the reservation when the bounded queue rejected the element.
+        decrementQueuedModule(queued.sourceModule)
+        return false
+    }
+
+    /** Increments one module occupancy while [admissionLock] is held. */
+    private fun incrementQueuedModule(sourceModule: String) {
+        if (!moduleIsolationEnabled) {
+            return
+        }
+        queuedModuleCounts[sourceModule] = (queuedModuleCounts[sourceModule] ?: 0) + 1
+    }
+
+    /** Decrements one module occupancy and removes empty keys while [admissionLock] is held. */
+    private fun decrementQueuedModule(sourceModule: String) {
+        if (!moduleIsolationEnabled) {
+            return
+        }
+        val remaining = (queuedModuleCounts[sourceModule] ?: 1) - 1
+        if (remaining <= 0) {
+            queuedModuleCounts.remove(sourceModule)
+        } else {
+            queuedModuleCounts[sourceModule] = remaining
+        }
+    }
+
+    /** Releases occupancy for a worker-drained batch before running the potentially slow pipeline. */
+    private fun releaseQueueOccupancy(batch: List<QueuedEvent>) {
+        if (!moduleIsolationEnabled) {
+            return
+        }
+        admissionLock.lock()
+        try {
+            for (queued in batch) {
+                decrementQueuedModule(queued.sourceModule)
+            }
         } finally {
             admissionLock.unlock()
         }
@@ -307,6 +437,8 @@ internal class ApmDispatcher(
             drainBuffer.add(first)
             // 非阻塞补齐一批，摊薄事务与信号开销
             queue.drainTo(drainBuffer, MAX_BATCH_DRAIN - 1)
+            // Queue-share accounting covers queued work only, not the batch currently executing.
+            releaseQueueOccupancy(drainBuffer)
             processBatch(drainBuffer)
 
             // 更新队列积压快照供自监控上报
@@ -543,14 +675,32 @@ internal class ApmDispatcher(
         /** 有界事件队列容量：满时丢弃新事件（背压保护）。 */
         private const val QUEUE_CAPACITY = 2_048
 
+        /** Default queue pressure percentage that activates per-module isolation. */
+        private const val DEFAULT_MODULE_ISOLATION_HIGH_WATERMARK_PERCENT = 75
+
+        /** Default queue-capacity share for one NORMAL/LOW module under pressure. */
+        private const val DEFAULT_MAX_MODULE_QUEUE_SHARE_PERCENT = 50
+
+        /** Lowest accepted percentage after runtime validation. */
+        private const val MIN_PERCENT = 1
+
+        /** Highest accepted percentage after runtime validation. */
+        private const val MAX_PERCENT = 100
+
+        /** Offset used to round a positive integer percentage upward. */
+        private const val PERCENT_ROUNDING_OFFSET = 99L
+
+        /** Stable bucket for a missing or blank source module. */
+        private const val UNKNOWN_SOURCE_MODULE = "unknown"
+
         /** Internal-error tag for one failed queued event transformation. */
         private const val ERROR_PROCESS_EVENT = "dispatcher_process_event"
 
-    /** Internal-error tag for a failed durable batch append. */
-    private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"
+        /** Internal-error tag for a failed durable batch append. */
+        private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"
 
-    /** Internal-error tag for isolated invalid or oversized durable payloads. */
-    private const val ERROR_STORAGE_PAYLOAD_REJECTED = "storage_payload_rejected"
+        /** Internal-error tag for isolated invalid or oversized durable payloads. */
+        private const val ERROR_STORAGE_PAYLOAD_REJECTED = "storage_payload_rejected"
 
         /** Internal-error tag for a failed aggregation shutdown flush. */
         private const val ERROR_AGGREGATION_FLUSH = "dispatcher_aggregation_flush"
@@ -566,7 +716,17 @@ internal class ApmDispatcher(
 
         /** worker 空闲时的队列轮询超时（毫秒），决定关闭响应延迟。 */
         private const val WORKER_POLL_MS = 100L
+
         /** Stable internal-error prefix for isolated dispatcher shutdown phases. */
         private const val SHUTDOWN_ERROR_TAG_PREFIX = "dispatcher_shutdown_"
+
+        /** Normalizes an admission module without resolving a lazy event. */
+        private fun normalizedModule(module: String): String = module.ifBlank { UNKNOWN_SOURCE_MODULE }
+
+        /** Converts a validated percentage into a positive ceiling of queue capacity. */
+        private fun percentOfCapacity(capacity: Int, percent: Int): Int =
+            ((capacity.toLong() * percent + PERCENT_ROUNDING_OFFSET) / MAX_PERCENT)
+                .toInt()
+                .coerceAtLeast(1)
     }
 }

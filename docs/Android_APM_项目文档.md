@@ -11,7 +11,7 @@ AndroidAPM 是模块化 Android 端 APM SDK。它覆盖采集、统一事件、�
 ```text
 monitor module
   -> Apm.emit
-  -> priority-aware bounded queue (2048)
+  -> priority-aware bounded queue (2048; default 75% high-water / 50% per-module NORMAL/LOW share)
   -> signed dynamic sampling / optional aggregation / dynamic rate limit / default PII sanitization
   -> appendBatch (up to 32)
   -> SQLite durable outbox v3 (50,000 rows / 64 MiB live payload, 256 KiB per event, unique eventId)
@@ -131,7 +131,7 @@ monitor module
 
 ## 六、分发与宿主开销
 
-`Apm.init` 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名、业务上下文及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。宿主后续修改原 map 不会改写已发生事件，`bizContextProvider` 异常会记录 internal error 并降级为空上下文，不向业务调用栈外泄。队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；满载时高优先级事件可原子替换队列内最旧的最低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。
+`Apm.init` 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名、业务上下文及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。宿主后续修改原 map 不会改写已发生事件，`bizContextProvider` 异常会记录 internal error 并降级为空上下文，不向业务调用栈外泄。队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；默认在总队列达到 75% 后，已占总容量 50% 的同一来源模块不能继续写入 NORMAL/LOW，给其他模块预留压力槽位。HIGH/CRITICAL 绕过该隔离门禁；满载时仍可原子替换队列内最旧的更低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。模块占用用有界队列内的 O(1) 计数维护，元素 drain 或淘汰时同步释放，不扫描 payload。
 
 worker 单轮 drain 最多 32 条：
 
@@ -170,7 +170,7 @@ worker 单轮 drain 最多 32 条：
 - `maxRetries` 表示首次尝试后的重试次数；失败计数达到 `maxRetries + 1` 后立即 prune，事件超过 7 天也会 prune
 - owner 不匹配不能 ACK/失败修改；租约过期后其他 Worker 可重领
 
-可靠性优先级是宿主安全、telemetry durability、diagnostic completeness。dispatcher 对单个 lazy factory/聚合/限流/脱敏的 recoverable `Exception` 单独降级，后续事件继续；fatal VM error 不转换成 drop。SQLite 的进程本地缓存计数在跨 store 删除后下限为 0，避免负缓存绕过容量淘汰。自定义同步 uploader 必须自行配置有界 IO，SDK 不尝试强杀任意宿主代码。
+可靠性优先级是宿主安全、telemetry durability、diagnostic completeness。dispatcher 当前仍以单 worker 顺序执行聚合、限流、脱敏和存储 hand-off；高水位模块隔离缓解的是入口容量 noisy-neighbor，不等于多 worker 吞吐扩展。dispatcher 对单个 lazy factory/聚合/限流/脱敏的 recoverable `Exception` 单独降级，后续事件继续；fatal VM error 不转换成 drop。SQLite 的进程本地缓存计数在跨 store 删除后下限为 0，避免负缓存绕过容量淘汰。自定义同步 uploader 必须自行配置有界 IO，SDK 不尝试强杀任意宿主代码。
 
 PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证号和 URL 凭据；字段名保护会直接遮蔽 `authorization`、access/refresh token、password、API key、cookie、phone/email 等高置信字段，即使其值是数值或不符合文本正则。普通数值指标保持原类型；接入方仍需为自身业务字段补充自定义规则，不能把默认规则等同于完整合规证明。
 
@@ -196,7 +196,7 @@ PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证
 
 ## 九、SDK 自诊断
 
-`SdkSelfMonitor` 每 60 秒生成 emit/drop/queue/upload latency/internal error 健康报告。AutoThrottle 在 drop rate > 50% 或平均上传延迟 > 10 秒时立即保持关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块；恢复必须连续 3 个周期同时满足 drop rate <= 20% 且平均上传延迟 <= 3 秒。迟滞区间或再次退化会重置恢复计数，注册和动态配置也不能绕过当前自动降级集合；恢复时仍重新检查进程、签名动态配置和灰度门禁。
+`SdkSelfMonitor` 每 60 秒生成 emit/drop/queue/upload latency/internal error 健康报告。`dispatcherModuleIsolationDropCount` 单列高水位模块隔离造成的丢弃，并同时进入总 `dropCount`/drop rate，便于区分 noisy-neighbor 与其他损失。AutoThrottle 在 drop rate > 50% 或平均上传延迟 > 10 秒时立即保持关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块；恢复必须连续 3 个周期同时满足 drop rate <= 20% 且平均上传延迟 <= 3 秒。迟滞区间或再次退化会重置恢复计数，注册和动态配置也不能绕过当前自动降级集合；恢复时仍重新检查进程、签名动态配置和灰度门禁。
 
 每份 `sdk_health` 先将仅含数值计数的摘要写入独立诊断 journal，再以 HIGH 优先级尝试普通事件管线。dispatcher 拥塞、采样或限流仍可能影响遥测副本，但不会抹掉独立本地摘要；诊断 sink 的 recoverable 失败也不能阻断事件尝试。
 
@@ -213,6 +213,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `storageType` | `SQLITE` | durable outbox |
 | `maxEventPayloadBytes` | 262144 | 单事件 durable payload 软上限，超限单独拒绝 |
 | `maxStoredPayloadBytes` | 67108864 | 活跃 payload 逻辑预算，不含 SQLite page/WAL 开销 |
+| `enableDispatcherModuleIsolation` | true | 高水位隔离占用过多的 NORMAL/LOW 来源模块；HIGH/CRITICAL 绕过 |
+| `dispatcherIsolationHighWatermarkPercent` | 75 | 启动隔离的队列水位百分比，运行时约束 1–100 |
+| `dispatcherMaxModuleQueueSharePercent` | 50 | 压力期单模块占总容量上限，运行时不超过高水位 |
 | `endpoint` | 空 | 安全丢弃、不输出 payload；Logcat 需显式 `logcat://...` |
 | `rateLimitEventsPerWindow` | 10/60s | 按 module/name 分桶 |
 | `enableAggregation` | false | 高频 metric 与 alert 去重不默认启用 |
@@ -273,6 +276,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的第三批 measurement/self-observability hardening 在 JDK 17.0.14 下以 `--rerun-tasks` 强制重跑：FPS 4 suites / 31 tests，core 23 suites / 162 tests，均为 0 failures/errors/skips。补入 API 26 delayed-frame 门禁后又执行 `:apm-fps:testDebugUnitTest :apm-fps:lintDebug --no-daemon` 并通过；当前 `apm-fps` 与 `apm-core` lint 文本报告均为 `No issues found`，`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。该定向基线覆盖 FPS 单调时间窗口、FrameMetrics primitive rolling accumulator、API 26 门禁和 `sdk_health` 独立摘要/HIGH 事件双通道，不替代 2026-07-16 的全根结果。
 
+2026-07-22 的第四批 dispatcher isolation hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：23 suites / 167 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。确定性压力测试覆盖默认模块隔离、其他模块容量保留、HIGH 绕过并淘汰旧低优事件、百分比约束、关闭开关、总 drop 与 `dispatcherModuleIsolationDropCount` 独立计数。该定向基线只证明共享入口的容量隔离，不替代全根结果、dispatcher 并行吞吐测量或真机性能预算。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -281,7 +286,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-93 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算，以及两个真机 Microbenchmark 入口。
+93 个测试/benchmark 文件覆盖配置默认值、事件 identity/codec/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算，以及两个真机 Microbenchmark 入口。
 
 测试通过不能代替以下验证：
 
@@ -293,7 +298,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：稳定事件身份、SQLite v3 additive migration、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断和 benchmark harness 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 一个保留的兼容边界是 `fields` 任意值在 durable round-trip 后归一为字符串；改变它需要版本化 typed-field wire schema，会影响 Collector，纳入云端协议共同设计而不是静默改格式。
 

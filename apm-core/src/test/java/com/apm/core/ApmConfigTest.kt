@@ -108,6 +108,16 @@ class ApmConfigTest {
         assertEquals(64L * 1024L * 1024L, config.maxStoredPayloadBytes)
     }
 
+    /** 默认 dispatcher 在 75% 水位限制单模块占用到队列容量的 50%。 */
+    @Test
+    fun `default dispatcher module isolation is bounded`() {
+        val config = ApmConfig()
+
+        assertTrue(config.enableDispatcherModuleIsolation)
+        assertEquals(75, config.dispatcherIsolationHighWatermarkPercent)
+        assertEquals(50, config.dispatcherMaxModuleQueueSharePercent)
+    }
+
     /** 自定义参数应正确覆盖。 */
     @Test
     fun `custom values override defaults`() {
@@ -117,7 +127,10 @@ class ApmConfigTest {
             processStrategy = ProcessStrategy.ALL_PROCESSES,
             rateLimitEventsPerWindow = 50,
             rateLimitWindowMs = 120_000L,
-            uploadLeaseDurationMs = 45_000L
+            uploadLeaseDurationMs = 45_000L,
+            enableDispatcherModuleIsolation = false,
+            dispatcherIsolationHighWatermarkPercent = 80,
+            dispatcherMaxModuleQueueSharePercent = 40
         )
         assertEquals("https://apm.example.com", config.endpoint)
         assertFalse(config.debugLogging)
@@ -125,6 +138,9 @@ class ApmConfigTest {
         assertEquals(50, config.rateLimitEventsPerWindow)
         assertEquals(120_000L, config.rateLimitWindowMs)
         assertEquals(45_000L, config.uploadLeaseDurationMs)
+        assertFalse(config.enableDispatcherModuleIsolation)
+        assertEquals(80, config.dispatcherIsolationHighWatermarkPercent)
+        assertEquals(40, config.dispatcherMaxModuleQueueSharePercent)
     }
 
     /** ProcessStrategy 枚举完整性。 */

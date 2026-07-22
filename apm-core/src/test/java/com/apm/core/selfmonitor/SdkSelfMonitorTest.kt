@@ -16,6 +16,7 @@ class SdkSelfMonitorTest {
         val monitor = SdkSelfMonitor()
         assertEquals(0L, monitor.getTotalEmitCount())
         assertEquals(0L, monitor.getTotalDropCount())
+        assertEquals(0L, monitor.getTotalDispatcherModuleIsolationDropCount())
     }
 
     /** recordEmit 应递增发射计数。 */
@@ -46,6 +47,21 @@ class SdkSelfMonitorTest {
         monitor.recordDrops(0)
 
         assertEquals(7L, monitor.getTotalDropCount())
+    }
+
+    /** 模块隔离丢弃必须同时进入专用指标和总丢弃数。 */
+    @Test
+    fun `module isolation drop updates aggregate and dedicated counters`() {
+        val monitor = SdkSelfMonitor()
+
+        monitor.recordDispatcherModuleIsolationDrop(ApmPriority.NORMAL)
+
+        assertEquals(1L, monitor.getTotalDropCount())
+        assertEquals(1L, monitor.getTotalDispatcherModuleIsolationDropCount())
+        val report = monitor.generateReport()
+        assertEquals(1L, report.dropCount)
+        assertEquals(1L, report.dispatcherModuleIsolationDropCount)
+        assertEquals(0L, monitor.getTotalDispatcherModuleIsolationDropCount())
     }
 
     /** recordUploadLatency 应更新最大延迟。 */
@@ -158,15 +174,17 @@ class SdkSelfMonitorTest {
             avgUploadLatencyMs = 2L,
             maxUploadLatencyMs = 3L,
             internalErrorCount = 4L,
-            diagnosticDroppedCount = 5L,
-            diagnosticWriteFailureCount = 6L
+            dispatcherModuleIsolationDropCount = 5L,
+            diagnosticDroppedCount = 6L,
+            diagnosticWriteFailureCount = 7L
         )
 
         val fields = report.toCoreHealthFields()
 
         assertEquals(4L, fields["internalErrorCount"])
-        assertEquals(5L, fields["diagnosticDroppedCount"])
-        assertEquals(6L, fields["diagnosticWriteFailureCount"])
+        assertEquals(5L, fields["dispatcherModuleIsolationDropCount"])
+        assertEquals(6L, fields["diagnosticDroppedCount"])
+        assertEquals(7L, fields["diagnosticWriteFailureCount"])
     }
 
     /** 独立诊断摘要只包含有界数值健康字段。 */
@@ -179,8 +197,9 @@ class SdkSelfMonitorTest {
             avgUploadLatencyMs = 4L,
             maxUploadLatencyMs = 5L,
             internalErrorCount = 6L,
-            diagnosticDroppedCount = 7L,
-            diagnosticWriteFailureCount = 8L
+            dispatcherModuleIsolationDropCount = 7L,
+            diagnosticDroppedCount = 8L,
+            diagnosticWriteFailureCount = 9L
         )
 
         val summary = report.toDiagnosticSummary()
@@ -188,7 +207,8 @@ class SdkSelfMonitorTest {
         assertTrue(summary.contains("emitCount=10"))
         assertTrue(summary.contains("dropRate=0.2000"))
         assertTrue(summary.contains("internalErrorCount=6"))
-        assertTrue(summary.contains("diagnosticWriteFailureCount=8"))
+        assertTrue(summary.contains("dispatcherModuleIsolationDropCount=7"))
+        assertTrue(summary.contains("diagnosticWriteFailureCount=9"))
     }
 
     /** 独立诊断写入失败不能阻断高优先级健康事件。 */

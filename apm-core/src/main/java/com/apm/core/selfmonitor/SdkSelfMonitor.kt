@@ -20,6 +20,9 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     /** 丢弃事件计数（限流、队列满等）。 */
     private val dropCount = AtomicLong(0L)
 
+    /** Dispatcher high-water drops caused specifically by per-module isolation. */
+    private val dispatcherModuleIsolationDropCount = AtomicLong(0L)
+
     /** 上传延迟累计（毫秒），用于计算平均值。 */
     private val totalUploadLatencyMs = AtomicLong(0L)
 
@@ -63,6 +66,19 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
             return
         }
         dropCount.addAndGet(count.toLong())
+    }
+
+    /**
+     * Records one dispatcher drop caused by per-module noisy-neighbor isolation.
+     *
+     * The event also contributes to the aggregate drop count so existing health consumers keep
+     * their complete loss-rate view.
+     *
+     * @param priority priority of the isolated event
+     */
+    fun recordDispatcherModuleIsolationDrop(priority: ApmPriority = ApmPriority.NORMAL) {
+        dispatcherModuleIsolationDropCount.incrementAndGet()
+        recordDrop(priority)
     }
 
     /**
@@ -114,6 +130,7 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
         // 读取并重置计数器
         val emit = emitCount.getAndSet(0L)
         val drop = dropCount.getAndSet(0L)
+        val dispatcherIsolationDrops = dispatcherModuleIsolationDropCount.getAndSet(0L)
         val totalLatency = totalUploadLatencyMs.getAndSet(0L)
         val uploads = uploadCount.getAndSet(0L)
         val maxLatency = maxUploadLatencyMs.getAndSet(0L)
@@ -128,7 +145,8 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
             queueSize = currentQueueSize.get(),
             avgUploadLatencyMs = avgLatency,
             maxUploadLatencyMs = maxLatency,
-            internalErrorCount = internalErrors
+            internalErrorCount = internalErrors,
+            dispatcherModuleIsolationDropCount = dispatcherIsolationDrops
         )
     }
 
@@ -143,6 +161,10 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
      * 用于外部查询当前总丢弃量。
      */
     fun getTotalDropCount(): Long = dropCount.get()
+
+    /** Returns the current-period dispatcher module-isolation drop count without resetting it. */
+    fun getTotalDispatcherModuleIsolationDropCount(): Long =
+        dispatcherModuleIsolationDropCount.get()
 
     /**
      * 获取累计内部错误数（非重置）。

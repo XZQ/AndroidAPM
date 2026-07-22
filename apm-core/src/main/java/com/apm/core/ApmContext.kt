@@ -49,14 +49,15 @@ class ApmContext internal constructor(
      * 子进程 IPC 路径需要完整事件内容，立即构建。
      *
      * @param priority 入队前已知的事件优先级
+     * @param sourceModule 入队前已知的来源模块，用于共享队列的 noisy-neighbor 隔离
      * @param eventFactory 事件构建工厂（纯函数，可在任意线程执行）
      */
-    internal fun emitLazy(priority: ApmPriority, eventFactory: () -> ApmEvent) {
+    internal fun emitLazy(priority: ApmPriority, sourceModule: String, eventFactory: () -> ApmEvent) {
         if (processCoordinator != null && !isUploaderProcess) {
             // IPC 写文件需要完整事件，立即构建
             processCoordinator.writeEvent(eventFactory())
         } else {
-            dispatcher.dispatchLazy(priority, eventFactory)
+            dispatcher.dispatchLazy(priority, sourceModule, eventFactory)
         }
     }
 

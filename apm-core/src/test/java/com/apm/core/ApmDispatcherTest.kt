@@ -154,6 +154,112 @@ class ApmDispatcherTest {
         assertEquals(listOf("blocking", "low-newest", "critical"), store.events.map(ApmEvent::name))
     }
 
+    /** A noisy NORMAL module must leave pressured queue capacity for peers and critical work. */
+    @Test
+    fun `module isolation preserves shared capacity under queue pressure`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
+            queueCapacity = 4,
+            enableModuleIsolation = true,
+            moduleIsolationHighWatermarkPercent = 75,
+            maxModuleQueueSharePercent = 50
+        )
+
+        dispatcher.dispatch(createEvent("blocking", module = "core"))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.dispatch(createEvent("network-1", module = "network"))
+        dispatcher.dispatch(createEvent("network-2", module = "network"))
+        dispatcher.dispatch(createEvent("network-3", module = "network"))
+        dispatcher.dispatch(createEvent("network-isolated", module = "network"))
+        dispatcher.dispatch(createEvent("io-retained", module = "io"))
+        dispatcher.dispatch(
+            createEvent("network-high", priority = ApmPriority.HIGH, module = "network")
+        )
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(
+            listOf("blocking", "network-2", "network-3", "io-retained", "network-high"),
+            store.events.map(ApmEvent::name)
+        )
+        assertEquals(2L, selfMonitor.getTotalDropCount())
+        assertEquals(1L, selfMonitor.getTotalDispatcherModuleIsolationDropCount())
+    }
+
+    /** Disabling module isolation restores the existing full-capacity admission behavior. */
+    @Test
+    fun `module isolation can be disabled`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
+            queueCapacity = 4,
+            enableModuleIsolation = false
+        )
+
+        dispatcher.dispatch(createEvent("blocking", module = "core"))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        repeat(4) { index ->
+            dispatcher.dispatch(createEvent("network-$index", module = "network"))
+        }
+        dispatcher.dispatch(createEvent("network-full", module = "network"))
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(
+            listOf("blocking", "network-0", "network-1", "network-2", "network-3"),
+            store.events.map(ApmEvent::name)
+        )
+        assertEquals(1L, selfMonitor.getTotalDropCount())
+        assertEquals(0L, selfMonitor.getTotalDispatcherModuleIsolationDropCount())
+    }
+
+    /** Invalid percentage inputs are clamped before pressure admission decisions. */
+    @Test
+    fun `module isolation clamps percentage configuration`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            selfMonitor = selfMonitor,
+            queueCapacity = 4,
+            moduleIsolationHighWatermarkPercent = 0,
+            maxModuleQueueSharePercent = 100
+        )
+
+        dispatcher.dispatch(createEvent("blocking", module = "core"))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.dispatch(createEvent("network-retained", module = "network"))
+        dispatcher.dispatch(createEvent("network-clamped", module = "network"))
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(
+            listOf("blocking", "network-retained"),
+            store.events.map(ApmEvent::name)
+        )
+        assertEquals(1L, selfMonitor.getTotalDispatcherModuleIsolationDropCount())
+    }
+
     /** Fatal VM errors must remain visible instead of being converted into a telemetry drop. */
     @Test
     fun `critical persistence does not swallow fatal vm error`() {
@@ -240,11 +346,19 @@ class ApmDispatcherTest {
      * 构造测试事件。
      *
      * @param name 事件名
+     * @param priority 事件优先级
+     * @param fields 事件字段
+     * @param module 来源模块
      * @return 标准 APM 事件
      */
-    private fun createEvent(name: String, priority: ApmPriority = ApmPriority.NORMAL, fields: Map<String, Any?> = emptyMap()): ApmEvent {
+    private fun createEvent(
+        name: String,
+        priority: ApmPriority = ApmPriority.NORMAL,
+        fields: Map<String, Any?> = emptyMap(),
+        module: String = "core"
+    ): ApmEvent {
         return ApmEvent(
-            module = "core",
+            module = module,
             name = name,
             kind = ApmEventKind.METRIC,
             severity = ApmSeverity.INFO,

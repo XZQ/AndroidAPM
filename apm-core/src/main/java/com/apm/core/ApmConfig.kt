@@ -121,7 +121,13 @@ data class ApmConfig(
     /** 默认 HTTP uploader 每次请求调用的动态 Header 提供者，用于短期 Token。 */
     val httpHeaderProvider: HttpHeaderProvider = HttpHeaderProvider.EMPTY,
     /** Durable row lease duration for one upload attempt. */
-    val uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
+    val uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS,
+    /** 是否在 dispatcher 高水位限制单一 NORMAL/LOW 模块占满共享队列。 */
+    val enableDispatcherModuleIsolation: Boolean = true,
+    /** 启动模块占用隔离的队列水位百分比；运行时约束到 1..100。 */
+    val dispatcherIsolationHighWatermarkPercent: Int = DEFAULT_DISPATCHER_HIGH_WATERMARK_PERCENT,
+    /** 单模块允许占用的队列百分比；运行时不超过高水位百分比。 */
+    val dispatcherMaxModuleQueueSharePercent: Int = DEFAULT_DISPATCHER_MAX_MODULE_SHARE_PERCENT
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -147,6 +153,12 @@ data class ApmConfig(
 
         /** Default live SQLite payload budget: 64 MiB. */
         private const val DEFAULT_MAX_STORED_PAYLOAD_BYTES = 64L * 1024L * 1024L
+
+        /** Default queue pressure level that activates noisy-module isolation. */
+        private const val DEFAULT_DISPATCHER_HIGH_WATERMARK_PERCENT = 75
+
+        /** Default maximum queue share reserved for one NORMAL/LOW module under pressure. */
+        private const val DEFAULT_DISPATCHER_MAX_MODULE_SHARE_PERCENT = 50
 
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L
