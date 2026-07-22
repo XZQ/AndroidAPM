@@ -62,7 +62,7 @@ class PersistentUploadWorkerTest {
         val worker = PersistentUploadWorker(
             store = store,
             uploader = uploader,
-            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            retryPolicy = RetryPolicy(maxRetries = 1, baseDelayMs = RETRY_DELAY_MS),
             batchSize = 10,
             logger = NoOpLogger,
             selfMonitor = null
@@ -78,6 +78,28 @@ class PersistentUploadWorkerTest {
         assertEquals(store.claimedOwner, store.failedOwner)
     }
 
+    /** Disabling retries removes a failed row immediately after its initial upload attempt. */
+    @Test
+    fun `retry disabled prunes row after initial failure`() {
+        val store = FakePendingStore(mutableListOf(PendingEvent(13L, event("exhausted"), 0)))
+        val attempted = CountDownLatch(1)
+        val worker = PersistentUploadWorker(
+            store = store,
+            uploader = FailingBatchUploader(attempted),
+            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            batchSize = 1,
+            logger = NoOpLogger,
+            selfMonitor = null
+        )
+
+        assertTrue(attempted.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertTrue(store.pruned.await(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        worker.shutdown()
+
+        assertEquals(emptyList<Long>(), store.rows.map(PendingEvent::id))
+        assertEquals(store.claimedOwner, store.failedOwner)
+    }
+
     /** A recoverable transport exception follows the same durable retry path as a false result. */
     @Test
     fun `throwing batch remains pending and is marked for retry`() {
@@ -86,7 +108,7 @@ class PersistentUploadWorkerTest {
         val worker = PersistentUploadWorker(
             store = store,
             uploader = ThrowingBatchUploader(attempted),
-            retryPolicy = RetryPolicy(maxRetries = 0, baseDelayMs = RETRY_DELAY_MS),
+            retryPolicy = RetryPolicy(maxRetries = 1, baseDelayMs = RETRY_DELAY_MS),
             batchSize = 1,
             logger = NoOpLogger,
             selfMonitor = null
@@ -255,6 +277,9 @@ class PersistentUploadWorkerTest {
         /** Lease release signal. */
         val released = CountDownLatch(1)
 
+        /** Exhausted-row prune signal. */
+        val pruned = CountDownLatch(1)
+
         /** Most recent claim owner. */
         @Volatile
         var claimedOwner: String = ""
@@ -342,6 +367,18 @@ class PersistentUploadWorkerTest {
         /** Returns the current pending count. */
         @Synchronized
         override fun pendingCount(): Int = rows.size
+
+        /** Removes rows whose retry counter reached the configured failure limit. */
+        @Synchronized
+        override fun pruneExpired(maxRetryCount: Int, maxAgeMs: Long): Int {
+            val before = rows.size
+            rows.removeAll { row -> row.retryCount >= maxRetryCount }
+            val deletedCount = before - rows.size
+            if (deletedCount > 0) {
+                pruned.countDown()
+            }
+            return deletedCount
+        }
     }
 
     /** Batch uploader that records accepted event names. */
@@ -438,7 +475,7 @@ class PersistentUploadWorkerTest {
         /** Thread-name prefix used to isolate the worker's uncaught fatal error. */
         private const val PERSISTENT_WORKER_THREAD_PREFIX = "apm-persistent-upload"
         /** Minimal retry delay for the test worker. */
-        private const val RETRY_DELAY_MS = 10L
+        private const val RETRY_DELAY_MS = 30_000L
 
         /** Maximum wait for worker completion. */
         private const val TEST_TIMEOUT_SECONDS = 5L

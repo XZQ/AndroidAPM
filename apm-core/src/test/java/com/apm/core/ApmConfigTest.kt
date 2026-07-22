@@ -16,11 +16,17 @@ class ApmConfigTest {
         assertEquals("", config.endpoint)
     }
 
-    /** 默认开启调试日志。 */
+    /** 默认关闭调试日志。 */
     @Test
-    fun `default debugLogging is true`() {
+    fun `default debugLogging is false`() {
         val config = ApmConfig()
-        assertTrue(config.debugLogging)
+        assertFalse(config.debugLogging)
+    }
+
+    /** 默认开启 PII 脱敏。 */
+    @Test
+    fun `default PII sanitization is enabled`() {
+        assertTrue(ApmConfig().enablePiiSanitization)
     }
 
     /** 默认开启独立的 SDK 自诊断日志。 */
@@ -93,6 +99,15 @@ class ApmConfigTest {
         assertEquals(120_000L, ApmConfig().uploadLeaseDurationMs)
     }
 
+    /** 默认 durable payload 同时限制单事件和活跃总量。 */
+    @Test
+    fun `default durable payload budgets are bounded`() {
+        val config = ApmConfig()
+
+        assertEquals(256 * 1024, config.maxEventPayloadBytes)
+        assertEquals(64L * 1024L * 1024L, config.maxStoredPayloadBytes)
+    }
+
     /** 自定义参数应正确覆盖。 */
     @Test
     fun `custom values override defaults`() {
@@ -116,5 +131,26 @@ class ApmConfigTest {
     @Test
     fun `processStrategy enum has three values`() {
         assertEquals(3, ProcessStrategy.values().size)
+    }
+
+    /** Runtime snapshot must not retain mutable host collection ownership. */
+    @Test
+    fun `runtime snapshot freezes collection configuration`() {
+        val context = mutableMapOf("app" to "before")
+        val headers = mutableMapOf("X-App" to "before")
+        val modules = mutableListOf("network")
+        val snapshot = ApmConfig(
+            defaultContext = context,
+            httpHeaders = headers,
+            customProcessModules = mapOf("worker" to modules)
+        ).snapshotForRuntime()
+
+        context["app"] = "after"
+        headers["X-App"] = "after"
+        modules += "io"
+
+        assertEquals("before", snapshot.defaultContext["app"])
+        assertEquals("before", snapshot.httpHeaders["X-App"])
+        assertEquals(listOf("network"), snapshot.customProcessModules["worker"])
     }
 }

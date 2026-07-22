@@ -44,12 +44,12 @@ fun interface BizContextProvider {
  * 在 [Apm.init] 时传入，初始化后不可修改。
  */
 data class ApmConfig(
-    /** 上传目标地址。为空时使用 Logcat 本地输出。 */
+    /** 上传目标地址。为空时安全确认并丢弃；本地输出必须显式使用 `logcat://`。 */
     val endpoint: String = "",
     /** 可选自定义上传器。非空时优先级高于 endpoint 自动推导。 */
     val uploader: ApmUploader? = null,
-    /** 是否开启调试日志（Log.d 级别）。 */
-    val debugLogging: Boolean = true,
+    /** 是否开启调试日志（Log.d 级别）；默认关闭，避免生产构建意外输出调试信息。 */
+    val debugLogging: Boolean = false,
     /** 独立 SDK 自诊断日志配置。 */
     val diagnostics: DiagnosticsConfig = DiagnosticsConfig(),
     /** 进程策略：控制 APM 在哪些进程中初始化。 */
@@ -58,6 +58,10 @@ data class ApmConfig(
     val customProcessModules: Map<String, List<String>> = emptyMap(),
     /** 事件存储类型：FILE（ring buffer 500 行）或 SQLITE（50,000 条，生产推荐）。 */
     val storageType: StorageType = StorageType.SQLITE,
+    /** SQLite 单事件持久化 payload 软上限；超限事件单独拒绝，不影响同批其他事件。 */
+    val maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES,
+    /** SQLite 活跃 payload 总量预算；超限时按低优先级、旧事件优先淘汰。 */
+    val maxStoredPayloadBytes: Long = DEFAULT_MAX_STORED_PAYLOAD_BYTES,
     /** 默认上下文，初始化时传入的静态键值对，每条事件都会携带。 */
     val defaultContext: Map<String, String> = emptyMap(),
     /** 业务上下文提供者，每次 emit 时动态获取。 */
@@ -86,8 +90,8 @@ data class ApmConfig(
     val aggregationWindowMs: Long = DEFAULT_AGGREGATION_WINDOW_MS,
 
     // --- Phase 8: PII 脱敏 ---
-    /** 是否启用 PII 脱敏（默认关闭，生产环境建议开启）。 */
-    val enablePiiSanitization: Boolean = false,
+    /** 是否启用 PII 脱敏；默认开启，确需保留原文时必须由接入方显式关闭并完成隐私评审。 */
+    val enablePiiSanitization: Boolean = true,
     /** 自定义脱敏规则（追加到内置规则之后）。 */
     val customSanitizationRules: List<com.apm.core.privacy.SanitizationRule> = emptyList(),
 
@@ -138,7 +142,27 @@ data class ApmConfig(
         /** Default SDK health report interval. */
         private const val DEFAULT_SELF_MONITOR_INTERVAL_MS = 60_000L
 
+        /** Default per-event durable payload soft limit: 256 KiB. */
+        private const val DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
+
+        /** Default live SQLite payload budget: 64 MiB. */
+        private const val DEFAULT_MAX_STORED_PAYLOAD_BYTES = 64L * 1024L * 1024L
+
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L
     }
 }
+
+/**
+ * Freezes collection-valued configuration before it is shared with background workers.
+ *
+ * Provider and uploader objects intentionally keep their identity because they are runtime
+ * collaborators. Maps and lists are copied so later host mutation cannot rewrite event context,
+ * process routing, headers, or sanitization rules after initialization.
+ */
+internal fun ApmConfig.snapshotForRuntime(): ApmConfig = copy(
+    customProcessModules = customProcessModules.mapValues { (_, modules) -> modules.toList() }.toMap(),
+    defaultContext = defaultContext.toMap(),
+    customSanitizationRules = customSanitizationRules.toList(),
+    httpHeaders = httpHeaders.toMap()
+)

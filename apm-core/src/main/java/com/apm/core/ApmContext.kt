@@ -2,6 +2,7 @@ package com.apm.core
 
 import android.app.Application
 import com.apm.model.ApmEvent
+import com.apm.model.ApmPriority
 import com.apm.core.selfmonitor.SdkSelfMonitor
 
 /**
@@ -47,14 +48,15 @@ class ApmContext internal constructor(
      * 主进程路径把事件构建推迟到 dispatcher worker 线程，降低发射线程开销；
      * 子进程 IPC 路径需要完整事件内容，立即构建。
      *
+     * @param priority 入队前已知的事件优先级
      * @param eventFactory 事件构建工厂（纯函数，可在任意线程执行）
      */
-    internal fun emitLazy(eventFactory: () -> ApmEvent) {
+    internal fun emitLazy(priority: ApmPriority, eventFactory: () -> ApmEvent) {
         if (processCoordinator != null && !isUploaderProcess) {
             // IPC 写文件需要完整事件，立即构建
             processCoordinator.writeEvent(eventFactory())
         } else {
-            dispatcher.dispatchLazy(eventFactory)
+            dispatcher.dispatchLazy(priority, eventFactory)
         }
     }
 

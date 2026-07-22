@@ -7,7 +7,6 @@ import android.os.Looper
 import android.view.Choreographer
 import android.view.FrameMetrics
 import android.view.Window
-import java.util.concurrent.ConcurrentLinkedQueue
 
 /**
  * FPS 监控器。
@@ -28,6 +27,9 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
     private val choreographer = Choreographer.getInstance()
     /** 主线程 Handler，用于延迟任务。 */
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Monotonic wall-clock reporting policy shared by every display refresh rate. */
+    private val frameReportWindow = FrameReportWindow(config.reportIntervalMs)
 
     /** 是否正在监控。 */
     @Volatile
@@ -59,13 +61,12 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
     /** 当前绑定的 Window，用于 FrameMetrics 注册。 */
     @Volatile
     private var trackedWindow: Window? = null
-    /** FrameMetrics 帧耗时采集队列（容量由 [MAX_PENDING_FRAMES] 约束）。 */
-    private val frameMetricsQueue = ConcurrentLinkedQueue<FrameMetricsBreakdown>()
+    /** 主线程回调更新的无逐帧分配 FrameMetrics 滚动统计器。 */
+    private val frameMetricsAccumulator = FrameMetricsWindowAccumulator(MAX_PENDING_FRAMES)
 
-    /** FrameMetrics 队列当前大小（ConcurrentLinkedQueue.size 为 O(n)，用计数器替代）。 */
-    private val frameMetricsQueueSize = java.util.concurrent.atomic.AtomicInteger(0)
-    /** 窗口内 FrameMetrics 延迟帧计数。 */
-    private var metricsDelayedFrames = 0
+    /** 当前监控会话是否已记录过 FrameMetrics 读取异常。 */
+    private var frameMetricsReadErrorRecorded = false
+
     /** FrameMetrics listener 引用，用于移除注册。 */
     private var frameMetricsListener: Window.OnFrameMetricsAvailableListener? = null
 
@@ -95,7 +96,7 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
         unbindWindow()
         trackedWindow = window
         // API 24+ 注册 FrameMetrics
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && window != null && config.enableFrameMetrics) {
+        if (window != null && config.enableFrameMetrics) {
             registerFrameMetrics(window)
         }
     }
@@ -104,9 +105,7 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
      * 解绑 Window，注销 FrameMetrics。
      */
     fun unbindWindow() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            trackedWindow?.let { unregisterFrameMetrics(it) }
-        }
+        trackedWindow?.let { unregisterFrameMetrics(it) }
         trackedWindow = null
     }
 
@@ -128,9 +127,9 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
         totalFrameIntervalNanos = 0L
         measuredFrameIntervals = 0
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
-        frameMetricsQueue.clear()
-        frameMetricsQueueSize.set(0)
-        metricsDelayedFrames = 0
+        frameReportWindow.reset()
+        frameMetricsAccumulator.reset()
+        frameMetricsReadErrorRecorded = false
         // 注册帧回调
         choreographer.postFrameCallback(frameCallback)
     }
@@ -198,8 +197,8 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
             lastFrameTimeNanos = frameTimeNanos
             frameCount++
 
-            // 达到窗口大小时计算 FPS 并回调
-            if (frameCount >= config.windowSize) {
+            // 使用单调时间触发，避免刷新率和卡顿改变统计窗口的真实时长。
+            if (frameReportWindow.onFrame(frameTimeNanos)) {
                 reportAndReset()
             }
 
@@ -235,19 +234,21 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
             frameMetricsBreakdown = breakdown
         )
 
-        onFrameStats?.invoke(stats)
-
         // 重置窗口
         frameCount = 0
         droppedFrames = 0
         jankCount = 0
         frozenCount = 0
         maxDropSeverity = FrameStats.DROP_SEVERITY_NONE
-        frameMetricsQueue.clear()
-        frameMetricsQueueSize.set(0)
-        metricsDelayedFrames = 0
         totalFrameIntervalNanos = 0L
         measuredFrameIntervals = 0
+
+        try {
+            onFrameStats?.invoke(stats)
+        } catch (error: Exception) {
+            // 可恢复的消费端异常不能中断后续 Choreographer 回调。
+            Apm.recordInternalError(ERROR_TAG_FRAME_STATS_CALLBACK, error)
+        }
     }
 
     /**
@@ -255,30 +256,7 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
      * 计算窗口内 measure/layout、draw、sync、swapBuffers 的总耗时。
      */
     private fun aggregateFrameMetrics(): FrameMetricsBreakdown? {
-        if (frameMetricsQueue.isEmpty()) {
-            return null
-        }
-
-        var totalMeasureLayout = 0L
-        var totalDraw = 0L
-        var totalSync = 0L
-        var totalSwap = 0L
-
-        // 遍历队列中所有 FrameMetrics 数据累加
-        for (metrics in frameMetricsQueue) {
-            totalMeasureLayout += metrics.measureLayoutNanos
-            totalDraw += metrics.drawNanos
-            totalSync += metrics.syncNanos
-            totalSwap += metrics.swapBuffersNanos
-        }
-
-        return FrameMetricsBreakdown(
-            measureLayoutNanos = totalMeasureLayout,
-            drawNanos = totalDraw,
-            syncNanos = totalSync,
-            swapBuffersNanos = totalSwap,
-            delayedFrames = metricsDelayedFrames
-        )
+        return frameMetricsAccumulator.snapshotAndReset()
     }
 
     /**
@@ -296,27 +274,19 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
      * 采集每帧的 draw/layout/sync/swapBuffers 各阶段耗时。
      */
     private fun registerFrameMetrics(window: Window) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try {
-                val listener = Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
-                    if (!monitoring) {
-                        return@OnFrameMetricsAvailableListener
-                    }
-                    // 提取各阶段耗时
-                    val breakdown = extractFrameMetrics(frameMetrics)
-                    // 有界保护：窗口上报停滞时丢弃最旧帧，防止队列无限增长
-                    if (frameMetricsQueueSize.incrementAndGet() > MAX_PENDING_FRAMES) {
-                        frameMetricsQueue.poll()
-                        frameMetricsQueueSize.decrementAndGet()
-                    }
-                    frameMetricsQueue.offer(breakdown)
+        try {
+            val listener = Window.OnFrameMetricsAvailableListener { _, frameMetrics, _ ->
+                if (!monitoring) {
+                    return@OnFrameMetricsAvailableListener
                 }
-                frameMetricsListener = listener
-                window.addOnFrameMetricsAvailableListener(listener, mainHandler)
-            } catch (e: Exception) {
-                // FrameMetrics 可能不被所有设备支持，降级到 Choreographer 模式并记入自监控
-                Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_REGISTER, e)
+                // 只更新原始类型滚动总量，主线程热路径不创建 report 或 queue node。
+                recordFrameMetrics(frameMetrics)
             }
+            frameMetricsListener = listener
+            window.addOnFrameMetricsAvailableListener(listener, mainHandler)
+        } catch (e: Exception) {
+            // FrameMetrics 可能不被所有设备支持，降级到 Choreographer 模式并记入自监控
+            Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_REGISTER, e)
         }
     }
 
@@ -324,79 +294,74 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
      * 注销 FrameMetrics 回调。
      */
     private fun unregisterFrameMetrics(window: Window) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-            try {
-                frameMetricsListener?.let { window.removeOnFrameMetricsAvailableListener(it) }
-                frameMetricsListener = null
-            } catch (e: Exception) {
-                // 注销失败不影响后续监控，但记入自监控
-                Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_UNREGISTER, e)
-            }
+        try {
+            frameMetricsListener?.let { window.removeOnFrameMetricsAvailableListener(it) }
+            frameMetricsListener = null
+        } catch (e: Exception) {
+            // 注销失败不影响后续监控，但记入自监控
+            Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_UNREGISTER, e)
         }
     }
 
     /**
-     * 从 FrameMetrics 提取各渲染阶段耗时。
+     * 从 FrameMetrics 提取各渲染阶段耗时并更新窗口统计。
      * 使用 FrameMetrics.getMetric() 公开 API (API 24+)。
      */
-    private fun extractFrameMetrics(frameMetrics: FrameMetrics): FrameMetricsBreakdown {
-        val draw = try {
-            frameMetrics.getMetric(FrameMetrics.DRAW_DURATION)
-        } catch (_: Exception) {
-            0L
-        }
-
-        val sync = try {
-            frameMetrics.getMetric(FrameMetrics.SYNC_DURATION)
-        } catch (_: Exception) {
-            0L
-        }
-
-        val swap = try {
-            frameMetrics.getMetric(FrameMetrics.SWAP_BUFFERS_DURATION)
-        } catch (_: Exception) {
-            0L
-        }
+    private fun recordFrameMetrics(frameMetrics: FrameMetrics) {
+        val draw = readFrameMetric(frameMetrics, FrameMetrics.DRAW_DURATION)
+        val sync = readFrameMetric(frameMetrics, FrameMetrics.SYNC_DURATION)
+        val swap = readFrameMetric(frameMetrics, FrameMetrics.SWAP_BUFFERS_DURATION)
 
         // measure + layout = 总耗时 - draw - sync - swap（近似）
-        val measureLayout = try {
-            val total = frameMetrics.getMetric(FrameMetrics.TOTAL_DURATION)
-            (total - draw - sync - swap).coerceAtLeast(0L)
-        } catch (_: Exception) {
-            0L
-        }
+        val total = readFrameMetric(frameMetrics, FrameMetrics.TOTAL_DURATION)
+        val measureLayout = (total - draw - sync - swap).coerceAtLeast(0L)
 
         // 检测延迟帧：INTENDED_VSYNC 与 ACTUAL_VSYNC 差距过大
-        val intendedVsync = try {
-            frameMetrics.getMetric(FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
-        } catch (_: Exception) {
+        val intendedVsync = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            readFrameMetric(frameMetrics, FrameMetrics.INTENDED_VSYNC_TIMESTAMP)
+        } else {
             0L
         }
-        val actualVsync = try {
-            frameMetrics.getMetric(FrameMetrics.VSYNC_TIMESTAMP)
-        } catch (_: Exception) {
+        val actualVsync = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            readFrameMetric(frameMetrics, FrameMetrics.VSYNC_TIMESTAMP)
+        } else {
             0L
         }
         val isDelayed = if (intendedVsync > 0L && actualVsync > 0L) {
-            Math.abs(actualVsync - intendedVsync) > frameDurationNanos
+            val vsyncDelta = if (actualVsync >= intendedVsync) {
+                actualVsync - intendedVsync
+            } else {
+                intendedVsync - actualVsync
+            }
+            vsyncDelta > frameDurationNanos
         } else {
             false
         }
-        if (isDelayed) {
-            metricsDelayedFrames++
-        }
-
-        return FrameMetricsBreakdown(
-            measureLayoutNanos = measureLayout,
-            drawNanos = draw,
-            syncNanos = sync,
-            swapBuffersNanos = swap,
-            delayedFrames = 0 // 单帧不计，窗口级在 aggregate 时统计
+        frameMetricsAccumulator.record(
+            measureLayoutDurationNanos = measureLayout,
+            drawDurationNanos = draw,
+            syncDurationNanos = sync,
+            swapBuffersDurationNanos = swap,
+            delayed = isDelayed
         )
     }
 
+    /** 读取一个平台指标；同一监控会话最多记录一次可恢复异常，避免逐帧诊断风暴。 */
+    private fun readFrameMetric(frameMetrics: FrameMetrics, metric: Int): Long {
+        return try {
+            frameMetrics.getMetric(metric)
+        } catch (error: Exception) {
+            if (!frameMetricsReadErrorRecorded) {
+                // OEM 实现异常后继续使用 Choreographer 主路径，不重复写入同类错误。
+                frameMetricsReadErrorRecorded = true
+                Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_READ, error)
+            }
+            0L
+        }
+    }
+
     companion object {
-        /** FrameMetrics 队列最大挂起帧数，超出丢弃最旧帧。 */
+        /** FrameMetrics 滚动窗口最多保留的最近帧数。 */
         private const val MAX_PENDING_FRAMES = 1_024
 
         /** 自监控 tag：FrameMetrics 监听注册失败。 */
@@ -404,6 +369,12 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
 
         /** 自监控 tag：FrameMetrics 监听注销失败。 */
         private const val ERROR_TAG_FRAME_METRICS_UNREGISTER = "fps_frame_metrics_unregister"
+
+        /** 自监控 tag：OEM FrameMetrics 指标读取失败。 */
+        private const val ERROR_TAG_FRAME_METRICS_READ = "fps_frame_metrics_read"
+
+        /** 自监控 tag：帧统计消费回调失败。 */
+        private const val ERROR_TAG_FRAME_STATS_CALLBACK = "fps_stats_callback"
 
         /** 每毫秒的纳秒数。 */
         private const val NANOS_PER_MS = 1_000_000L

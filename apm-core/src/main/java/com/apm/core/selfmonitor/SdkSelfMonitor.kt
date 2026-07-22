@@ -50,7 +50,19 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
      * @param priority 被丢弃事件的优先级，用于分类统计
      */
     fun recordDrop(priority: ApmPriority = ApmPriority.NORMAL) {
-        dropCount.incrementAndGet()
+        recordDrops(1)
+    }
+
+    /**
+     * 批量记录存储容量淘汰等已知数量的事件丢弃。
+     *
+     * @param count 本次丢弃数量；非正数被忽略
+     */
+    fun recordDrops(count: Int) {
+        if (count <= 0) {
+            return
+        }
+        dropCount.addAndGet(count.toLong())
     }
 
     /**

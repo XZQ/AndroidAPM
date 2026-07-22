@@ -12,8 +12,9 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * 替代 [FileEventStore] 的 500 行 ring buffer，提供：
  * - 持久化存储，容量 50,000 条
+ * - 单事件 256 KiB 软上限与活跃 payload 64 MiB 总量预算
  * - 按优先级存储和读取（优先上传严重事件）
- * - 水位线保护：超容量时按优先级和时间淘汰低优先级旧事件
+ * - 水位线保护：超行数或字节预算时按优先级和时间淘汰低优先级旧事件
  * - WAL 模式并发读写
  * - 批量事务写入 + 缓存行数计数（避免每条 append 全表 COUNT(*)）
  *
@@ -21,8 +22,24 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * @param dbHelper SQLite 数据库助手
  * @param maxEvents 最大存储事件数，超出时自动淘汰
+ * @param maxPayloadBytes 活跃 payload 总字节预算，超出时自动淘汰
+ * @param maxEventPayloadBytes 单事件 payload 软上限，超出时单独拒绝
  */
-class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvents: Int = DEFAULT_MAX_EVENTS) : PendingEventStore {
+class SQLiteEventStore(
+    private val dbHelper: EventDbHelper,
+    private val maxEvents: Int = DEFAULT_MAX_EVENTS,
+    private val maxPayloadBytes: Long = DEFAULT_MAX_PAYLOAD_BYTES,
+    private val maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES
+) : PendingEventStore {
+
+    init {
+        require(maxEvents > 0) { "maxEvents must be positive" }
+        require(maxPayloadBytes > 0L) { "maxPayloadBytes must be positive" }
+        require(maxEventPayloadBytes > 0) { "maxEventPayloadBytes must be positive" }
+        require(maxEventPayloadBytes.toLong() <= maxPayloadBytes) {
+            "maxEventPayloadBytes must not exceed maxPayloadBytes"
+        }
+    }
 
     /** Payload decoder seam used by deterministic fatal-error regression tests. */
     private var eventDecoder: (ByteArray) -> ApmEvent = ApmEventCodec::decode
@@ -32,16 +49,19 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         dbHelper: EventDbHelper,
         maxEvents: Int,
         eventDecoder: (ByteArray) -> ApmEvent
-    ) : this(dbHelper, maxEvents) {
+    ) : this(dbHelper, maxEvents, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_MAX_EVENT_PAYLOAD_BYTES) {
         this.eventDecoder = eventDecoder
     }
 
     /**
      * 缓存的行数计数器。
      * 初始化时执行一次 COUNT(*)，之后随增删维护，
-     * 每 [COUNT_RESYNC_INTERVAL] 次写入重同步一次以纠正漂移。
+     * 每 [STATISTICS_RESYNC_INTERVAL] 次写入重同步一次以纠正漂移。
      */
     private val cachedRowCount = AtomicLong(UNINITIALIZED_COUNT)
+
+    /** 缓存的活跃 payload 总字节数，与行数计数按相同周期重同步。 */
+    private val cachedPayloadBytes = AtomicLong(UNINITIALIZED_COUNT)
 
     /** 距上次 COUNT(*) 重同步以来的写入条数（synchronized 保护）。 */
     private var appendsSinceResync = 0
@@ -52,8 +72,16 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
      */
     @Synchronized
     override fun append(event: ApmEvent) {
-        appendBatchLocked(listOf(event))
+        val result = appendBatchWithResult(listOf(event))
+        require(result.rejectedEvents.isEmpty()) {
+            "APM event payload exceeds $maxEventPayloadBytes byte durable soft limit"
+        }
     }
+
+    /** 追加单事件并返回精确存储结果。 */
+    @Synchronized
+    override fun appendWithResult(event: ApmEvent): EventStoreAppendResult =
+        appendBatchWithResult(listOf(event))
 
     /**
      * 批量追加事件。
@@ -63,27 +91,67 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
      */
     @Synchronized
     override fun appendBatch(events: List<ApmEvent>) {
-        if (events.isEmpty()) {
-            return
+        val result = appendBatchWithResult(events)
+        require(result.rejectedEvents.isEmpty()) {
+            "${result.rejectedEvents.size} APM event payloads exceed the durable soft limit"
         }
-        appendBatchLocked(events)
+    }
+
+    /**
+     * 编码时隔离单个坏事件，将其余有效事件放在同一事务中写入。
+     *
+     * @param events 要存储的事件列表
+     * @return 接纳、拒绝与容量淘汰统计
+     */
+    @Synchronized
+    override fun appendBatchWithResult(events: List<ApmEvent>): EventStoreAppendResult {
+        if (events.isEmpty()) {
+            return EventStoreAppendResult(acceptedEventCount = 0)
+        }
+
+        val encodedEvents = ArrayList<EncodedEvent>(events.size)
+        val rejectedEvents = ArrayList<ApmEvent>()
+        for (event in events) {
+            try {
+                val payload = ApmEventCodec.encode(event)
+                if (payload.size > maxEventPayloadBytes) {
+                    // 单事件软上限隔离异常输入，避免一个大 payload 毒化整个 dispatcher 批次。
+                    rejectedEvents += event
+                } else {
+                    encodedEvents += EncodedEvent(event, payload)
+                }
+            } catch (_: IllegalArgumentException) {
+                // Codec 的结构/硬上限校验失败仅拒绝当前事件，致命 VM 错误仍向外传播。
+                rejectedEvents += event
+            }
+        }
+
+        val evictedCount = if (encodedEvents.isEmpty()) 0 else appendBatchLocked(encodedEvents)
+        return EventStoreAppendResult(
+            acceptedEventCount = events.size - rejectedEvents.size,
+            rejectedEvents = rejectedEvents.toList(),
+            capacityEvictedEventCount = evictedCount
+        )
     }
 
     /**
      * 批量写入实现（调用方已持有锁）。
      * 事务插入 → 维护计数 → 周期性重同步 → 水位线淘汰。
      *
-     * @param events 要存储的事件列表
+     * @param encodedEvents 已完成单事件大小校验的事件列表
+     * @return 为满足容量预算而淘汰的事件数
      */
-    private fun appendBatchLocked(events: List<ApmEvent>) {
+    private fun appendBatchLocked(encodedEvents: List<EncodedEvent>): Int {
         val db = dbHelper.writableDatabase
-        ensureRowCountInitialized(db)
+        ensureStatisticsInitialized(db)
 
         // 单事务批量插入：一次 fsync 落盘整批事件
         var insertedCount = 0
+        var insertedPayloadBytes = 0L
         db.beginTransaction()
         try {
-            for (event in events) {
+            for (encodedEvent in encodedEvents) {
+                val event = encodedEvent.event
                 val values = ContentValues().apply {
                     put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
                     put(COLUMN_MODULE, event.module)
@@ -92,7 +160,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                     // data 列不再冗余存储 line protocol（readRecent 从 payload 解码渲染），
                     // 避免每条事件的双重序列化开销；保留列以免 schema 迁移
                     put(COLUMN_DATA, EMPTY_DATA)
-                    put(COLUMN_PAYLOAD, ApmEventCodec.encode(event))
+                    put(COLUMN_PAYLOAD, encodedEvent.payload)
                     put(COLUMN_EVENT_ID, event.eventId)
                     put(COLUMN_TIMESTAMP, event.timestamp)
                     put(COLUMN_RETRY_COUNT, 0)
@@ -103,6 +171,7 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
                 // only successful inserts so capacity accounting stays exact.
                 if (db.insertWithOnConflict(TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE) >= 0L) {
                     insertedCount += 1
+                    insertedPayloadBytes += encodedEvent.payload.size
                 }
             }
             db.setTransactionSuccessful()
@@ -112,14 +181,15 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
 
         // 维护缓存计数并周期性重同步，纠正外部删除造成的漂移
         cachedRowCount.addAndGet(insertedCount.toLong())
+        cachedPayloadBytes.addAndGet(insertedPayloadBytes)
         appendsSinceResync += insertedCount
-        if (appendsSinceResync >= COUNT_RESYNC_INTERVAL) {
-            cachedRowCount.set(countInternal(db))
+        if (appendsSinceResync >= STATISTICS_RESYNC_INTERVAL) {
+            resyncStatistics(db)
             appendsSinceResync = 0
         }
 
-        // 水位线保护：超容量时淘汰低优先级旧事件
-        trimIfNeeded(db)
+        // 水位线保护：超行数或活跃 payload 预算时淘汰低优先级旧事件。
+        return trimIfNeeded(db)
     }
 
     /**
@@ -173,8 +243,9 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
     override fun clear() {
         val db = dbHelper.writableDatabase
         db.delete(TABLE_NAME, null, null)
-        // 计数器同步归零
+        // 行数与字节统计同步归零，避免 clear 后沿用旧水位。
         cachedRowCount.set(0L)
+        cachedPayloadBytes.set(0L)
     }
 
     /**
@@ -296,7 +367,10 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         } finally {
             db.endTransaction()
         }
-        decrementCachedCount(corruptedIds.size)
+        if (corruptedIds.isNotEmpty()) {
+            // 坏行删除发生在同一事务中，提交后以数据库真值校准两个缓存维度。
+            resyncStatistics(db)
+        }
         return claimed
     }
 
@@ -310,13 +384,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
         val arguments = ids.map(Long::toString) + ownerId
-        val deleted = db.delete(
-            TABLE_NAME,
-            "$COLUMN_ID IN ($placeholders) AND $COLUMN_LEASE_OWNER = ?",
-            arguments.toTypedArray()
+        return deleteAndAccount(
+            db = db,
+            selection = "$COLUMN_ID IN ($placeholders) AND $COLUMN_LEASE_OWNER = ?",
+            selectionArgs = arguments.toTypedArray()
         )
-        decrementCachedCount(deleted)
-        return deleted
     }
 
     /** Increments retry count and releases only rows owned by the caller. */
@@ -375,14 +447,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         }
         val db = dbHelper.writableDatabase
         val placeholders = ids.joinToString(",") { "?" }
-        val deleted = db.delete(
-            TABLE_NAME,
-            "$COLUMN_ID IN ($placeholders)",
-            ids.map { it.toString() }.toTypedArray()
+        return deleteAndAccount(
+            db = db,
+            selection = "$COLUMN_ID IN ($placeholders)",
+            selectionArgs = ids.map(Long::toString).toTypedArray()
         )
-        // 删除后同步扣减缓存计数
-        decrementCachedCount(deleted)
-        return deleted
     }
 
     /**
@@ -411,10 +480,11 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
     @Synchronized
     override fun pendingCount(): Int {
         val db = dbHelper.readableDatabase
-        val count = countInternal(db)
-        // 顺带校准缓存计数
-        cachedRowCount.set(count)
-        return count.toInt()
+        val statistics = statisticsInternal(db)
+        // 低频查询顺带校准行数与 payload 字节缓存。
+        cachedRowCount.set(statistics.rowCount)
+        cachedPayloadBytes.set(statistics.payloadBytes)
+        return statistics.rowCount.toInt()
     }
 
     /**
@@ -429,15 +499,16 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         val db = dbHelper.writableDatabase
         val oldestAllowedTimestamp = System.currentTimeMillis() - maxAgeMs
         val nowMs = System.currentTimeMillis()
-        val deleted = db.delete(
-            TABLE_NAME,
-            "($COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?) AND " +
+        return deleteAndAccount(
+            db = db,
+            selection = "($COLUMN_RETRY_COUNT >= ? OR $COLUMN_TIMESTAMP < ?) AND " +
                 "($COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?)",
-            arrayOf(maxRetryCount.toString(), oldestAllowedTimestamp.toString(), nowMs.toString())
+            selectionArgs = arrayOf(
+                maxRetryCount.toString(),
+                oldestAllowedTimestamp.toString(),
+                nowMs.toString()
+            )
         )
-        // 清理后同步扣减缓存计数
-        decrementCachedCount(deleted)
-        return deleted
     }
 
     /** Closes the underlying database helper. */
@@ -446,72 +517,122 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
     }
 
     /**
-     * 首次写入前用一次 COUNT(*) 初始化缓存计数。
+     * 首次写入前初始化行数与 payload 字节缓存。
      *
      * @param db 可写数据库
      */
-    private fun ensureRowCountInitialized(db: SQLiteDatabase) {
-        // 仅第一次写入触发全表计数
-        if (cachedRowCount.get() == UNINITIALIZED_COUNT) {
-            cachedRowCount.set(countInternal(db))
+    private fun ensureStatisticsInitialized(db: SQLiteDatabase) {
+        // 任一维度未初始化时从同一数据库快照重建，避免行数与字节水位错配。
+        if (cachedRowCount.get() == UNINITIALIZED_COUNT ||
+            cachedPayloadBytes.get() == UNINITIALIZED_COUNT
+        ) {
+            resyncStatistics(db)
         }
     }
 
     /**
-     * 水位线保护：超容量时淘汰低优先级旧事件。
+     * 水位线保护：超行数或 payload 字节预算时淘汰低优先级旧事件。
      * 淘汰顺序：priority ASC → timestamp ASC（低优先级、旧事件先淘汰）。
-     * 使用缓存计数判断水位，避免每次写入全表 COUNT(*)。
+     * 使用缓存统计判断水位；真正超限时先按数据库真值校准，避免跨实例陈旧缓存误删。
+     *
+     * @param db 可写数据库
+     * @return 实际淘汰行数
      */
-    private fun trimIfNeeded(db: SQLiteDatabase) {
-        val currentCount = cachedRowCount.get()
-        if (currentCount <= maxEvents) {
-            return
+    private fun trimIfNeeded(db: SQLiteDatabase): Int {
+        if (!isOverCapacity(cachedRowCount.get(), cachedPayloadBytes.get())) {
+            return 0
         }
 
-        val toDelete = (currentCount - maxEvents).toInt()
-        // 查找要淘汰的事件 ID
+        val nowMs = System.currentTimeMillis()
         val idsToDelete = mutableListOf<Long>()
-        db.query(
-            TABLE_NAME,
-            arrayOf(COLUMN_ID),
-            "$COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?",
-            arrayOf(System.currentTimeMillis().toString()),
-            null, null,
-            "$COLUMN_PRIORITY ASC, $COLUMN_TIMESTAMP ASC",
-            toDelete.toString()
-        ).use { cursor ->
-            while (cursor.moveToNext()) {
-                idsToDelete.add(cursor.getLong(0))
+        var deleted = 0
+        db.beginTransaction()
+        try {
+            // The write transaction makes candidate selection and deletion atomic against another claimant.
+            val actual = statisticsInternal(db)
+            var projectedRows = actual.rowCount
+            var projectedPayloadBytes = actual.payloadBytes
+            if (isOverCapacity(projectedRows, projectedPayloadBytes)) {
+                db.query(
+                    TABLE_NAME,
+                    arrayOf(COLUMN_ID, "LENGTH($COLUMN_PAYLOAD)"),
+                    "$COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?",
+                    arrayOf(nowMs.toString()),
+                    null,
+                    null,
+                    "$COLUMN_PRIORITY ASC, $COLUMN_TIMESTAMP ASC"
+                ).use { cursor ->
+                    while (cursor.moveToNext() && isOverCapacity(projectedRows, projectedPayloadBytes)) {
+                        idsToDelete += cursor.getLong(0)
+                        projectedRows -= 1L
+                        projectedPayloadBytes = (projectedPayloadBytes - cursor.getLong(1)).coerceAtLeast(0L)
+                    }
+                }
+
+                // Chunking stays below conservative Android SQLite bind-variable limits.
+                for (idChunk in idsToDelete.chunked(TRIM_DELETE_BATCH_SIZE)) {
+                    val placeholders = idChunk.joinToString(",") { "?" }
+                    val arguments = idChunk.map(Long::toString) + nowMs.toString()
+                    deleted += db.delete(
+                        TABLE_NAME,
+                        "$COLUMN_ID IN ($placeholders) AND " +
+                            "($COLUMN_LEASE_OWNER IS NULL OR $COLUMN_LEASE_EXPIRES_AT <= ?)",
+                        arguments.toTypedArray()
+                    )
+                }
             }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
         }
 
-        // 批量删除并扣减缓存计数
-        if (idsToDelete.isNotEmpty()) {
-            val placeholders = idsToDelete.joinToString(",") { "?" }
-            val deleted = db.delete(
-                TABLE_NAME,
-                "$COLUMN_ID IN ($placeholders)",
-                idsToDelete.map { it.toString() }.toTypedArray()
-            )
-            decrementCachedCount(deleted)
+        if (idsToDelete.isEmpty()) {
+            // 活跃租约不允许为满足容量预算而删除，预算会在租约释放后的下一次写入重试。
+            resyncStatistics(db)
+            return 0
         }
+
+        // 容量淘汰是低频路径，删除后再次校准可覆盖跨实例并发变化。
+        resyncStatistics(db)
+        return deleted
     }
 
-    /**
-     * 内部计数方法，不额外 synchronized（调用方已持有锁）。
-     */
-    private fun countInternal(db: SQLiteDatabase): Long {
+    /** 查询指定范围的行数与 payload 总字节，不额外加锁。 */
+    private fun statisticsInternal(
+        db: SQLiteDatabase,
+        selection: String? = null,
+        selectionArgs: Array<String>? = null
+    ): StoreStatistics {
         db.query(
             TABLE_NAME,
-            arrayOf("COUNT(*)"),
-            null, null, null, null, null
+            arrayOf("COUNT(*)", "COALESCE(SUM(LENGTH($COLUMN_PAYLOAD)), 0)"),
+            selection,
+            selectionArgs,
+            null,
+            null,
+            null
         ).use { cursor ->
             if (cursor.moveToFirst()) {
-                return cursor.getLong(0)
+                return StoreStatistics(
+                    rowCount = cursor.getLong(0),
+                    payloadBytes = cursor.getLong(1)
+                )
             }
         }
-        return 0L
+        return StoreStatistics(rowCount = 0L, payloadBytes = 0L)
     }
+
+    /** 用数据库真值同时校准行数与 payload 字节缓存。 */
+    private fun resyncStatistics(db: SQLiteDatabase): StoreStatistics {
+        val statistics = statisticsInternal(db)
+        cachedRowCount.set(statistics.rowCount)
+        cachedPayloadBytes.set(statistics.payloadBytes)
+        return statistics
+    }
+
+    /** 判断任一持久化容量维度是否超限。 */
+    private fun isOverCapacity(rowCount: Long, payloadBytes: Long): Boolean =
+        rowCount > maxEvents || payloadBytes > maxPayloadBytes
 
     /** Restores a migrated event ID when the payload predates codec version 2. */
     private fun decodeStoredEvent(payload: ByteArray, storedEventId: String): ApmEvent {
@@ -532,15 +653,57 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         )
     }
 
-    /** Applies one deletion delta without mutating an uninitialized cache. */
-    private fun decrementCachedCount(deleted: Int) {
-        if (deleted <= 0) {
-            return
+    /**
+     * 在删除前测量目标范围，并在删除后同步维护两个缓存维度。
+     * 如果跨实例竞争导致命中行数变化，则直接回读数据库真值。
+     */
+    private fun deleteAndAccount(
+        db: SQLiteDatabase,
+        selection: String,
+        selectionArgs: Array<String>
+    ): Int {
+        val selected = statisticsInternal(db, selection, selectionArgs)
+        val deleted = db.delete(TABLE_NAME, selection, selectionArgs)
+        if (deleted.toLong() != selected.rowCount) {
+            // 另一个进程可能在测量与删除之间改变了目标集合，不能按陈旧字节数扣减。
+            resyncStatistics(db)
+            return deleted
         }
+        decrementCachedStatistics(selected)
+        return deleted
+    }
+
+    /** 应用一次已确认删除的行数与字节增量，且不让陈旧缓存变为负数。 */
+    private fun decrementCachedStatistics(deleted: StoreStatistics) {
         cachedRowCount.updateAndGet { current ->
-            if (current == UNINITIALIZED_COUNT) current else (current - deleted.toLong()).coerceAtLeast(0L)
+            if (current == UNINITIALIZED_COUNT) current else (current - deleted.rowCount).coerceAtLeast(0L)
+        }
+        cachedPayloadBytes.updateAndGet { current ->
+            if (current == UNINITIALIZED_COUNT) current else (current - deleted.payloadBytes).coerceAtLeast(0L)
         }
     }
+
+    /**
+     * 已完成 durable codec 编码的单事件。
+     *
+     * @property event 原始事件
+     * @property payload 经硬上限和单事件软上限校验的二进制 payload
+     */
+    private data class EncodedEvent(
+        val event: ApmEvent,
+        val payload: ByteArray
+    )
+
+    /**
+     * SQLite 活跃 outbox 的两个容量维度。
+     *
+     * @property rowCount 活跃行数
+     * @property payloadBytes payload BLOB 字节总量
+     */
+    private data class StoreStatistics(
+        val rowCount: Long,
+        val payloadBytes: Long
+    )
 
     /** Adds a lease duration without overflowing into an already-expired value. */
     private fun safeAdd(nowMs: Long, durationMs: Long): Long =
@@ -550,11 +713,20 @@ class SQLiteEventStore(private val dbHelper: EventDbHelper, private val maxEvent
         /** 默认最大存储事件数：50,000 条。 */
         private const val DEFAULT_MAX_EVENTS = 50_000
 
+        /** 默认活跃 payload 总量预算：64 MiB。 */
+        private const val DEFAULT_MAX_PAYLOAD_BYTES = 64L * 1024L * 1024L
+
+        /** 默认单事件 payload 软上限：256 KiB。 */
+        private const val DEFAULT_MAX_EVENT_PAYLOAD_BYTES = 256 * 1024
+
         /** 缓存计数未初始化标记。 */
         private const val UNINITIALIZED_COUNT = -1L
 
-        /** 每写入多少条后用 COUNT(*) 重同步一次缓存计数。 */
-        private const val COUNT_RESYNC_INTERVAL = 512
+        /** 每写入多少条后重同步行数和 payload 字节缓存。 */
+        private const val STATISTICS_RESYNC_INTERVAL = 64
+
+        /** 单次容量淘汰删除绑定的最大 ID 数，保守低于 Android SQLite 常见变量上限。 */
+        private const val TRIM_DELETE_BATCH_SIZE = 500
 
         /** data 列占位空串（line protocol 改为读取时从 payload 渲染）。 */
         private const val EMPTY_DATA = ""

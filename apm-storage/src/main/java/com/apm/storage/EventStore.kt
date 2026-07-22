@@ -15,6 +15,18 @@ interface EventStore {
     fun append(event: ApmEvent)
 
     /**
+     * 追加一条事件并返回存储层的精确接纳/淘汰结果。
+     * 默认实现保持现有 [append] 语义；需要隔离坏事件或执行容量淘汰的实现应覆写。
+     *
+     * @param event 要存储的事件
+     * @return 本次写入结果
+     */
+    fun appendWithResult(event: ApmEvent): EventStoreAppendResult {
+        append(event)
+        return EventStoreAppendResult(acceptedEventCount = 1)
+    }
+
+    /**
      * 批量追加事件。
      * 默认实现逐条调用 [append]；支持事务的实现应覆写为原子批量写入，
      * 显著降低高频事件场景的每条写入开销。
@@ -26,6 +38,18 @@ interface EventStore {
         for (event in events) {
             append(event)
         }
+    }
+
+    /**
+     * 批量追加并返回存储层的精确接纳/淘汰结果。
+     * 默认实现委托 [appendBatch]，因此自定义旧实现无需感知新结果类型。
+     *
+     * @param events 要存储的事件列表
+     * @return 本次批量写入结果
+     */
+    fun appendBatchWithResult(events: List<ApmEvent>): EventStoreAppendResult {
+        appendBatch(events)
+        return EventStoreAppendResult(acceptedEventCount = events.size)
     }
 
     /**
@@ -44,6 +68,19 @@ interface EventStore {
      */
     fun close() = Unit
 }
+
+/**
+ * 一次存储写入的结果。
+ *
+ * @property acceptedEventCount 被存储层接纳的输入事件数
+ * @property rejectedEvents 因单事件编码或软大小限制而拒绝的原始事件
+ * @property capacityEvictedEventCount 为满足行数或 payload 总量预算而淘汰的历史事件数
+ */
+data class EventStoreAppendResult(
+    val acceptedEventCount: Int,
+    val rejectedEvents: List<ApmEvent> = emptyList(),
+    val capacityEvictedEventCount: Int = 0
+)
 
 /**
  * One event retained by a durable upload outbox.

@@ -10,6 +10,21 @@ import org.junit.Test
 /** Recoverable and fatal behavior tests for core host-safety boundaries. */
 class InternalErrorBoundaryTest {
 
+    /** Lazy event payloads must retain the values present when emit was called. */
+    @Test
+    fun `event payload snapshots do not follow later host mutation`() {
+        val fields = mutableMapOf<String, Any?>("status" to "before")
+        val extras = mutableMapOf("source" to "before")
+
+        val fieldSnapshot = snapshotEventFields(fields)
+        val extrasSnapshot = snapshotEventExtras(extras)
+        fields["status"] = "after"
+        extras["source"] = "after"
+
+        assertEquals("before", fieldSnapshot["status"])
+        assertEquals("before", extrasSnapshot["source"])
+    }
+
     /** Failure in one internal-error sink must not prevent the independent sink. */
     @Test
     fun `internal error sinks are independently isolated`() {

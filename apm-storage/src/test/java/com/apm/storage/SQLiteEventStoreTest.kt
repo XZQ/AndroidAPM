@@ -2,6 +2,7 @@ package com.apm.storage
 
 import android.content.ContentValues
 import com.apm.model.ApmEvent
+import com.apm.model.ApmEventCodec
 import com.apm.model.ApmPriority
 import com.apm.model.toLineProtocol
 import java.util.concurrent.CountDownLatch
@@ -75,6 +76,83 @@ class SQLiteEventStoreTest {
         store.appendBatch(batch)
 
         assertEquals(BATCH_SIZE, store.pendingCount())
+    }
+
+    /** 单个超软上限 payload 被隔离，不会毒化同批正常事件。 */
+    @Test
+    fun `append result isolates oversized event from valid batch peers`() {
+        val normal = event("normal")
+        val oversized = event("oversized").copy(fields = mapOf("blob" to "x".repeat(LARGE_FIELD_CHARS)))
+        val normalPayloadBytes = ApmEventCodec.encode(normal).size
+        val budgetStore = SQLiteEventStore(
+            EventDbHelper(RuntimeEnvironment.getApplication(), "event-budget-${System.nanoTime()}.db"),
+            maxEvents = TEST_MAX_EVENTS,
+            maxPayloadBytes = TOTAL_PAYLOAD_TEST_BUDGET_BYTES,
+            maxEventPayloadBytes = normalPayloadBytes + EVENT_PAYLOAD_HEADROOM_BYTES
+        )
+        try {
+            val result = budgetStore.appendBatchWithResult(listOf(oversized, normal))
+
+            assertEquals(1, result.acceptedEventCount)
+            assertEquals(listOf("oversized"), result.rejectedEvents.map(ApmEvent::name))
+            assertEquals(listOf("normal"), budgetStore.readPending(10).map { it.event.name })
+        } finally {
+            budgetStore.close()
+        }
+    }
+
+    /** payload 总量超限时按低优先级、旧事件优先淘汰，并返回可观测计数。 */
+    @Test
+    fun `payload byte budget evicts low priority oldest event`() {
+        val lowOld = event("payload", ApmPriority.LOW, timestamp = 1L)
+        val lowNew = event("payload", ApmPriority.LOW, timestamp = 2L)
+        val critical = event("payload", ApmPriority.CRITICAL, timestamp = 3L)
+        val retainedBudget = ApmEventCodec.encode(lowNew).size.toLong() +
+            ApmEventCodec.encode(critical).size.toLong()
+        val largestEventBytes = maxOf(
+            ApmEventCodec.encode(lowOld).size,
+            ApmEventCodec.encode(critical).size
+        )
+        val budgetStore = SQLiteEventStore(
+            EventDbHelper(RuntimeEnvironment.getApplication(), "total-budget-${System.nanoTime()}.db"),
+            maxEvents = TEST_MAX_EVENTS,
+            maxPayloadBytes = retainedBudget,
+            maxEventPayloadBytes = largestEventBytes
+        )
+        try {
+            budgetStore.appendBatch(listOf(lowOld, lowNew))
+            val result = budgetStore.appendWithResult(critical)
+
+            assertEquals(1, result.capacityEvictedEventCount)
+            val retained = budgetStore.readPending(10).map { it.event }
+            assertEquals(listOf(critical, lowNew), retained)
+        } finally {
+            budgetStore.close()
+        }
+    }
+
+    /** 大规模容量回收必须分块删除，不能超过 SQLite 绑定变量上限。 */
+    @Test
+    fun `capacity trim chunks large deletion sets`() {
+        val capacityStore = SQLiteEventStore(
+            EventDbHelper(RuntimeEnvironment.getApplication(), "chunked-trim-${System.nanoTime()}.db"),
+            maxEvents = CHUNKED_TRIM_RETAINED_EVENTS
+        )
+        try {
+            val result = capacityStore.appendBatchWithResult(
+                (0 until CHUNKED_TRIM_INPUT_EVENTS).map { index ->
+                    event("chunk-$index", ApmPriority.LOW, timestamp = index.toLong())
+                }
+            )
+
+            assertEquals(
+                CHUNKED_TRIM_INPUT_EVENTS - CHUNKED_TRIM_RETAINED_EVENTS,
+                result.capacityEvictedEventCount
+            )
+            assertEquals(CHUNKED_TRIM_RETAINED_EVENTS, capacityStore.pendingCount())
+        } finally {
+            capacityStore.close()
+        }
     }
 
     /** Duplicate event IDs are ignored without corrupting the capacity counter. */
@@ -378,6 +456,21 @@ class SQLiteEventStoreTest {
 
         /** Positive lease duration shared by overflow assertions. */
         private const val LEASE_DURATION_MS = 10L
+
+        /** Large field used to cross a deliberately small per-event soft limit. */
+        private const val LARGE_FIELD_CHARS = 4_096
+
+        /** Total budget kept comfortably above the small normal test event. */
+        private const val TOTAL_PAYLOAD_TEST_BUDGET_BYTES = 1L * 1024L * 1024L
+
+        /** Margin above the normal encoded event while remaining below the oversized event. */
+        private const val EVENT_PAYLOAD_HEADROOM_BYTES = 32
+
+        /** Input size forcing capacity deletion to span more than one bind batch. */
+        private const val CHUNKED_TRIM_INPUT_EVENTS = 600
+
+        /** Rows retained after the chunked trim regression scenario. */
+        private const val CHUNKED_TRIM_RETAINED_EVENTS = 10
 
         /** 批量写入条数。 */
         private const val BATCH_SIZE = 5

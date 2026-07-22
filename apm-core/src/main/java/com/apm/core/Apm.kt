@@ -14,8 +14,10 @@ import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.throttle.RateLimiter
 import com.apm.core.throttle.ManagedDynamicConfigProvider
-import com.apm.core.selfmonitor.AutoThrottle
+import com.apm.core.selfmonitor.AutoThrottleController
+import com.apm.core.selfmonitor.AutoThrottleDecision
 import com.apm.core.selfmonitor.SdkSelfMonitor
+import com.apm.core.selfmonitor.publishSdkHealthReport
 import com.apm.core.diagnostics.ApmDiagnostics
 import com.apm.core.diagnostics.DiagnosticLevel
 import com.apm.uploader.ApmUploader
@@ -54,6 +56,12 @@ internal inline fun captureBizContextSafely(
         emptyMap()
     }
 }
+
+/** Freezes host-owned event fields before a lazy dispatcher observes them. */
+internal fun snapshotEventFields(fields: Map<String, Any?>): Map<String, Any?> = fields.toMap()
+
+/** Freezes host-owned event extras before a lazy dispatcher observes them. */
+internal fun snapshotEventExtras(extras: Map<String, String>): Map<String, String> = extras.toMap()
 
 /** Runs one recoverable lifecycle phase and leaves fatal VM errors visible. */
 internal inline fun runRecoverableBoundary(
@@ -133,7 +141,9 @@ object Apm {
     /**
      * 实际初始化逻辑。已由外部 synchronized 保证线程安全。
      */
-    private fun doInit(application: Application, config: ApmConfig) {
+    private fun doInit(application: Application, inputConfig: ApmConfig) {
+        // Freeze host-owned collections once so background work observes one immutable runtime view.
+        val config = inputConfig.snapshotForRuntime()
         val processName = application.currentProcessNameCompat()
         // Diagnostics starts before event storage and upload so their initialization failures remain inspectable.
         val diagnostics = ApmDiagnostics.initialize(application, config.diagnostics, processName)
@@ -161,11 +171,17 @@ object Apm {
         var stagedCoordinator: ProcessEventCoordinator? = null
         var stagedMonitoringExecutor: ScheduledExecutorService? = null
         try {
+        // Self-monitoring exists before storage so capacity rejection and eviction are observable from first write.
+        val selfMonitor = if (config.enableSelfMonitoring) SdkSelfMonitor() else null
         // 创建本地存储：根据配置选择文件存储或 SQLite 持久化存储
         val store: EventStore = when (config.storageType) {
             StorageType.SQLITE -> {
                 val dbHelper = EventDbHelper(application)
-                SQLiteEventStore(dbHelper)
+                SQLiteEventStore(
+                    dbHelper = dbHelper,
+                    maxPayloadBytes = config.maxStoredPayloadBytes,
+                    maxEventPayloadBytes = config.maxEventPayloadBytes
+                )
             }
             StorageType.FILE -> {
                 // FILE 存储不实现 PendingEventStore，持久 outbox（崩溃/重启重放、
@@ -209,10 +225,6 @@ object Apm {
                 logger = logger.withComponent(PRIVACY_MODULE)
             )
         } else null
-
-        // SDK self monitoring is wired before worker construction so queue and
-        // upload metrics include restart replay from the first cycle.
-        val selfMonitor = if (config.enableSelfMonitoring) SdkSelfMonitor() else null
 
         // 组装分发器和上下文
         val dispatcher = ApmDispatcher(
@@ -379,10 +391,14 @@ object Apm {
         val timestamp = System.currentTimeMillis()
         val threadName = Thread.currentThread().name
         val bizContext = captureBizContext(currentState)
-        currentState.context.emitLazy {
+        // Host callers may reuse mutable maps after emit returns. Freeze the occurrence payload
+        // before handing it to a lazy worker so later mutation cannot rewrite the captured event.
+        val fieldSnapshot = snapshotEventFields(fields)
+        val extrasSnapshot = snapshotEventExtras(extras)
+        currentState.context.emitLazy(priority) {
             buildEvent(
                 currentState, module, name, kind, severity, priority, scene, foreground,
-                fields, extras, timestamp, threadName, bizContext
+                fieldSnapshot, extrasSnapshot, timestamp, threadName, bizContext
             )
         }
     }
@@ -469,6 +485,10 @@ object Apm {
     private fun startModule(module: ApmModule) {
         val currentState = state ?: return
         if (currentState.startedModules.any { it.name == module.name }) {
+            return
+        }
+        if (module.name in currentState.autoThrottledModules) {
+            currentState.context.logger.d("Skip module=${module.name}: held by automatic throttling")
             return
         }
         if (!shouldModuleRun(currentState, module)) {
@@ -617,6 +637,7 @@ object Apm {
         }
         val previousDiagnosticDrops = AtomicLong(0L)
         val previousDiagnosticWriteFailures = AtomicLong(0L)
+        val autoThrottleController = AutoThrottleController()
         return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
@@ -629,15 +650,29 @@ object Apm {
                         diagnosticDroppedCount = droppedDelta,
                         diagnosticWriteFailureCount = writeFailureDelta
                     )
-                    emit(
-                        module = CORE_MODULE,
-                        name = EVENT_SDK_HEALTH,
-                        severity = ApmSeverity.INFO,
-                        priority = ApmPriority.LOW,
-                        fields = report.toCoreHealthFields()
+                    publishSdkHealthReport(
+                        report = report,
+                        diagnosticsSink = { summary ->
+                            ApmDiagnostics.record(
+                                level = DiagnosticLevel.INFO,
+                                component = CORE_MODULE,
+                                code = EVENT_DIAGNOSTIC_SDK_HEALTH,
+                                message = summary,
+                                error = null
+                            )
+                        },
+                        eventSink = { priority, fields ->
+                            emit(
+                                module = CORE_MODULE,
+                                name = EVENT_SDK_HEALTH,
+                                severity = ApmSeverity.INFO,
+                                priority = priority,
+                                fields = fields
+                            )
+                        }
                     )
                     if (config.enableAutoThrottle) {
-                        applyAutoThrottle(AutoThrottle.computeModulesToDisable(report))
+                        applyAutoThrottle(autoThrottleController.evaluate(report))
                     }
                 },
                 config.selfMonitorIntervalMs,
@@ -648,25 +683,41 @@ object Apm {
     }
 
     /**
-     * Stops modules selected by the automatic health policy.
+     * Applies one automatic-throttle state transition to module lifecycle.
      *
-     * @param moduleNames module names to stop
+     * @param decision complete throttle state and modules newly eligible for recovery
      */
-    private fun applyAutoThrottle(moduleNames: List<String>) {
-        val currentState = state ?: return
-        for (module in currentState.startedModules.toList()) {
-            if (module.name !in moduleNames) {
-                continue
-            }
-            val stopped = runRecoverableBoundary(
-                block = { module.onStop() },
-                onFailure = { error ->
-                    currentState.context.logger.e("Failed to auto-throttle module=${module.name}", error)
+    private fun applyAutoThrottle(decision: AutoThrottleDecision) {
+        synchronized(initLock) {
+            val currentState = state ?: return
+            // Mirror the controller's complete state so later registration and config callbacks cannot bypass it.
+            currentState.autoThrottledModules.clear()
+            currentState.autoThrottledModules.addAll(decision.modulesToThrottle)
+
+            for (module in currentState.startedModules.toList()) {
+                if (module.name !in currentState.autoThrottledModules) {
+                    continue
                 }
-            )
-            if (stopped) {
-                currentState.startedModules.remove(module)
-                currentState.context.logger.w("Auto-throttled module=${module.name}")
+                val stopped = runRecoverableBoundary(
+                    block = { module.onStop() },
+                    onFailure = { error ->
+                        currentState.context.logger.e("Failed to auto-throttle module=${module.name}", error)
+                        recordInternalError(ERROR_TAG_AUTO_THROTTLE_STOP, error)
+                    }
+                )
+                if (stopped) {
+                    currentState.startedModules.remove(module)
+                    currentState.context.logger.w("Auto-throttled module=${module.name}")
+                }
+            }
+
+            for (moduleName in decision.modulesToRecover) {
+                val module = modules.firstOrNull { candidate -> candidate.name == moduleName } ?: continue
+                // startModule re-evaluates process, signed dynamic-config, and gray-release gates.
+                startModule(module)
+                if (currentState.startedModules.any { started -> started.name == moduleName }) {
+                    currentState.context.logger.w("Auto-throttle recovered module=$moduleName")
+                }
             }
         }
     }
@@ -711,7 +762,9 @@ object Apm {
         /** SDK self-monitor scheduler. */
         val selfMonitorExecutor: ScheduledExecutorService?,
         /** Modules that completed initialization and start successfully. */
-        val startedModules: CopyOnWriteArraySet<ApmModule> = CopyOnWriteArraySet()
+        val startedModules: CopyOnWriteArraySet<ApmModule> = CopyOnWriteArraySet(),
+        /** Module names held stopped by auto-throttle; guarded by [initLock]. */
+        val autoThrottledModules: MutableSet<String> = mutableSetOf()
     )
 
     /** SDK self-monitor thread name. */
@@ -740,6 +793,9 @@ object Apm {
 
     /** Diagnostic code for SDK session stop. */
     private const val EVENT_DIAGNOSTIC_SESSION_STOP = "session_stop"
+
+    /** Diagnostic code for the periodic payload-free SDK health summary. */
+    private const val EVENT_DIAGNOSTIC_SDK_HEALTH = "sdk_health"
 
     /** Diagnostic code for initialization failure. */
     private const val ERROR_CODE_INIT = "init_failed"
@@ -792,4 +848,6 @@ object Apm {
     private const val ERROR_TAG_DYNAMIC_CONFIG_START = "dynamic_config_start"
     /** Read tag for a dynamic-config provider failure. */
     private const val ERROR_TAG_DYNAMIC_CONFIG_READ = "dynamic_config_read"
+    /** Stop tag for an automatic-throttle lifecycle failure. */
+    private const val ERROR_TAG_AUTO_THROTTLE_STOP = "auto_throttle_stop"
 }

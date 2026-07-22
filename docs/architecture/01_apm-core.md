@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-07-16
+> 同步日期：2026-07-21
 
 ## 1. 职责
 
@@ -12,7 +12,7 @@
 - `ApmDispatcher`：有界异步管线
 - `PersistentUploadWorker`：durable outbox 单 worker 回放
 - `ProcessEventCoordinator`：可选多进程文件 hand-off
-- `UploaderFactory`：选择 custom/HTTP/Logcat 与 durable/non-durable 重试所有权
+- `UploaderFactory`：选择 custom/HTTP/显式 Logcat/payload-safe discard 与 durable/non-durable 重试所有权
 - throttle/aggregation/privacy/selfmonitor：签名动态采样/限流与横切保护能力
 - `ApmExecutors`：SDK 线程工厂和优先级策略
 - `ApmDiagnostics`：独立本地诊断状态、快照、ZIP 导出和清理
@@ -23,6 +23,7 @@
 Apm.init(application, config)
   synchronized(initLock)
   -> ignore duplicate init
+  -> snapshot collection-valued runtime config
   -> resolve processName
   -> create independent diagnostics recorder/logger
   -> MAIN_PROCESS_ONLY child process: skip
@@ -32,7 +33,7 @@ Apm.init(application, config)
   -> UploaderFactory.create(config, durableStore)
   -> optional RateLimiter
   -> optional EventAggregator
-  -> optional PiiSanitizer
+  -> default PiiSanitizer unless explicitly disabled
   -> optional SdkSelfMonitor
   -> ApmDispatcher
   -> optional ProcessEventCoordinator
@@ -41,7 +42,7 @@ Apm.init(application, config)
   -> start registered modules
 ```
 
-`state` 只有基础设施组装完成后才发布。diagnostics 在 event store/uploader 之前创建，因此部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；`stop` 后可以重新初始化。
+`state` 只有基础设施组装完成后才发布。初始化首先复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；`stop` 后可以重新初始化。
 
 初始化模式必须二选一：
 
@@ -75,6 +76,7 @@ Apm.init(application, config)
 - 捕获 `System.currentTimeMillis()`
 - 捕获 `Thread.currentThread().name`
 - 调用 `BizContextProvider.currentContext()` 并复制成不可变快照；异常记录 internal error 后降级为空上下文
+- 复制顶层 `fields` / `extras`，冻结本次发生时刻的 payload map
 - 创建 lazy event factory 并非阻塞入队
 
 event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。
@@ -87,8 +89,9 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 - `ArrayBlockingQueue<QueuedEvent>`
 - capacity：2048
-- producer：`offer`，永不等待
-- overflow：drop + self-monitor
+- producer：`tryLock` + `offer`，永不等待；锁竞争时立即 drop + self-monitor
+- overflow：高优先级可替换最旧的最低优先级事件；同级先到先得
+- admission lock 同时覆盖 remove + offer，避免替换空位被并发 producer 抢占
 - worker poll：100 ms
 - 每轮：首条 + `drainTo`，最多 32 条
 - shutdown：不再接收，继续排空已接受事件，最多等待 3 秒
@@ -129,7 +132,7 @@ claimPending(ownerId, batchSize, now, leaseDuration)
             -> wait and reselect
 ```
 
-单一重试权威位于 outbox worker；durable store 下 `UploaderFactory` 不再套 `RetryingApmUploader`，避免双队列/双重试。
+单一重试权威位于 outbox worker；durable store 下 `UploaderFactory` 不再套 `RetryingApmUploader`，避免双队列/双重试。`RetryPolicy.maxRetries` 表示首次尝试之后允许的次数；每次失败 owner-aware 释放并递增计数，达到 `maxRetries + 1` 次失败时立即 prune，不再依赖“等到 outbox 为空”才清理。
 
 每个 Worker 使用 `ProcessSessionId + process-local sequence` 作为 owner。SQLite 在写事务中选择并持久化 claim，另一个 store/进程看不到活动租约；只有 owner 可 ACK 或失败释放，shutdown 释放其全部 claim，expiry 后其他 Worker 可重领。默认 `uploadLeaseDurationMs=120000`。
 
@@ -141,9 +144,10 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 
 1. `config.uploader`
 2. `http://` / `https://` endpoint -> `HttpApmUploader`
-3. 其他/空 endpoint -> `LogcatApmUploader`
+3. 显式 `logcat://` endpoint -> `LogcatApmUploader`
+4. 其他/空 endpoint -> payload-safe discard uploader
 
-非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。
+非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
 
 默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
 
@@ -192,7 +196,7 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认关闭。内置规则覆盖手机号、邮箱、身份证、URL token、password 等文本模式；生产环境需要结合自身字段和法规显式启用/扩展。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则；显式关闭前必须完成隐私评审。
 
 ## 11. 自监控与降级
 
@@ -204,9 +208,9 @@ PII sanitization 默认关闭。内置规则覆盖手机号、邮箱、身份证
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。`AutoThrottle` 根据 drop rate/upload latency 停止低优先级，再在严重时停止 normal 模块。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。存储层隔离拒绝与容量淘汰也会增加 drop 健康计数。
 
-当前限制：停用是本进程内单向动作，没有自动恢复；健康事件本身也经过同一 dispatcher。
+`AutoThrottleController` 根据 drop rate/upload latency 维护完整降级集合：drop rate > 50% 或平均上传延迟 > 10 秒立即关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块。恢复阈值采用迟滞：连续 3 个周期 drop rate <= 20% 且平均上传延迟 <= 3 秒才释放；迟滞区间或再次退化会重置计数。`Apm` 在 `initLock` 下镜像该集合，后注册和动态配置不能绕过；恢复仍通过 `startModule` 重查进程、签名配置和灰度门禁。健康事件的 telemetry 副本仍经过同一 dispatcher，但 HIGH 优先级可在入口满载时替换更低优先级事件。
 
 独立诊断默认使用 200 条 / 4 MiB 内存环、256 条 / 4 MiB 非阻塞写队列，以及每进程 3 × 512 KiB app-private JSONL。普通日志调用线程不做文件 IO；ERROR 只可挤出较旧的非 ERROR 排队记录并计入 drop。文件失败进入冷却时 writer 在出队前等待，已接受记录不会被静默结算；读/写失败独立计数，`status()` 使用缓存磁盘字节且不遍历文件。文件异常不通过 `ApmLogger` 递归报告。
 
@@ -257,4 +261,4 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 - self-monitor health event 不是独立控制平面；详细错误由独立本地 journal 补足
 - diagnostics 默认不自动上传，分享流程由宿主显式控制
 - 公共 API 无法实现的通用隐藏 Hook 配置保留为 deprecated/false；真实能力使用显式 API
-- PII/aggregation/multi-process 默认关闭，需要生产配置明确开启
+- PII 默认开启；aggregation/multi-process 默认关闭，生产配置仍需明确评审

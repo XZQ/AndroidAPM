@@ -1,11 +1,13 @@
 package com.apm.core
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
+import com.apm.storage.EventStoreAppendResult
 import com.apm.storage.PendingEventStore
 import com.apm.core.throttle.RateLimiter
 import com.apm.core.throttle.DynamicEventPolicy
@@ -15,6 +17,7 @@ import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 
 /** Runs one aggregation-maintenance tick without cancelling future ticks after recoverable failure. */
 internal inline fun runAggregationMaintenance(
@@ -40,8 +43,8 @@ internal inline fun runAggregationMaintenance(
  *   聚合、限流、脱敏、序列化、存储全部推迟到 "apm-dispatcher" worker 线程；
  * - worker 每轮从队列批量取出至多 [MAX_BATCH_DRAIN] 条事件，
  *   经 [EventStore.appendBatch] 单事务落盘，摊薄每条事件的写入开销；
- * - 队列容量固定为 [QUEUE_CAPACITY]，满时丢弃新事件并计入自监控，
- *   杜绝无界积压导致的 OOM。
+ * - 队列容量固定为 [QUEUE_CAPACITY]，满时允许高优先级事件替换最低优先级事件，
+ *   同级事件保持先到先得，杜绝无界积压导致的 OOM。
  *
  * 集成 SDK 自监控：在每个关键节点调用 [SdkSelfMonitor] 记录指标。
  */
@@ -67,7 +70,9 @@ internal class ApmDispatcher(
     /** Maximum events sent in one durable batch. */
     uploadBatchSize: Int = DEFAULT_UPLOAD_BATCH_SIZE,
     /** Duration for which one durable upload worker owns a claimed batch. */
-    uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS
+    uploadLeaseDurationMs: Long = DEFAULT_UPLOAD_LEASE_DURATION_MS,
+    /** Bounded ingress capacity; exposed internally for deterministic pressure tests. */
+    queueCapacity: Int = QUEUE_CAPACITY
 ) {
     /** Fail-safe resolver for signed sampling and rate-limit configuration. */
     private val dynamicEventPolicy = DynamicEventPolicy(dynamicConfigProvider) { error ->
@@ -85,7 +90,9 @@ internal class ApmDispatcher(
         /** 延迟构建工厂，在 worker 线程执行。 */
         val eventFactory: (() -> ApmEvent)? = null,
         /** true 表示事件已由聚合器输出，跳过聚合阶段。 */
-        val preAggregated: Boolean = false
+        val preAggregated: Boolean = false,
+        /** Admission priority known before a lazy event is resolved. */
+        val priority: ApmPriority
     ) {
         /**
          * 解析出最终事件（可能触发延迟构建）。
@@ -96,7 +103,10 @@ internal class ApmDispatcher(
     }
 
     /** 待处理事件的有界队列（背压保护：满时丢弃并计数，绝不阻塞调用线程）。 */
-    private val queue = ArrayBlockingQueue<QueuedEvent>(QUEUE_CAPACITY)
+    private val queue = ArrayBlockingQueue<QueuedEvent>(queueCapacity.coerceAtLeast(1))
+
+    /** Makes producer admission and overflow replacement atomic without ever waiting. */
+    private val admissionLock = ReentrantLock()
 
     /** worker 循环运行标志。 */
     @Volatile
@@ -137,7 +147,15 @@ internal class ApmDispatcher(
                     runAggregationMaintenance(
                         flush = eventAggregator::flushExpired,
                         // 聚合结果重新入队（打 preAggregated 标记避免二次聚合）
-                        enqueueEvent = { event -> enqueue(QueuedEvent(event, preAggregated = true)) },
+                        enqueueEvent = { event ->
+                            enqueue(
+                                QueuedEvent(
+                                    event = event,
+                                    preAggregated = true,
+                                    priority = event.priority
+                                )
+                            )
+                        },
                         onFailure = { error ->
                             logger.e("Failed to flush expired aggregation windows", error)
                             Apm.recordInternalError(ERROR_AGGREGATION_MAINTENANCE, error)
@@ -165,7 +183,7 @@ internal class ApmDispatcher(
         // 记录事件发射
         selfMonitor?.recordEmit()
 
-        enqueue(QueuedEvent(event))
+        enqueue(QueuedEvent(event = event, priority = event.priority))
     }
 
     /**
@@ -173,9 +191,13 @@ internal class ApmDispatcher(
      * 事件构建（上下文 map 合并等分配开销）在 worker 线程执行，
      * 调用线程只承担一次闭包分配 + 入队。
      *
+     * @param priority 入队前已知的事件优先级，用于队列压力下的准入决策
      * @param eventFactory 事件构建工厂，须为纯函数（可安全在 worker 线程执行）
      */
-    fun dispatchLazy(eventFactory: () -> ApmEvent) {
+    fun dispatchLazy(
+        priority: ApmPriority = ApmPriority.NORMAL,
+        eventFactory: () -> ApmEvent
+    ) {
         // stop 之后直接拒绝新事件
         if (shutdown) {
             logger.d("Dispatcher already shutdown, drop lazy event")
@@ -185,7 +207,7 @@ internal class ApmDispatcher(
         // 记录事件发射
         selfMonitor?.recordEmit()
 
-        enqueue(QueuedEvent(event = null, eventFactory = eventFactory))
+        enqueue(QueuedEvent(event = null, eventFactory = eventFactory, priority = priority))
     }
 
     /**
@@ -194,11 +216,43 @@ internal class ApmDispatcher(
      * @param queued 待入队元素
      */
     private fun enqueue(queued: QueuedEvent) {
-        // offer 非阻塞：满即丢弃，绝不阻塞调用线程
-        if (!queue.offer(queued)) {
-            // 延迟构建事件在溢出时无法得知优先级，按默认优先级计数
-            logger.d("Dispatcher queue full, drop event")
-            selfMonitor?.recordDrop(queued.event?.priority ?: com.apm.model.ApmPriority.NORMAL)
+        // Producer contention drops immediately instead of delaying host work. Every producer
+        // participates so no caller can steal the slot between a priority eviction and replace.
+        if (!admissionLock.tryLock()) {
+            logger.d("Dispatcher admission busy, drop priority=${queued.priority}")
+            selfMonitor?.recordDrop(queued.priority)
+            return
+        }
+        try {
+            // The common path remains one non-blocking offer after a non-waiting lock attempt.
+            if (queue.offer(queued)) {
+                return
+            }
+
+            // Preserve older work at the same priority, but let a more valuable incoming event
+            // evict the oldest event at the lowest available priority.
+            var evictionCandidate: QueuedEvent? = null
+            for (existing in queue) {
+                if (existing.priority.value >= queued.priority.value) {
+                    continue
+                }
+                if (evictionCandidate == null || existing.priority.value < evictionCandidate.priority.value) {
+                    evictionCandidate = existing
+                }
+            }
+            if (evictionCandidate != null && queue.remove(evictionCandidate) && queue.offer(queued)) {
+                logger.d(
+                    "Dispatcher queue full, evict priority=${evictionCandidate.priority} " +
+                        "for priority=${queued.priority}"
+                )
+                selfMonitor?.recordDrop(evictionCandidate.priority)
+                return
+            }
+
+            logger.d("Dispatcher queue full, drop priority=${queued.priority}")
+            selfMonitor?.recordDrop(queued.priority)
+        } finally {
+            admissionLock.unlock()
         }
     }
 
@@ -218,7 +272,11 @@ internal class ApmDispatcher(
         selfMonitor?.recordEmit()
         return try {
             val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
-            store.append(sanitizedEvent)
+            val appendResult = store.appendWithResult(sanitizedEvent)
+            recordStorageResult(appendResult)
+            if (appendResult.acceptedEventCount <= 0) {
+                return false
+            }
             persistentUploadWorker?.signal()
             true
         } catch (error: Exception) {
@@ -299,14 +357,22 @@ internal class ApmDispatcher(
         try {
             val startTime = System.currentTimeMillis()
             // 单事务批量落盘
-            store.appendBatch(toPersist)
+            val appendResult = store.appendBatchWithResult(toPersist)
+            recordStorageResult(appendResult)
+            if (appendResult.acceptedEventCount <= 0) {
+                return
+            }
 
             if (persistentUploadWorker != null) {
                 // The durable row is the ownership hand-off point.
                 persistentUploadWorker.signal()
             } else {
                 // 内存路径逐条交给 uploader（其内部自带队列/批量）
+                val rejectedEventIds = appendResult.rejectedEvents.mapTo(hashSetOf(), ApmEvent::eventId)
                 for (event in toPersist) {
+                    if (event.eventId in rejectedEventIds) {
+                        continue
+                    }
                     if (!uploader.upload(event)) {
                         logger.w("Uploader rejected ${event.module}/${event.name}")
                         // 上传被拒绝计入丢弃
@@ -391,11 +457,14 @@ internal class ApmDispatcher(
                 val remaining = agg.flush()
                 for (event in remaining) {
                     try {
-                        store.append(event)
-                        if (persistentUploadWorker != null) {
-                            persistentUploadWorker.signal()
-                        } else {
-                            uploader.upload(event)
+                        val appendResult = store.appendWithResult(event)
+                        recordStorageResult(appendResult)
+                        if (appendResult.acceptedEventCount > 0) {
+                            if (persistentUploadWorker != null) {
+                                persistentUploadWorker.signal()
+                            } else {
+                                uploader.upload(event)
+                            }
                         }
                     } catch (e: Exception) {
                         logger.e("Failed to flush aggregated event", e)
@@ -420,6 +489,29 @@ internal class ApmDispatcher(
         } catch (error: Exception) {
             logger.e("Failed to shutdown dispatcher $name", error)
             Apm.recordInternalError("$SHUTDOWN_ERROR_TAG_PREFIX${name.replace(' ', '_')}", error)
+        }
+    }
+
+    /**
+     * Makes storage validation rejection and capacity eviction visible to SDK health reporting.
+     *
+     * @param result one storage append result
+     */
+    private fun recordStorageResult(result: EventStoreAppendResult) {
+        if (result.rejectedEvents.isNotEmpty()) {
+            logger.w("Storage rejected ${result.rejectedEvents.size} event payloads")
+            for (event in result.rejectedEvents) {
+                selfMonitor?.recordDrop(event.priority)
+            }
+            // The storage isolated bad input instead of throwing away the rest of the batch.
+            Apm.recordInternalError(
+                ERROR_STORAGE_PAYLOAD_REJECTED,
+                IllegalArgumentException("Storage rejected ${result.rejectedEvents.size} event payloads")
+            )
+        }
+        if (result.capacityEvictedEventCount > 0) {
+            logger.w("Storage capacity evicted ${result.capacityEvictedEventCount} events")
+            selfMonitor?.recordDrops(result.capacityEvictedEventCount)
         }
     }
 
@@ -454,8 +546,11 @@ internal class ApmDispatcher(
         /** Internal-error tag for one failed queued event transformation. */
         private const val ERROR_PROCESS_EVENT = "dispatcher_process_event"
 
-        /** Internal-error tag for a failed durable batch append. */
-        private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"
+    /** Internal-error tag for a failed durable batch append. */
+    private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"
+
+    /** Internal-error tag for isolated invalid or oversized durable payloads. */
+    private const val ERROR_STORAGE_PAYLOAD_REJECTED = "storage_payload_rejected"
 
         /** Internal-error tag for a failed aggregation shutdown flush. */
         private const val ERROR_AGGREGATION_FLUSH = "dispatcher_aggregation_flush"

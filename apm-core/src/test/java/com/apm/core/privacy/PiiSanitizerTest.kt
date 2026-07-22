@@ -117,6 +117,28 @@ class PiiSanitizerTest {
         assertEquals("138****5678", result.globalContext["user_contact"])
     }
 
+    /** Sensitive field names redact numeric PII and credential text before serialization. */
+    @Test
+    fun `sanitize values by sensitive field name`() {
+        val event = createEvent(
+            fields = mapOf(
+                "contact_phone" to 13812345678L,
+                "request_token_count" to 3
+            ),
+            extras = mapOf(
+                "authorization" to "Bearer raw-secret",
+                "token_count" to "2"
+            )
+        )
+
+        val result = sanitizer.sanitize(event)
+
+        assertEquals("***", result.fields["contact_phone"])
+        assertEquals(3L, result.fields["request_token_count"])
+        assertEquals("***", result.extras["authorization"])
+        assertEquals("2", result.extras["token_count"])
+    }
+
     // --- 无 PII 事件不受影响 ---
 
     @Test

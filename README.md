@@ -6,10 +6,10 @@
 
 ## 当前基线
 
-- 同步日期：2026-07-16
+- 同步日期：2026-07-22
 - 26 个构建单元：24 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 154 个主源码文件：149 Kotlin + 4 C + 1 proto
-- 92 个测试/benchmark 文件
+- 156 个主源码文件：151 Kotlin + 4 C + 1 proto
+- 93 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -21,11 +21,11 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
 
 ```text
 监控模块
-  -> Apm.emit（调用线程只捕获时间/线程/业务上下文快照）
-  -> 有界队列 2048（满时丢弃，绝不阻塞业务线程）
-  -> 可选聚合 -> 限流 -> 可选 PII 脱敏
+  -> Apm.emit（调用线程捕获时间/线程/业务上下文及 payload 快照）
+  -> 有界队列 2048（高优事件可替换最低优先级事件，生产者永不等待）
+  -> 可选聚合 -> 限流 -> 默认 PII 脱敏
   -> appendBatch（单轮最多 32 条）
-  -> SQLite durable outbox v3（默认 50,000 行，eventId 唯一）
+  -> SQLite durable outbox v3（50,000 行 / 64 MiB 活跃 payload，单事件软上限 256 KiB，eventId 唯一）
   -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> BatchApmUploader / HttpApmUploader / 自定义 uploader
   -> 接入方 Collector
@@ -33,9 +33,9 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
 
 Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网络请求。非上传进程可选择通过 `.tmp` 写入、`.ipc` 发布的文件通道交给主进程。
 
-每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避，达到 10 次重试或超过 7 天后清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
+每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避；`maxRetries` 表示首次尝试后的重试次数，达到 `maxRetries + 1` 次失败后立即清理，超过 7 天的行也会清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
-生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。单个 lazy event/聚合/脱敏异常不会杀死共享 dispatcher worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
+生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。单个 lazy event/聚合/脱敏异常不会杀死共享 dispatcher worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数或活跃 payload 预算淘汰会进入 SDK drop 计数。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
 
 ## 模块组成
 
@@ -58,7 +58,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-anr` | `libapm-anr.so` SIGQUIT 标志 + Watchdog、堆栈采样、原因分类 | 注册后自动运行，Native 失败自动降级 Watchdog |
 | `apm-launch` | 进程真实启动基线、冷/热/温启动、首帧、阶段跟踪 | Activity 生命周期自动；ContentProvider/App 阶段需宿主调用 |
 | `apm-network` | OkHttp DNS→TCP→TLS→Body、慢请求和聚合 | 接入 Interceptor/EventListener，或手动回调 |
-| `apm-fps` | Choreographer + FrameMetrics、掉帧分级 | Activity 生命周期自动 |
+| `apm-fps` | Choreographer 一秒时间窗口 + FrameMetrics 原始类型滚动累计、掉帧分级 | Activity 生命周期自动 |
 | `apm-slow-method` | Looper Hook、栈采样、ASM 方法插桩 | 运行时注册；ASM 需应用 `com.apm.slow-method` 插件 |
 | `apm-io` | 流代理、主线程/慢 IO、FD/Closeable 泄漏、可选 PLT Hook | 包装流；Native 路径依赖运行时可解析 xhook |
 | `apm-battery` | 电量下降、CPU Jiffies、WakeLock/GPS/Alarm 统计 | 电量/CPU 自动；其余需宿主转发生命周期 |
@@ -77,7 +77,7 @@ Crash 等关键事件可同步落盘，但不会在崩溃线程执行阻塞网�
 | `apm-otel-exporter` | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
-| `apm-sample-app` | 15 个监控模块的本地演示；包含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，默认输出到 Logcat |
+| `apm-sample-app` | 15 个监控模块的本地演示；包含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，并显式配置 `logcat://sample` 输出 |
 | `apm-benchmark` | 非发布 AndroidX Microbenchmark；event codec 与 SQLite outbox 真机开销 harness |
 
 ## 快速接入
@@ -283,13 +283,16 @@ apmSlowMethod {
 
 | 配置 | 默认值 | 含义 |
 |---|---:|---|
-| `endpoint` | 空 | 使用 Logcat uploader |
+| `endpoint` | 空 | 安全丢弃且不输出 payload；开发调试须显式使用 `logcat://...` |
 | `storageType` | `SQLITE` | 使用 durable outbox |
+| `maxEventPayloadBytes` | `262144` | 单事件 durable payload 软上限；超限事件单独拒绝 |
+| `maxStoredPayloadBytes` | `67108864` | SQLite 活跃 payload 逻辑预算；不含 page/WAL 开销 |
 | `enableAggregation` | `false` | 不聚合客户端指标 |
-| `enablePiiSanitization` | `false` | 不自动脱敏；生产接入应显式评审并开启 |
+| `enablePiiSanitization` | `true` | 默认按文本规则和高置信敏感字段名脱敏；关闭前必须完成隐私评审 |
+| `debugLogging` | `false` | 默认不输出 SDK 调试日志 |
 | `enableMultiProcessCoordination` | `false` | 不转发子进程事件 |
 | `enableSelfMonitoring` | `true` | 周期上报 SDK 健康事件 |
-| `enableAutoThrottle` | `true` | 健康恶化时可停用低优先级模块 |
+| `enableAutoThrottle` | `true` | 健康恶化时立即停模块；连续 3 个健康周期后按配置门禁恢复 |
 | `enableDynamicHttpEndpoint` | `false` | 不允许远程配置改变上传目的地 |
 | `httpHeaders` | 空 | 仅放协议身份等非密钥静态 Header |
 | `httpHeaderProvider` | 空 | 每次请求动态获取短期凭据 |
@@ -324,6 +327,8 @@ Matrix 的强项是成熟的 Trace/IO/SQLite/Battery 与 Native Hook 体系；KO
 ## SDK 自诊断
 
 APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同时进入 Logcat 与独立本地诊断 journal。该 journal 不依赖 `ApmDispatcher`、事件 SQLite outbox 或 uploader，因此这些组件异常时仍可保留本地证据。
+
+每个周期的 `sdk_health` 会先把仅含数值计数的摘要写入独立 journal，再以 HIGH 优先级尝试普通事件上报。即使 dispatcher 拥塞、采样或限流影响事件通道，本地仍有独立健康证据；该副本仍受诊断环与写队列的有界预算约束。
 
 默认资源上限为：200 条 / 4 MiB 内存记录、256 条 / 4 MiB 非阻塞写队列、每个 Android 进程 3 个 512 KiB app-private JSONL 文件。进程目录由进程名和稳定哈希隔离；队列满时丢弃而不阻塞宿主，文件失败时先保留排队记录等待冷却重试，并降级为内存 + Logcat，且不会递归进入 APM logger。
 
@@ -367,7 +372,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、Binder/WebView/线程池显式公共 API、FrameMetrics、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：稳定 `eventId`、SQLite v3 无损迁移、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断和可编译 benchmark harness 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 CI，以及真机 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 

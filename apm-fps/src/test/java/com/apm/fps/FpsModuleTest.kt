@@ -12,6 +12,7 @@ import org.junit.Test
  * Module 集成测试应在 Android Instrumentation 环境中执行。
  * 此文件验证 Config 层默认值和自定义值覆盖。
  */
+@Suppress("DEPRECATION")
 class FpsModuleTest {
 
     /** 默认配置开启 FPS 监控。 */
@@ -40,6 +41,13 @@ class FpsModuleTest {
     fun `default window size is 60 frames`() {
         val config = FpsConfig()
         assertEquals(60, config.windowSize)
+    }
+
+    /** 默认上报窗口为一秒，不随屏幕刷新率变化。 */
+    @Test
+    fun `default report interval is one second`() {
+        val config = FpsConfig()
+        assertEquals(1_000L, config.reportIntervalMs)
     }
 
     /** 默认 FPS 告警阈值 30。 */
@@ -99,6 +107,7 @@ class FpsModuleTest {
             jankThresholdMs = 32L,
             frozenThresholdMs = 500L,
             windowSize = 120,
+            reportIntervalMs = 5_000L,
             fpsWarnThreshold = 45,
             enableSceneDetect = false,
             enableFrameMetrics = false,
@@ -111,6 +120,7 @@ class FpsModuleTest {
         assertEquals(32L, config.jankThresholdMs)
         assertEquals(500L, config.frozenThresholdMs)
         assertEquals(120, config.windowSize)
+        assertEquals(5_000L, config.reportIntervalMs)
         assertEquals(45, config.fpsWarnThreshold)
         assertFalse(config.enableSceneDetect)
         assertFalse(config.enableFrameMetrics)
@@ -135,11 +145,10 @@ class FpsModuleTest {
         assertTrue(config.dropSeveritySevereThreshold > config.dropSeverityModerateThreshold)
     }
 
-    /** FPS 告警阈值小于窗口大小。 */
+    /** FPS 告警阈值必须为正值。 */
     @Test
-    fun `fps warn threshold is less than window size`() {
+    fun `fps warn threshold is positive`() {
         val config = FpsConfig()
-        // FPS 告警阈值（30）应小于统计窗口（60），才有告警意义
-        assertTrue(config.fpsWarnThreshold < config.windowSize)
+        assertTrue(config.fpsWarnThreshold > 0)
     }
 }

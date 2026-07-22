@@ -28,8 +28,8 @@ internal fun boundedRetryWaitMs(localDelayMs: Long, retryAfterMs: Long?): Long {
  * 重试语义（单一重试权威）：每个处理周期对一批行只做一次上传尝试；
  * 失败时 owner-aware failClaim 并按（该批最大 retry_count + 1）指数退避，
  * 下个周期重新从 outbox 选取。不存在内层重试循环，
- * 因此实际重试次数 = 行的 retry_count 上限（由 pruneExpired 控制），
- * 而不是 maxRetries × 周期数的放大值。
+ * `maxRetries` 表示首次尝试之后允许的重试次数；每次失败递增 `retry_count`，
+ * 达到 `maxRetries + 1` 时立即淘汰，不存在周期数放大。
  */
 internal class PersistentUploadWorker(
     /** Durable source of pending events. */
@@ -47,6 +47,11 @@ internal class PersistentUploadWorker(
     /** Optional SDK health monitor. */
     private val selfMonitor: SdkSelfMonitor?
 ) {
+    /** Failed-attempt count at which a row is exhausted, including the initial attempt. */
+    private val retryFailureLimit = retryPolicy.maxRetries.coerceAtLeast(0).let { configuredRetries ->
+        if (configuredRetries == Int.MAX_VALUE) Int.MAX_VALUE else configuredRetries + 1
+    }
+
     /** Unique claim owner for this worker instance. */
     private val ownerId = "${ProcessSessionId.get()}-upload-${workerSequence.incrementAndGet()}"
 
@@ -153,6 +158,9 @@ internal class PersistentUploadWorker(
                     logger.e("Failed to update persistent retry counters", error)
                     Apm.recordInternalError(ERROR_FAIL_CLAIM, error)
                 }
+                // Prune after the failed claim is released. Waiting for an empty outbox would
+                // let a permanently failing row be selected forever and never reach cleanup.
+                pruneExpiredRows()
                 // Rows remain durable; wait before selecting them again.
                 // 服务端 Retry-After 建议优先于本地指数退避
                 val retryAttempt = (batch.maxOfOrNull(PendingEvent::retryCount)?.plus(1) ?: 1)
@@ -194,11 +202,11 @@ internal class PersistentUploadWorker(
 
     /**
      * 清理重试次数耗尽或超过保留时长的 outbox 行。
-     * 仅在空闲周期调用，避免与正常上传竞争数据库。
+     * 空闲周期负责年龄清理，失败路径负责及时清理刚耗尽的行。
      */
     private fun pruneExpiredRows() {
         val pruned = try {
-            store.pruneExpired(MAX_OUTBOX_RETRIES, OUTBOX_TTL_MS)
+            store.pruneExpired(retryFailureLimit, OUTBOX_TTL_MS)
         } catch (error: Exception) {
             logger.e("Failed to prune expired outbox rows", error)
             Apm.recordInternalError(ERROR_PRUNE, error)
@@ -206,7 +214,10 @@ internal class PersistentUploadWorker(
         }
         // 有清理动作时输出警告，帮助发现持续性上传失败
         if (pruned > 0) {
-            logger.w("Pruned $pruned expired outbox rows (retry>=$MAX_OUTBOX_RETRIES or age>${OUTBOX_TTL_MS}ms)")
+            logger.w(
+                "Pruned $pruned expired outbox rows " +
+                    "(retry>=$retryFailureLimit or age>${OUTBOX_TTL_MS}ms)"
+            )
         }
     }
 
@@ -243,9 +254,6 @@ internal class PersistentUploadWorker(
 
         /** Caps exponent work for rows retained over long outages. */
         private const val MAX_BACKOFF_ATTEMPT = 16
-
-        /** 重试次数达到该值的行在空闲周期被清除。 */
-        private const val MAX_OUTBOX_RETRIES = 10
 
         /** outbox 行最长保留时长：7 天。 */
         private const val OUTBOX_TTL_MS = 7L * 24 * 60 * 60 * 1000

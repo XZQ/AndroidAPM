@@ -1,12 +1,15 @@
 package com.apm.core
 
+import com.apm.model.ApmEvent
 import com.apm.uploader.ApmUploader
+import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.HttpApmUploader
 import com.apm.uploader.HttpEndpointProvider
 import com.apm.uploader.LogcatApmUploader
 import com.apm.uploader.RetryPolicy
 import com.apm.uploader.RetryingApmUploader
 import com.apm.uploader.UploaderLogger
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 上传器工厂。
@@ -20,7 +23,8 @@ internal object UploaderFactory {
      * 选择顺序：
      * 1. 显式传入的自定义 uploader
      * 2. `http(s)` endpoint → [HttpApmUploader]
-     * 3. 其他情况 → [LogcatApmUploader]
+     * 3. 显式 `logcat://` endpoint → [LogcatApmUploader]
+     * 4. 空或未知 endpoint → 安全丢弃，不输出事件 payload
      *
      * @param config APM 全局配置
      * @param durableStore 存储是否支持持久 outbox（决定重试归属）
@@ -72,11 +76,11 @@ internal object UploaderFactory {
      * @param endpoint 上传地址
      * @param config APM 全局配置
      * @param uploaderLogger uploader 内部日志实现
-     * @return HTTP 或 Logcat uploader
+     * @return HTTP、显式 Logcat 或 payload-safe discard uploader
      */
     private fun createDefaultUploader(endpoint: String, config: ApmConfig, uploaderLogger: UploaderLogger): ApmUploader {
-        return if (endpoint.startsWith(HTTP_PREFIX) || endpoint.startsWith(HTTPS_PREFIX)) {
-            HttpApmUploader(
+        return when {
+            endpoint.startsWith(HTTP_PREFIX) || endpoint.startsWith(HTTPS_PREFIX) -> HttpApmUploader(
                 endpoint = endpoint,
                 endpointProvider = createEndpointProvider(config),
                 headers = config.httpHeaders,
@@ -85,8 +89,8 @@ internal object UploaderFactory {
                 serializationFormat = config.serializationFormat,
                 logger = uploaderLogger
             )
-        } else {
-            LogcatApmUploader(endpoint = endpoint)
+            endpoint.startsWith(LOGCAT_PREFIX) -> LogcatApmUploader(endpoint = endpoint)
+            else -> DiscardingApmUploader(uploaderLogger)
         }
     }
 
@@ -106,6 +110,38 @@ internal object UploaderFactory {
     /** HTTPS endpoint 前缀。 */
     private const val HTTPS_PREFIX = "https://"
 
+    /** Explicit development-only Logcat endpoint prefix. */
+    private const val LOGCAT_PREFIX = "logcat://"
+
     /** Signed dynamic-config key used for upload endpoint rotation. */
     private const val DYNAMIC_HTTP_ENDPOINT_KEY = "apm.upload.endpoint"
+
+    /**
+     * Safe fallback for missing or malformed delivery configuration.
+     *
+     * Events are acknowledged without payload output so a production misconfiguration cannot
+     * leak telemetry to Logcat or grow the durable outbox without bound. A generic warning is
+     * emitted once and intentionally contains no event data.
+     */
+    private class DiscardingApmUploader(
+        /** Logger used for the one-time configuration warning. */
+        private val logger: UploaderLogger
+    ) : BatchApmUploader {
+        /** Ensures high-volume telemetry cannot create repeated warning overhead. */
+        private val warned = AtomicBoolean(false)
+
+        /** Discards one batch without serializing or logging any payload. */
+        override fun uploadBatch(events: List<ApmEvent>): Boolean {
+            if (events.isEmpty()) {
+                return true
+            }
+            if (warned.compareAndSet(false, true)) {
+                logger.w(
+                    "APM delivery is disabled because endpoint is empty or unsupported; " +
+                        "configure HTTPS, an explicit logcat:// development endpoint, or a custom uploader."
+                )
+            }
+            return true
+        }
+    }
 }

@@ -1,17 +1,50 @@
 package com.apm.core.privacy
 
-import com.apm.model.ApmEvent
 import com.apm.core.ApmLogger
+import com.apm.model.ApmEvent
+import java.util.Locale
+
+/** Replacement used when a field name itself identifies credential or direct-contact data. */
+private const val REDACTED_FIELD_VALUE = "***"
+
+/** High-confidence fragments that remain sensitive even when surrounded by descriptive text. */
+private val SENSITIVE_FIELD_FRAGMENTS = setOf(
+    "password",
+    "passwd",
+    "authorization",
+    "accesstoken",
+    "refreshtoken",
+    "authtoken",
+    "apikey",
+    "credential",
+    "setcookie"
+)
+
+/** High-confidence suffixes used for common names such as user_email and auth_token. */
+private val SENSITIVE_FIELD_SUFFIXES = setOf(
+    "email",
+    "phone",
+    "mobile",
+    "idcard",
+    "nationalid",
+    "sessionid",
+    "token",
+    "secret",
+    "cookie",
+    "pwd"
+)
 
 /**
  * PII（个人身份信息）脱敏器。
  *
- * 在事件上报前对文本字段执行脱敏，满足 GDPR/CCPA/《个人信息保护法》合规要求。
+ * 在事件持久化/上报前按字段名和文本模式降低常见 PII/凭据泄露风险。
+ * 默认规则只是纵深防御，不替代接入方的数据盘点、最小化采集和合规评审。
  *
  * 脱敏流程：
- * 1. 遍历事件的所有文本字段（fields、globalContext、extras、scene）
- * 2. 对每个字符串值按序执行所有 [SanitizationRule]
- * 3. 返回脱敏后的事件副本
+ * 1. 按高置信敏感字段名直接遮蔽值，包括非字符串值
+ * 2. 遍历其余文本字段（fields、globalContext、extras、scene）
+ * 3. 对每个字符串值按序执行所有 [SanitizationRule]
+ * 4. 返回脱敏后的事件副本
  *
  * 使用方式：
  * ```kotlin
@@ -22,9 +55,17 @@ import com.apm.core.ApmLogger
  * val sanitizedEvent = sanitizer.sanitize(event)
  * ```
  *
- * 线程安全：[SanitizationRule] 列表在构造后不可变，sanitize 方法无副作用。
+ * 线程安全：构造时复制 [SanitizationRule] 列表，sanitize 方法无副作用。
+ *
+ * @param rules 按顺序应用的文本脱敏规则
+ * @param logger 保留给兼容接入和未来安全诊断使用；当前不会记录事件内容
  */
-class PiiSanitizer(private val rules: List<SanitizationRule> = DefaultSanitizationRules.all(), private val logger: ApmLogger? = null) {
+class PiiSanitizer(
+    rules: List<SanitizationRule> = DefaultSanitizationRules.all(),
+    @Suppress("UNUSED_PARAMETER") logger: ApmLogger? = null
+) {
+    /** Immutable ordered sanitizer rule snapshot. */
+    private val rules = rules.toList()
 
     /**
      * 对事件执行 PII 脱敏。
@@ -37,26 +78,20 @@ class PiiSanitizer(private val rules: List<SanitizationRule> = DefaultSanitizati
      * @return 脱敏后的事件副本
      */
     fun sanitize(event: ApmEvent): ApmEvent {
-        if (rules.isEmpty()) {
-            return event
-        }
-
-        // 对 fields 中的字符串值执行脱敏
-        val sanitizedFields = event.fields.mapValues { (_, value) ->
-            when (value) {
-                is String -> applyRules(value)
-                else -> value
-            }
+        // Field-name protection also covers numeric identifiers and credentials that regexes
+        // cannot recognize from value shape alone.
+        val sanitizedFields = event.fields.mapValues { (key, value) ->
+            sanitizeFieldValue(key, value)
         }
 
         // 对 globalContext 执行脱敏
-        val sanitizedContext = event.globalContext.mapValues { (_, value) ->
-            applyRules(value)
+        val sanitizedContext = event.globalContext.mapValues { (key, value) ->
+            sanitizeTextValue(key, value)
         }
 
         // 对 extras 执行脱敏
-        val sanitizedExtras = event.extras.mapValues { (_, value) ->
-            applyRules(value)
+        val sanitizedExtras = event.extras.mapValues { (key, value) ->
+            sanitizeTextValue(key, value)
         }
 
         // 对 scene 执行脱敏
@@ -76,8 +111,29 @@ class PiiSanitizer(private val rules: List<SanitizationRule> = DefaultSanitizati
     private fun applyRules(input: String): String {
         var result = input
         for (rule in rules) {
+            // Rules intentionally compose so custom policies see the output of built-in rules.
             result = rule.sanitize(result)
         }
         return result
+    }
+
+    /** Redacts a sensitive field by name, otherwise preserves non-text metric types. */
+    private fun sanitizeFieldValue(key: String, value: Any?): Any? {
+        if (isSensitiveFieldName(key)) {
+            return REDACTED_FIELD_VALUE
+        }
+        return if (value is String) applyRules(value) else value
+    }
+
+    /** Redacts a sensitive string-map entry by name, otherwise applies textual rules. */
+    private fun sanitizeTextValue(key: String, value: String): String {
+        return if (isSensitiveFieldName(key)) REDACTED_FIELD_VALUE else applyRules(value)
+    }
+
+    /** Returns true for normalized field names that strongly imply direct PII or credentials. */
+    private fun isSensitiveFieldName(key: String): Boolean {
+        val normalized = key.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
+        return SENSITIVE_FIELD_FRAGMENTS.any(normalized::contains) ||
+            SENSITIVE_FIELD_SUFFIXES.any(normalized::endsWith)
     }
 }

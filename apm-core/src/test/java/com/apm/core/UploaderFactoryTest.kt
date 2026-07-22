@@ -8,6 +8,7 @@ import com.apm.uploader.HttpEndpointProvider
 import com.apm.uploader.HttpApmUploader
 import com.apm.uploader.LogcatApmUploader
 import com.apm.uploader.RetryingApmUploader
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -98,15 +99,30 @@ class UploaderFactoryTest {
         )
     }
 
-    /** 空 endpoint 应回落到 Logcat uploader。 */
+    /** 空 endpoint 应安全丢弃，且绝不能隐式输出完整事件到 Logcat。 */
     @Test
-    fun `blank endpoint uses logcat uploader`() {
+    fun `blank endpoint uses payload safe discarding uploader`() {
+        val logger = RecordingLogger()
         val config = ApmConfig(
             endpoint = "",
             enableRetry = false
         )
 
-        val uploader = UploaderFactory.create(config)
+        val uploader = UploaderFactory.create(config, logger = logger)
+
+        assertFalse(uploader is LogcatApmUploader)
+        assertTrue(uploader.upload(ApmEvent(module = "test", name = "secret")))
+        assertTrue(uploader.upload(ApmEvent(module = "test", name = "second")))
+        assertEquals(1, logger.warnings.size)
+        assertFalse(logger.warnings.single().contains("secret"))
+    }
+
+    /** Logcat delivery remains available only through an explicit development endpoint. */
+    @Test
+    fun `explicit logcat endpoint uses logcat uploader`() {
+        val uploader = UploaderFactory.create(
+            ApmConfig(endpoint = "logcat://development", enableRetry = false)
+        )
 
         assertTrue(uploader is LogcatApmUploader)
     }
@@ -144,6 +160,23 @@ class UploaderFactoryTest {
             events += event
             return true
         }
+    }
+
+    /** Logger that records generic configuration warnings without using Android Logcat. */
+    private class RecordingLogger : ApmLogger {
+        /** Warning messages emitted by the factory fallback. */
+        val warnings = mutableListOf<String>()
+
+        /** Debug output is irrelevant to this test. */
+        override fun d(message: String) = Unit
+
+        /** Records one warning for assertions. */
+        override fun w(message: String) {
+            warnings += message
+        }
+
+        /** Error output is irrelevant to this test. */
+        override fun e(message: String, throwable: Throwable?) = Unit
     }
 
     /** Dynamic provider returning one fixed string and defaults for unrelated value types. */

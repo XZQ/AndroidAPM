@@ -37,6 +37,17 @@ class SdkSelfMonitorTest {
         assertEquals(2L, monitor.getTotalDropCount())
     }
 
+    /** recordDrops 应以一次原子增量记录存储批量淘汰。 */
+    @Test
+    fun `recordDrops increments drop count by batch size`() {
+        val monitor = SdkSelfMonitor()
+
+        monitor.recordDrops(7)
+        monitor.recordDrops(0)
+
+        assertEquals(7L, monitor.getTotalDropCount())
+    }
+
     /** recordUploadLatency 应更新最大延迟。 */
     @Test
     fun `recordUploadLatency updates max latency`() {
@@ -131,7 +142,7 @@ class SdkSelfMonitorTest {
         val event = report.toApmEvent()
         assertEquals("sdk_self_monitor", event.module)
         assertEquals("sdk_health_report", event.name)
-        assertEquals(ApmPriority.LOW, event.priority)
+        assertEquals(ApmPriority.HIGH, event.priority)
         assertNotNull(event.fields["emitCount"])
         assertNotNull(event.fields["dropCount"])
         assertNotNull(event.fields["queueSize"])
@@ -156,6 +167,48 @@ class SdkSelfMonitorTest {
         assertEquals(4L, fields["internalErrorCount"])
         assertEquals(5L, fields["diagnosticDroppedCount"])
         assertEquals(6L, fields["diagnosticWriteFailureCount"])
+    }
+
+    /** 独立诊断摘要只包含有界数值健康字段。 */
+    @Test
+    fun `health diagnostic summary contains all health counters`() {
+        val report = SdkHealthReport(
+            emitCount = 10L,
+            dropCount = 2L,
+            queueSize = 3,
+            avgUploadLatencyMs = 4L,
+            maxUploadLatencyMs = 5L,
+            internalErrorCount = 6L,
+            diagnosticDroppedCount = 7L,
+            diagnosticWriteFailureCount = 8L
+        )
+
+        val summary = report.toDiagnosticSummary()
+
+        assertTrue(summary.contains("emitCount=10"))
+        assertTrue(summary.contains("dropRate=0.2000"))
+        assertTrue(summary.contains("internalErrorCount=6"))
+        assertTrue(summary.contains("diagnosticWriteFailureCount=8"))
+    }
+
+    /** 独立诊断写入失败不能阻断高优先级健康事件。 */
+    @Test
+    fun `health publishing isolates diagnostic failure and emits high priority event`() {
+        val report = healthReport(dropCount = 1L, avgUploadLatencyMs = 2L)
+        var emittedPriority: ApmPriority? = null
+        var emittedFields: Map<String, Any>? = null
+
+        publishSdkHealthReport(
+            report = report,
+            diagnosticsSink = { throw IllegalStateException("diagnostics unavailable") },
+            eventSink = { priority, fields ->
+                emittedPriority = priority
+                emittedFields = fields
+            }
+        )
+
+        assertEquals(ApmPriority.HIGH, emittedPriority)
+        assertEquals(1L, emittedFields?.get("dropCount"))
     }
 
     /** AutoThrottle 在正常状态下不应建议禁用模块。 */
@@ -223,4 +276,74 @@ class SdkSelfMonitorTest {
         // 由于延迟高，应禁用 LOW 模块
         assertTrue("Should disable battery due to high latency", toDisable.contains("battery"))
     }
+
+    /** AutoThrottle 恢复前必须连续满足健康门槛，避免模块频繁启停。 */
+    @Test
+    fun `autoThrottle recovers only after three consecutive healthy periods`() {
+        val controller = AutoThrottleController()
+        val degraded = healthReport(dropCount = 60L, avgUploadLatencyMs = 2_000L)
+        val healthy = healthReport(dropCount = 5L, avgUploadLatencyMs = 500L)
+
+        val initialDecision = controller.evaluate(degraded)
+        assertTrue(initialDecision.modulesToThrottle.contains("battery"))
+
+        repeat(2) {
+            val waitingDecision = controller.evaluate(healthy)
+            assertTrue(waitingDecision.modulesToThrottle.contains("battery"))
+            assertTrue(waitingDecision.modulesToRecover.isEmpty())
+        }
+
+        val recoveryDecision = controller.evaluate(healthy)
+        assertTrue(recoveryDecision.modulesToThrottle.isEmpty())
+        assertTrue(recoveryDecision.modulesToRecover.contains("battery"))
+    }
+
+    /** 迟滞区间报告不能计入连续健康周期。 */
+    @Test
+    fun `autoThrottle neutral period resets recovery streak`() {
+        val controller = AutoThrottleController()
+        val degraded = healthReport(dropCount = 60L, avgUploadLatencyMs = 2_000L)
+        val healthy = healthReport(dropCount = 5L, avgUploadLatencyMs = 500L)
+        val neutral = healthReport(dropCount = 30L, avgUploadLatencyMs = 5_000L)
+
+        controller.evaluate(degraded)
+        repeat(2) { controller.evaluate(healthy) }
+        val neutralDecision = controller.evaluate(neutral)
+        assertTrue(neutralDecision.modulesToThrottle.contains("battery"))
+
+        repeat(2) {
+            val waitingDecision = controller.evaluate(healthy)
+            assertTrue(waitingDecision.modulesToRecover.isEmpty())
+        }
+        assertTrue(controller.evaluate(healthy).modulesToRecover.contains("battery"))
+    }
+
+    /** 更严重退化会扩大关闭范围，并在恢复时一次释放完整集合。 */
+    @Test
+    fun `autoThrottle retains expanded degradation until recovery`() {
+        val controller = AutoThrottleController()
+        controller.evaluate(healthReport(dropCount = 60L, avgUploadLatencyMs = 2_000L))
+
+        val expandedDecision = controller.evaluate(
+            healthReport(dropCount = 85L, avgUploadLatencyMs = 5_000L)
+        )
+        assertTrue(expandedDecision.modulesToThrottle.contains("battery"))
+        assertTrue(expandedDecision.modulesToThrottle.contains("network"))
+
+        val healthy = healthReport(dropCount = 5L, avgUploadLatencyMs = 500L)
+        repeat(2) { controller.evaluate(healthy) }
+        val recoveryDecision = controller.evaluate(healthy)
+        assertTrue(recoveryDecision.modulesToRecover.contains("battery"))
+        assertTrue(recoveryDecision.modulesToRecover.contains("network"))
+    }
+
+    /** 构造固定 100 次 emit 的健康报告，便于直接表达百分比。 */
+    private fun healthReport(dropCount: Long, avgUploadLatencyMs: Long): SdkHealthReport =
+        SdkHealthReport(
+            emitCount = 100L,
+            dropCount = dropCount,
+            queueSize = 0,
+            avgUploadLatencyMs = avgUploadLatencyMs,
+            maxUploadLatencyMs = avgUploadLatencyMs
+        )
 }

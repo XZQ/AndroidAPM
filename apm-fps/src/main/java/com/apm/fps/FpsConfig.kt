@@ -11,8 +11,11 @@ data class FpsConfig(
     val jankThresholdMs: Long = DEFAULT_JANK_THRESHOLD_MS,
     /** 严重卡顿阈值（毫秒）。超过此值判定为严重卡顿（冻结）。 */
     val frozenThresholdMs: Long = DEFAULT_FROZEN_THRESHOLD_MS,
-    /** FPS 统计窗口大小（帧数）。每收集 windowSize 帧计算一次 FPS。 */
+    /** 兼容字段；FPS 上报节奏由 [reportIntervalMs] 的单调时间窗口决定。 */
+    @Deprecated(message = "FPS reports use reportIntervalMs; retained for source compatibility")
     val windowSize: Int = DEFAULT_WINDOW_SIZE,
+    /** Wall-clock duration of one FPS reporting window. Values below 1 ms are clamped at runtime. */
+    val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS,
     /** FPS 低于此值触发告警。 */
     val fpsWarnThreshold: Int = DEFAULT_FPS_WARN_THRESHOLD,
     /** 是否检测场景信息（当前 Activity 名）。 */
@@ -38,6 +41,9 @@ data class FpsConfig(
 
         /** 默认统计窗口：60 帧（约 1 秒）。 */
         private const val DEFAULT_WINDOW_SIZE = 60
+
+        /** Default wall-clock reporting window: one second. */
+        private const val DEFAULT_REPORT_INTERVAL_MS = 1_000L
 
         /** FPS 告警阈值：30 fps。 */
         private const val DEFAULT_FPS_WARN_THRESHOLD = 30

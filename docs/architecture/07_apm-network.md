@@ -1,6 +1,6 @@
 # apm-network 模块
 
-> 同步日期：2026-07-16｜模块名：`network`
+> 同步日期：2026-07-21｜模块名：`network`
 
 ## 目的与接入
 
@@ -48,7 +48,7 @@ OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调�
 
 - 只覆盖接入该 interceptor/listener 的 client。
 - 不读取 request/response body 内容，`maxPayloadSize` 当前用于 URL/error 文本截断，不是 body capture 大小。
-- 不自动采集 URL query/header 中的敏感数据；生产应开启 PII sanitization 并在接入层清理 URL。
+- 不自动采集 URL query/header 中的敏感数据；生产应保持默认 PII sanitization 开启，并在接入层先行清理 URL。
 - EventListener 和 Interceptor 同时接入时应保持单一 summary owner。
 
 ## 测试

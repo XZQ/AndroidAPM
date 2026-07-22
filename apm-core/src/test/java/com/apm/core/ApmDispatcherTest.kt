@@ -8,6 +8,7 @@ import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
+import com.apm.storage.EventStoreAppendResult
 import com.apm.uploader.ApmUploader
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -16,6 +17,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * ApmDispatcher 行为测试。
@@ -79,8 +81,8 @@ class ApmDispatcherTest {
         dispatcher.dispatch(createEvent(name = "pii", fields = mapOf("phone" to RAW_PHONE)))
 
         assertTrue(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
-        assertEquals(MASKED_PHONE, store.events.single().fields["phone"])
-        assertEquals(MASKED_PHONE, uploader.events.single().fields["phone"])
+        assertEquals(REDACTED_PHONE, store.events.single().fields["phone"])
+        assertEquals(REDACTED_PHONE, uploader.events.single().fields["phone"])
 
         dispatcher.shutdown()
     }
@@ -125,6 +127,33 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
     }
 
+    /** A full ingress queue must replace lower-value work instead of dropping a critical event. */
+    @Test
+    fun `critical lazy event evicts oldest lower priority event when queue is full`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            queueCapacity = 2
+        )
+
+        dispatcher.dispatch(createEvent("blocking", priority = ApmPriority.NORMAL))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.dispatch(createEvent("low-oldest", priority = ApmPriority.LOW))
+        dispatcher.dispatch(createEvent("low-newest", priority = ApmPriority.LOW))
+        dispatcher.dispatchLazy(ApmPriority.CRITICAL) {
+            createEvent("critical", priority = ApmPriority.CRITICAL)
+        }
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(listOf("blocking", "low-newest", "critical"), store.events.map(ApmEvent::name))
+    }
+
     /** Fatal VM errors must remain visible instead of being converted into a telemetry drop. */
     @Test
     fun `critical persistence does not swallow fatal vm error`() {
@@ -140,6 +169,51 @@ class ApmDispatcherTest {
         }
 
         assertSame(fatal, actual)
+        dispatcher.shutdown()
+    }
+
+    /** 存储层隔离拒绝必须返回失败并计入 SDK 自监控。 */
+    @Test
+    fun `critical persistence reports isolated storage rejection`() {
+        val event = createEvent(name = "oversized", priority = ApmPriority.CRITICAL)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = ResultStore(
+                EventStoreAppendResult(
+                    acceptedEventCount = 0,
+                    rejectedEvents = listOf(event)
+                )
+            ),
+            uploader = RecordingUploader(),
+            logger = RecordingLogger()
+        )
+        dispatcher.selfMonitor = selfMonitor
+
+        assertTrue(!dispatcher.dispatchCriticalSync(event))
+        assertEquals(1L, selfMonitor.getTotalDropCount())
+
+        dispatcher.shutdown()
+    }
+
+    /** 容量淘汰数必须进入 SDK 自监控，不能静默丢失。 */
+    @Test
+    fun `critical persistence records storage capacity eviction`() {
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = ResultStore(
+                EventStoreAppendResult(
+                    acceptedEventCount = 1,
+                    capacityEvictedEventCount = CAPACITY_EVICTION_COUNT
+                )
+            ),
+            uploader = RecordingUploader(),
+            logger = RecordingLogger()
+        )
+        dispatcher.selfMonitor = selfMonitor
+
+        assertTrue(dispatcher.dispatchCriticalSync(createEvent(name = "retained")))
+        assertEquals(CAPACITY_EVICTION_COUNT.toLong(), selfMonitor.getTotalDropCount())
+
         dispatcher.shutdown()
     }
 
@@ -232,6 +306,56 @@ class ApmDispatcherTest {
         override fun clear() = Unit
     }
 
+    /** Store returning a fixed append result for dispatcher observability tests. */
+    private class ResultStore(
+        /** Fixed result returned for every single-event append. */
+        private val result: EventStoreAppendResult
+    ) : EventStore {
+
+        /** Legacy append is unused because the dispatcher requests a result. */
+        override fun append(event: ApmEvent) = Unit
+
+        /** Returns the configured result without retaining test data. */
+        override fun appendWithResult(event: ApmEvent): EventStoreAppendResult = result
+
+        /** No recent rows are retained. */
+        override fun readRecent(limit: Int): List<String> = emptyList()
+
+        /** Nothing is retained by this test store. */
+        override fun clear() = Unit
+    }
+
+    /** Store that keeps the worker occupied while producer-side overflow is exercised. */
+    private class BlockingFirstAppendStore(
+        /** Signals that the worker reached the first append. */
+        private val firstAppendStarted: CountDownLatch,
+        /** Releases the first append after the test fills the ingress queue. */
+        private val releaseFirstAppend: CountDownLatch
+    ) : EventStore {
+        /** Ensures only the first append blocks. */
+        private val first = AtomicBoolean(true)
+
+        /** Events persisted after admission and eviction decisions. */
+        val events = mutableListOf<ApmEvent>()
+
+        /** Blocks the first event, then records every accepted event. */
+        override fun append(event: ApmEvent) {
+            if (first.compareAndSet(true, false)) {
+                firstAppendStarted.countDown()
+                releaseFirstAppend.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            }
+            events += event
+        }
+
+        /** No recent textual view is needed. */
+        override fun readRecent(limit: Int): List<String> = emptyList()
+
+        /** Clears recorded events. */
+        override fun clear() {
+            events.clear()
+        }
+    }
+
     /**
      * 记录型上传器。
      */
@@ -317,6 +441,8 @@ class ApmDispatcherTest {
     }
 
     companion object {
+        /** Capacity drops returned by the fixed-result store. */
+        private const val CAPACITY_EVICTION_COUNT = 3
         /** 异步断言前的短暂等待。 */
         private const val WAIT_BRIEFLY_MS = 100L
 
@@ -333,6 +459,6 @@ class ApmDispatcherTest {
         private const val RAW_PHONE = "13812345678"
 
         /** 脱敏后手机号。 */
-        private const val MASKED_PHONE = "138****5678"
+        private const val REDACTED_PHONE = "***"
     }
 }

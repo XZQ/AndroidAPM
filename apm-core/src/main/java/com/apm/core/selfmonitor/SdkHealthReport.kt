@@ -54,7 +54,7 @@ data class SdkHealthReport(
             name = EVENT_SDK_HEALTH,
             kind = ApmEventKind.METRIC,
             severity = ApmSeverity.INFO,
-            priority = ApmPriority.LOW,
+            priority = ApmPriority.HIGH,
             timestamp = reportTimestamp,
             fields = mapOf(
                 FIELD_EMIT_COUNT to emitCount,
@@ -83,6 +83,19 @@ data class SdkHealthReport(
         FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT to diagnosticWriteFailureCount
     )
 
+    /** Returns a bounded, payload-free summary suitable for the independent diagnostics journal. */
+    internal fun toDiagnosticSummary(): String = buildString {
+        append(FIELD_EMIT_COUNT).append('=').append(emitCount)
+        append(' ').append(FIELD_DROP_COUNT).append('=').append(dropCount)
+        append(' ').append(FIELD_DROP_RATE).append('=').append(String.format(Locale.ROOT, "%.4f", dropRate))
+        append(' ').append(FIELD_QUEUE_SIZE).append('=').append(queueSize)
+        append(' ').append(FIELD_AVG_UPLOAD_LATENCY_MS).append('=').append(avgUploadLatencyMs)
+        append(' ').append(FIELD_MAX_UPLOAD_LATENCY_MS).append('=').append(maxUploadLatencyMs)
+        append(' ').append(FIELD_INTERNAL_ERROR_COUNT).append('=').append(internalErrorCount)
+        append(' ').append(FIELD_DIAGNOSTIC_DROPPED_COUNT).append('=').append(diagnosticDroppedCount)
+        append(' ').append(FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT).append('=').append(diagnosticWriteFailureCount)
+    }
+
     companion object {
         /** 模块名。 */
         private const val MODULE_NAME = "sdk_self_monitor"
@@ -107,4 +120,23 @@ data class SdkHealthReport(
         /** Field: diagnostics file-sink failures. */
         private const val FIELD_DIAGNOSTIC_WRITE_FAILURE_COUNT = "diagnosticWriteFailureCount"
     }
+}
+
+/**
+ * Publishes one health report to the independent local journal and the normal telemetry channel.
+ *
+ * Recoverable diagnostics failures are intentionally isolated without recursive error reporting;
+ * the high-priority telemetry attempt must still execute.
+ */
+internal inline fun publishSdkHealthReport(
+    report: SdkHealthReport,
+    diagnosticsSink: (String) -> Unit,
+    eventSink: (ApmPriority, Map<String, Any>) -> Unit
+) {
+    try {
+        diagnosticsSink(report.toDiagnosticSummary())
+    } catch (_: Exception) {
+        // The independent diagnostics sink is the terminal error boundary and cannot report itself.
+    }
+    eventSink(ApmPriority.HIGH, report.toCoreHealthFields())
 }

@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-07-16
+> 同步日期：2026-07-21
 
 ## 1. 分层关系
 
@@ -55,7 +55,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 
 - 当前写 format version：2；兼容读 version 1
 - 用于 SQLite/IPC 的完整事件恢复
-- payload 最大 2 MiB
+- codec payload 硬上限 2 MiB；SQLite 默认另施加 256 KiB durable 单事件软上限
 - string 最大 1 MiB
 - 每个 Map 最大 4096 项
 - enum 未知值回退默认
@@ -69,14 +69,16 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 ```kotlin
 interface EventStore {
     fun append(event: ApmEvent)
+    fun appendWithResult(event: ApmEvent): EventStoreAppendResult
     fun appendBatch(events: List<ApmEvent>)
+    fun appendBatchWithResult(events: List<ApmEvent>): EventStoreAppendResult
     fun readRecent(limit: Int): List<String>
     fun clear()
     fun close()
 }
 ```
 
-`appendBatch` 默认逐条调用；SQLite 覆盖为单事务批量写入。
+`appendBatch` 默认逐条调用；SQLite 覆盖为批量编码隔离 + 单事务写入。新增 result API 对旧自定义 store 有默认实现，并返回 `acceptedEventCount`、逐事件 `rejectedEvents` 与 `capacityEvictedEventCount`，供 dispatcher 把存储降级计入 SDK health。
 
 `PendingEventStore` 额外提供：
 
@@ -119,23 +121,23 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 
 ### 写入
 
-- `append` 委托 batch path
-- 一批在单个 SQLite transaction 中 insert
+- `append` 委托带结果的 batch path；普通接口遇到单事件拒绝会抛出，dispatcher 使用 result API 做隔离
+- 编码/codec 硬上限/256 KiB 软上限按单事件检查，坏事件加入 rejected，其余有效事件在单个 SQLite transaction 中 insert
 - `event_id` UNIQUE + conflict-ignore 使重复追加幂等，缓存计数只增加真实 insert
 - `data` 对新行写空串，避免与 payload 双序列化
-- cached row count 随增删维护；跨 store 删除造成的 stale delta 下限为 0，不能变成负数并绕过水位淘汰
-- 每 512 条 append 执行 COUNT(*) 重同步
+- cached row count 与 live payload bytes 随增删维护；跨 store 删除造成的 stale delta 下限为 0
+- 每 64 条成功 insert 重同步 `COUNT(*) + SUM(LENGTH(payload))`；缓存判断超限时先回读数据库真值，避免陈旧高估误删
 - WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 
 ### 读取与淘汰
 
 - upload order：priority DESC, timestamp ASC
-- capacity：50,000
-- overflow eviction：priority ASC, timestamp ASC
+- capacity：50,000 行 + 64 MiB live payload 逻辑预算；不包含 SQLite page/WAL 物理开销
+- overflow eviction：任一维度超限时 priority ASC, timestamp ASC，返回实际淘汰数
 - recent debug view：timestamp DESC，从 payload decode 后渲染 Line Protocol
 - corrupted payload：记录 id 后隔离删除
 - claim order：priority DESC, timestamp ASC；写事务覆盖 select + owner/expiry update
-- prune/容量淘汰跳过尚未过期的活动 claim
+- prune/容量淘汰跳过尚未过期的活动 claim，因此可在 lease 释放/过期前临时超出逻辑预算
 
 ### 清理
 
@@ -198,12 +200,13 @@ claimPending(owner, lease)
   -> uploadOnce
   -> success: acknowledgeClaim(owner)
   -> failure: failClaim(owner)
+            -> prune immediately when retry_count reaches maxRetries + 1
             -> delayForAttempt(max row retry + 1)
             -> clamp(max with retryAfterHint, 10 ms, 60 s)
             -> reselect later
 ```
 
-没有内层 retry loop；outbox retry_count 是唯一重试权威。worker 空闲时执行 TTL/retry prune。
+没有内层 retry loop；outbox retry_count 是唯一重试权威。`maxRetries` 表示首次尝试后的重试次数；失败路径在 `retry_count >= maxRetries + 1` 时立即 prune，空闲周期继续负责 TTL 和历史耗尽行清理。
 
 ## 10. RetryingApmUploader 兼容路径
 
@@ -243,7 +246,7 @@ claimPending(owner, lease)
 
 `apm-model`：Line Protocol、codec 边界/回放、priority、Protobuf。
 
-`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/eviction/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
+`apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/row+payload-byte eviction/单事件隔离/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
 `apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护与 HTTPS endpoint 轮换。
 

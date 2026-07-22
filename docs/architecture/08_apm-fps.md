@@ -1,6 +1,6 @@
 # apm-fps 模块
 
-> 同步日期：2026-07-10｜模块名：`fps`
+> 同步日期：2026-07-22｜模块名：`fps`
 
 ## 目的与入口
 
@@ -15,7 +15,7 @@ refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 
 ## 输出
 
-固定 window 形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。
+单调时间窗口形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。默认每 1000ms 上报一次，窗口真实时长不随 60/90/120Hz 刷新率或卡顿程度变化；旧 `windowSize` 只为源码兼容保留，不再控制上报节奏。
 
 掉帧 severity 默认按 dropped frame count 分级：moderate 4、severe 10；frozen threshold 300ms。
 
@@ -26,7 +26,8 @@ refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 | monitor | 开 |
 | jank threshold | 16ms |
 | frozen threshold | 300ms |
-| window | 60 frames |
+| report interval | 1000ms |
+| `windowSize` | 60 / deprecated compatibility only |
 | FPS warning | 30 |
 | scene detect | 开 |
 | FrameMetrics | 开 |
@@ -34,7 +35,7 @@ refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 
 ## 线程与资源
 
-Choreographer 和 Activity lifecycle 在主线程；FrameMetrics listener 按平台回调。上报进入异步 dispatcher。注册/注销异常通过 internal error 记录。
+Choreographer、Activity lifecycle 与传入主线程 Handler 的 FrameMetrics listener 都在主线程。FrameMetrics 每帧只更新固定容量 primitive ring 的滚动总量，不创建 `FrameMetricsBreakdown` 或队列节点；每个上报窗口仅创建一个 breakdown。最多保留最近 1024 帧，API 26+ 才读取 intended/actual VSync timestamp 判定 delayed frame，API 24-25 不制造预期异常；注册/注销失败和每会话首次真实读取异常通过 internal error 记录。上报消费端的 recoverable 异常也不会中断后续帧回调，事件仍进入异步 dispatcher。
 
 ## 边界
 
@@ -44,4 +45,4 @@ Choreographer 和 Activity lifecycle 在主线程；FrameMetrics listener 按平
 
 ## 测试
 
-Config、FrameStats 和 module lifecycle/计算有单元测试；真实 refresh-rate 切换、多窗口和设备掉帧需要 instrumented/performance 测试。
+Config、FrameStats、单调时间窗口、timestamp 回退、FrameMetrics primitive rolling accumulator 和 module lifecycle/计算有单元测试；真实 refresh-rate 切换、多窗口、主线程微开销和设备掉帧仍需要 instrumented/performance 测试。

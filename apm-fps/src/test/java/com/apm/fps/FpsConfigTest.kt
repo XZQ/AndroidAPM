@@ -7,6 +7,7 @@ import org.junit.Test
  * FpsConfig 默认值测试。
  * 验证 FPS 监控配置项默认值正确。
  */
+@Suppress("DEPRECATION")
 class FpsConfigTest {
 
     /** 默认开启 FPS 监控。 */
@@ -37,6 +38,13 @@ class FpsConfigTest {
         assertEquals(60, config.windowSize)
     }
 
+    /** 默认按一秒单调时间窗口上报。 */
+    @Test
+    fun `default report interval is one second`() {
+        val config = FpsConfig()
+        assertEquals(1_000L, config.reportIntervalMs)
+    }
+
     /** 默认 FPS 告警阈值 30。 */
     @Test
     fun `default fpsWarnThreshold is 30`() {
@@ -51,11 +59,13 @@ class FpsConfigTest {
             jankThresholdMs = 32L,
             frozenThresholdMs = 500L,
             windowSize = 120,
+            reportIntervalMs = 5_000L,
             fpsWarnThreshold = 45
         )
         assertEquals(32L, config.jankThresholdMs)
         assertEquals(500L, config.frozenThresholdMs)
         assertEquals(120, config.windowSize)
+        assertEquals(5_000L, config.reportIntervalMs)
         assertEquals(45, config.fpsWarnThreshold)
     }
 }
