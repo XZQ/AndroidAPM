@@ -21,8 +21,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `157` (`152` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `95`
+- Main source files: `158` (`153` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `96`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.
@@ -60,6 +60,8 @@ Eighth-batch performance-budget checks on `2026-07-22` used JDK `17.0.14`: the f
 Ninth-batch typed-durable-field checks on `2026-07-22` used JDK `17.0.14`: `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` passed model `4` suites / `40` tests and storage `6` suites / `36` tests with zero failures/errors/skips. Durable codec v3 preserves null, String, Boolean, Byte, Short, Int, Long, Float, Double, Char, BigInteger, and BigDecimal values; legacy v1/v2 payloads retain string semantics, unsupported objects fall back to bounded strings, arbitrary-precision parsing is capped at 4,096 characters, and unknown type tags reject only the corrupt event. Documentation verification passed `42` Markdown files / `41` local links. Line Protocol and Protobuf fields remain string-valued, so this change does not silently alter the collector wire contract.
 
 Post-closure full-root checks on `2026-07-22` used JDK `17.0.14`: root `testDebugUnitTest --rerun-tasks --no-daemon` passed `92` suites / `605` tests, the same-source model run passed `4` suites / `40` tests, and `apm-plugin test --rerun-tasks --no-daemon` passed `1` suite / `18` tests, all with zero failures/errors/skips. Root Android plus model therefore establishes a current `96`-suite / `645`-test client baseline; the included plugin remains reported separately. Documentation verification passed `42` Markdown files / `41` local links. This supersedes the `2026-07-16` `595`-test root baseline.
+
+Tenth-batch strict-production/consent checks on `2026-07-22` used JDK `17.0.14`: `:apm-core:testDebugUnitTest --rerun-tasks --no-daemon` passed `25` suites / `180` tests with zero failures/errors/skips, `:apm-core:lintDebug --rerun-tasks --no-daemon` passed with `No issues found`, and `python docs/verify_docs.py` passed `42` Markdown files / `41` local links. Tests cover strict/compatibility validation, explicit consent, active-runtime outbox erase, cold-start dormant erase, sticky re-init denial, and IPC artifact cleanup. This is focused current-source evidence; the preceding `605`-test root result remains the most recent full-root run rather than being silently extrapolated to this change.
 
 ## Project Boundary
 
@@ -106,7 +108,7 @@ Registration alone does not make every monitor automatic:
 - `apm-remote-config` polls authenticated HTTPS with ETag, verifies canonical JSON with pinned Ed25519/Tink keys, durably records the highest revision and LKG, and publishes only non-expired verified values. It drives global/module kill switches and event sampling/rate limits; endpoint rotation is separately opt-in and accepts only HTTPS.
 - `apm-bundle` is a transitives-only convenience artifact that exposes all published client modules from one dependency. It does not initialize/register modules or apply `com.apm.slow-method`; size-sensitive consumers should keep selecting fine-grained artifacts.
 
-Important defaults: an empty/unsupported endpoint safely acknowledges and discards without logging payload; Logcat delivery requires explicit `logcat://`; PII sanitization is enabled and covers textual patterns plus high-confidence sensitive field names; debug logging is disabled. Dynamic endpoint rotation, aggregation, multi-process coordination, native crash, Hprof dump, and fork dump remain opt-in. Static HTTP headers and the per-request credential provider are empty.
+Important defaults: `ApmRuntimeProfile.COMPATIBILITY` preserves the existing empty/unsupported endpoint safe-discard behavior and explicit `logcat://` delivery. `PRODUCTION_STRICT` fails before diagnostics/storage/thread creation unless consent is explicitly `GRANTED`, sanitization is enabled, debug logging is disabled, storage is SQLite, and delivery uses an exact HTTPS endpoint or an explicit non-Logcat custom uploader. `Apm.revokeCollectionConsent(application)` is the cold-start-safe erase API: it makes revocation sticky, stops an active runtime without draining/aggregation flush, stops delivery before erasing, and clears SQLite, File, and IPC event artifacts; every SDK process must invoke revocation to close its in-memory producers. Dynamic endpoint rotation, aggregation, multi-process coordination, native crash, Hprof dump, and fork dump remain opt-in. Static HTTP headers and the per-request credential provider are empty.
 
 AutoThrottle degradation is immediate and sticky. Recovery requires three consecutive periods at or below 20% drop rate and 3 seconds average upload latency; a degraded or hysteresis-band period resets the recovery streak. Registration and signed dynamic-config reconciliation cannot restart a module while it is held by auto-throttle, and recovery still rechecks process/dynamic/gray gates.
 
@@ -122,6 +124,7 @@ SDK self-diagnostics are separate from event delivery. They are enabled by defau
 - Do not route diagnostics file-sink failures back through `ApmLogger` or `Apm.recordInternalError`; that path must remain non-recursive.
 - Preserve the durable SQLite outbox as the default storage path.
 - Preserve SQLite transaction-scoped claim selection, owner-aware ACK/failure, expiry reclaim, and active-lease prune/trim protection.
+- Preserve fail-closed strict-profile validation before SDK resource creation and consent-revocation ordering: reject new events, stop delivery, then erase queued/persisted telemetry without a graceful flush.
 - Do not claim a config switch is an automatic hook unless a source-backed runtime path consumes it.
 
 ## Git and Documentation Policy

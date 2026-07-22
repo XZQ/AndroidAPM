@@ -6,7 +6,7 @@
 
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、单依赖 `apm-bundle` 分发、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；75% 高水位后，单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
@@ -32,8 +32,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 157：152 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 95 |
+| 主源码 | 158：153 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 96 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -98,7 +98,9 @@ Apm.emit
 
 ## 默认配置注意
 
-- endpoint 空/未知 scheme：安全确认后丢弃，不输出 payload；开发 Logcat 必须显式 `logcat://...`
+- runtime profile：默认 `COMPATIBILITY` 保持源兼容；生产显式选择 `PRODUCTION_STRICT`
+- consent：默认 `UNSPECIFIED`；strict 初始化必须显式 `GRANTED`，`DENIED` 在所有 profile 下拒绝
+- endpoint 空/未知 scheme：仅兼容模式安全确认后丢弃；strict 要求 HTTPS 或非 Logcat 自定义 uploader
 - dynamic HTTP endpoint：默认关闭；开启也只接受无凭据 HTTPS URL
 - static HTTP headers / per-request header provider：默认空；长期密钥不能打进 APK
 - SQLite durable storage：开启
@@ -114,6 +116,8 @@ Apm.emit
 - self-diagnostics：开启；200 条 / 4 MiB 内存、256 条 / 4 MiB 队列、每进程 3 × 512 KiB 文件；不自动上传
 - native crash：关闭
 - Hprof/fork dump：关闭
+
+`Apm.revokeCollectionConsent(application)` 是冷启动/停止态也能定位历史数据的撤回入口；它设置进程内 sticky gate，活动态不 drain dispatcher、不 flush aggregation，先停止 delivery，再清理 SQLite、File 与 IPC event artifacts。无参版本仅适合活动 runtime；未初始化且无法定位 app-private 目录时会诚实返回 `storageCleared=false` / `ipcFilesCleared=false`。多进程宿主必须把撤回传播到每个 SDK 进程，先关闭各自内存生产者。
 
 AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20% 且平均上传延迟 <= 3 秒才恢复。迟滞区间或再次退化会清零连续健康计数。SQLite 的 64 MiB 是活跃 payload 逻辑预算，不包含 page/WAL 物理开销；活动 upload lease 不为容量回收让路，因此可在租约释放或过期前临时超预算。
 
@@ -155,6 +159,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-22 的闭环全根刷新：JDK 17.0.14 下根 `testDebugUnitTest --rerun-tasks --no-daemon` 通过 92 suites / 605 tests，同一源码状态的 model 通过 4 suites / 40 tests，included plugin 通过 1 suite / 18 tests，全部 0 failures/errors/skips。当前根 Android + model 基线为 96 suites / 645 tests，plugin 18 tests 独立报告；该结果取代 2026-07-16 的 595-test 旧根基线。`python docs/verify_docs.py` 通过 42 Markdown / 41 links。
 
+2026-07-22 的第十批 strict-production/consent 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest --rerun-tasks --no-daemon` 通过 25 suites / 180 tests，0 failures/errors/skips；`:apm-core:lintDebug --rerun-tasks --no-daemon` 通过且文本报告为 `No issues found`；`python docs/verify_docs.py` 通过 42 Markdown / 41 links。测试覆盖 strict/compatibility 配置校验、显式 consent、活动 runtime 清理、冷启动 dormant outbox 清理、sticky re-init 拒绝和 IPC artifacts 删除。该结果是当前源码的 core 定向证据；上面的 605-test 结果仍是最近一次全根运行，不外推为本变更的全根结论。
+
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
 ## 新电脑接手
@@ -185,7 +191,7 @@ git log --oneline -n 10
 
 ## 后续优先级
 
-客户端代码可独立完成的既定缺口已经收口，包括 typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议和验收条件推进。typed wire fields 仍必须与 Collector 做版本化 schema 演进，不能把本地 codec tag 直接解释成传输协议；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
+客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议和验收条件推进。typed wire fields 仍必须与 Collector 做版本化 schema 演进，不能把本地 codec tag 直接解释成传输协议；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
 
 ## Git 与文档策略
 

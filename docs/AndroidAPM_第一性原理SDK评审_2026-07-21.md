@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，157 个主源码文件，95 个测试/benchmark 文件。2026-07-22 根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips。
+> 当前基线：`develop` 分支，27 个构建单元，158 个主源码文件，96 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；其后的 strict-production/consent core 定向验证为 25 suites / 180 tests，0 failures/errors/skips。
 
 ## 0. 评审方法：拿什么尺子量
 

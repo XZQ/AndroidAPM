@@ -1,6 +1,6 @@
 # Android APM Framework
 
-模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、单依赖完整能力 Bundle、稳定事件身份、SQLite 持久化出箱、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
+模块化 Android 应用性能监控客户端 SDK。项目提供 15 个监控模块、单依赖完整能力 Bundle、严格生产配置/同意撤回、稳定事件身份、SQLite 持久化出箱、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 上传、独立 SDK 自诊断日志、手动 Trace API、OpenTelemetry 语义映射和真机 benchmark harness。
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
@@ -8,8 +8,8 @@
 
 - 同步日期：2026-07-22
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 157 个主源码文件：152 Kotlin + 4 C + 1 proto
-- 95 个测试/benchmark 文件
+- 158 个主源码文件：153 Kotlin + 4 C + 1 proto
+- 96 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -172,6 +172,36 @@ class App : Application() {
 }
 ```
 
+### 严格生产配置与同意撤回
+
+兼容配置继续保留空 endpoint 安全丢弃和显式 `logcat://` 调试行为。正式接入应启用 fail-closed profile：
+
+```kotlin
+Apm.init(
+    this,
+    ApmConfig(
+        endpoint = "https://collector.example.com/v1/events",
+        runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
+        initialCollectionConsent = CollectionConsent.GRANTED
+    )
+)
+```
+
+`PRODUCTION_STRICT` 在创建诊断、存储或线程前校验：必须显式 `GRANTED`，必须启用 PII 脱敏、关闭 debug logging、使用 SQLite durable outbox，并提供无内嵌凭据的 HTTPS endpoint；显式非 Logcat 自定义 uploader 可替代 endpoint。空地址、HTTP、`logcat://`、`StorageType.FILE` 或 `CollectionConsent.UNSPECIFIED/DENIED` 都会拒绝初始化。
+
+用户撤回同意时，活动进程可调用无参 API；冷启动或 SDK 已停止时必须传 `Application`，才能定位上一会话的持久数据。带 `Application` 的清理会同步访问 app-private SQLite/文件，应在工作线程调用：
+
+```kotlin
+val result = Apm.revokeCollectionConsent(this)
+check(result.storageCleared && result.ipcFilesCleared)
+
+// 后续重新取得同意后，不会自动重启；显式授权并重新初始化。
+Apm.grantCollectionConsent()
+Apm.init(this, strictConfig)
+```
+
+撤回是隐私关闭而非优雅关闭：先切断新事件并停止 uploader，再丢弃 dispatcher 队列，不 flush 聚合残留，最后清理 SQLite、File 兼容存储和 `.ipc/.tmp` hand-off 文件。使用多进程时，每个可能初始化 SDK 的进程都必须收到撤回通知，以先关闭各自内存生产者；磁盘清理结果通过 `ConsentRevocationResult` 返回，不把无法定位存储误报为成功。
+
 ### 业务上下文延迟安全
 
 `bizContextProvider` 默认使用 `SYNCHRONOUS`，以兼容现有的精确事件时刻语义；此模式会在 emit 调用线程执行 provider，因此 provider 必须是 O(1)、无 IO、无等待锁。可能访问磁盘、跨进程状态或竞争锁的 provider 应改用异步缓存：
@@ -326,7 +356,9 @@ apmSlowMethod {
 
 | 配置 | 默认值 | 含义 |
 |---|---:|---|
-| `endpoint` | 空 | 安全丢弃且不输出 payload；开发调试须显式使用 `logcat://...` |
+| `runtimeProfile` | `COMPATIBILITY` | 保留历史行为；正式接入显式选择 `PRODUCTION_STRICT` |
+| `initialCollectionConsent` | `UNSPECIFIED` | strict 模式必须由宿主显式传 `GRANTED` |
+| `endpoint` | 空 | 仅兼容模式安全丢弃且不输出 payload；strict 要求 HTTPS 或非 Logcat 自定义 uploader |
 | `storageType` | `SQLITE` | 使用 durable outbox |
 | `maxEventPayloadBytes` | `262144` | 单事件 durable payload 软上限；超限事件单独拒绝 |
 | `maxStoredPayloadBytes` | `67108864` | SQLite 活跃 payload 逻辑预算；不含 page/WAL 开销 |
@@ -336,8 +368,8 @@ apmSlowMethod {
 | `bizContextCaptureMode` | `SYNCHRONOUS` | 精确事件时刻快照；provider 必须 O(1)、无 IO、无等待锁；慢 provider 使用 `ASYNC_CACHED` |
 | `bizContextRefreshIntervalMs` | `1000` | 异步缓存刷新周期，运行时约束到 100 ms–24 h |
 | `enableAggregation` | `false` | 不聚合客户端指标 |
-| `enablePiiSanitization` | `true` | 默认按文本规则和高置信敏感字段名脱敏；关闭前必须完成隐私评审 |
-| `debugLogging` | `false` | 默认不输出 SDK 调试日志 |
+| `enablePiiSanitization` | `true` | 默认按文本规则和高置信敏感字段名脱敏；strict 禁止关闭 |
+| `debugLogging` | `false` | 默认不输出 SDK 调试日志；strict 禁止开启 |
 | `enableMultiProcessCoordination` | `false` | 不转发子进程事件 |
 | `enableSelfMonitoring` | `true` | 周期上报 SDK 健康事件 |
 | `enableAutoThrottle` | `true` | 健康恶化时立即停模块；连续 3 个健康周期后按配置门禁恢复 |
@@ -423,7 +455,7 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、FPS 单调时间窗口、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断，以及带固定 time/allocation 上限和 fail-closed host verifier 的 benchmark gate 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
 仍需外部系统或真实设备的工作不伪装成“客户端未完成”：生产 Collector、租户/鉴权、服务端幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线，以及预算 gate 的首次接受真机基线与后续 soak/功耗/热/磁盘数值。完整协议、验收条件和推荐顺序统一记录在独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 

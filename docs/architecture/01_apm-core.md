@@ -1,12 +1,13 @@
 # apm-core 模块架构
 
-> 同步日期：2026-07-21
+> 同步日期：2026-07-22
 
 ## 1. 职责
 
 `apm-core` 是 SDK 控制面和数据面入口：
 
 - `Apm`：全局初始化、模块注册/停止、事件发射
+- `ApmRuntimeProfile` / `CollectionConsent`：初始化前生产约束与 sticky 撤回门禁
 - `ApmInitProvider`：可选 manifest metadata 自动初始化；无 metadata 时 no-op
 - `ApmContext`：向模块暴露 Application/config/logger/emit
 - `ApmDispatcher`：有界异步管线
@@ -23,6 +24,7 @@
 Apm.init(application, config)
   synchronized(initLock)
   -> ignore duplicate init
+  -> reject sticky revocation / validate runtime profile and consent
   -> snapshot collection-valued runtime config
   -> resolve processName
   -> create independent diagnostics recorder/logger
@@ -42,7 +44,7 @@ Apm.init(application, config)
   -> start registered modules
 ```
 
-`state` 只有基础设施组装完成后才发布。初始化首先复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；`stop` 后可以重新初始化。
+`state` 只有基础设施组装完成后才发布。runtime profile/consent 在 diagnostics、event store 和线程之前校验：`DENIED` 总是拒绝；`PRODUCTION_STRICT` 还要求显式 `GRANTED`、SQLite、PII on、debug off，以及 HTTPS endpoint 或非 Logcat custom uploader。校验通过后初始化复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此其后的部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；普通 `stop` 后可以重新初始化，consent revoke 后必须先显式 grant。
 
 初始化模式必须二选一：
 
@@ -157,7 +159,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 3. 显式 `logcat://` endpoint -> `LogcatApmUploader`
 4. 其他/空 endpoint -> payload-safe discard uploader
 
-非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
+该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
 
 默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
 
@@ -206,7 +208,7 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则；显式关闭前必须完成隐私评审。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
 
 ## 11. 自监控与降级
 
@@ -252,9 +254,11 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 
 这是有界优雅关闭，不承诺在系统强杀时运行；关键事件依赖同步 local hand-off 与下次进程重放。
 
+Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 并清空 `state`，再停止配置/业务上下文/自监控/IPC producer 与模块；dispatcher queue 直接丢弃并计入 drop，不 drain，也不 flush aggregation；persistent worker/uploader 结束后才 clear/close store。带 `Application` 的 overload 会在 runtime 已停止或冷启动时重新打开并清理 SQLite/File 路径，同时删除 IPC `.ipc/.tmp`。结果对象区分实际清理、未知计数和无法定位；重新同意需要 `grantCollectionConsent()` + `init()`。该 gate 是进程本地状态，多进程宿主负责把撤回通知送达每个 SDK 进程。
+
 ## 14. 测试重点
 
-- `ApmConfigTest`, `UploaderFactoryTest`
+- `ApmConfigTest`, `ApmConsentLifecycleTest`, `UploaderFactoryTest`
 - `ApmDispatcherTest`
 - `PersistentUploadWorkerTest`
 - `ProcessEventCoordinatorTest`
@@ -272,4 +276,6 @@ core/监控模块应使用该设施。`apm-uploader` 是下层模块，不能反
 - self-monitor health event 不是独立控制平面；详细错误由独立本地 journal 补足
 - diagnostics 默认不自动上传，分享流程由宿主显式控制
 - 公共 API 无法实现的通用隐藏 Hook 配置保留为 deprecated/false；真实能力使用显式 API
+- compatibility 保持源兼容；生产必须显式选择 strict 并声明 consent
+- consent gate 是进程本地；多进程撤回需要宿主传播，磁盘路径为 app-private shared artifacts
 - PII 默认开启；aggregation/multi-process 默认关闭，生产配置仍需明确评审

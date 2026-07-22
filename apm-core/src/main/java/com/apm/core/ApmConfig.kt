@@ -6,6 +6,8 @@ import com.apm.core.diagnostics.DiagnosticsConfig
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.HttpHeaderProvider
+import com.apm.uploader.LogcatApmUploader
+import java.net.URI
 
 /** 进程策略：控制 APM 在哪些进程中初始化。 */
 enum class ProcessStrategy {
@@ -23,6 +25,27 @@ enum class StorageType {
     FILE,
     /** SQLite 存储：50,000 条容量，按优先级淘汰，WAL 模式。 */
     SQLITE
+}
+
+/** Runtime safety profile applied before SDK infrastructure is created. */
+enum class ApmRuntimeProfile {
+    /** Backward-compatible behavior for development and existing integrations. */
+    COMPATIBILITY,
+
+    /** Fail-closed production behavior requiring durable, private, authenticated delivery. */
+    PRODUCTION_STRICT
+}
+
+/** Host-declared collection consent used by strict production initialization. */
+enum class CollectionConsent {
+    /** Compatibility value for integrations that have not adopted explicit consent declaration. */
+    UNSPECIFIED,
+
+    /** The host has obtained consent for this SDK initialization. */
+    GRANTED,
+
+    /** Collection is not permitted and SDK initialization must fail closed. */
+    DENIED
 }
 
 /**
@@ -136,7 +159,11 @@ data class ApmConfig(
     /** 业务上下文捕获模式；默认同步以保持现有事件时刻语义。 */
     val bizContextCaptureMode: BizContextCaptureMode = BizContextCaptureMode.SYNCHRONOUS,
     /** 异步缓存模式的 provider 刷新间隔；运行时约束到 100 ms..24 h。 */
-    val bizContextRefreshIntervalMs: Long = DEFAULT_BIZ_CONTEXT_REFRESH_INTERVAL_MS
+    val bizContextRefreshIntervalMs: Long = DEFAULT_BIZ_CONTEXT_REFRESH_INTERVAL_MS,
+    /** Runtime safety profile; strict production is opt-in for source compatibility. */
+    val runtimeProfile: ApmRuntimeProfile = ApmRuntimeProfile.COMPATIBILITY,
+    /** Consent state captured by the host before this initialization attempt. */
+    val initialCollectionConsent: CollectionConsent = CollectionConsent.UNSPECIFIED
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -176,6 +203,58 @@ data class ApmConfig(
         private const val DEFAULT_AGGREGATION_WINDOW_MS = 300_000L
     }
 }
+
+/**
+ * Validates fail-closed runtime invariants before diagnostics, storage, or module threads start.
+ *
+ * Compatibility mode preserves existing endpoint and privacy switches. Strict production requires
+ * explicit consent, durable storage, mandatory sanitization, disabled debug logging, and either a
+ * verified HTTPS endpoint or a non-Logcat custom uploader.
+ */
+internal fun ApmConfig.validateForRuntime() {
+    require(initialCollectionConsent != CollectionConsent.DENIED) {
+        "APM collection consent is denied"
+    }
+    if (runtimeProfile != ApmRuntimeProfile.PRODUCTION_STRICT) {
+        return
+    }
+    require(initialCollectionConsent == CollectionConsent.GRANTED) {
+        "PRODUCTION_STRICT requires explicit GRANTED collection consent"
+    }
+    require(!debugLogging) {
+        "PRODUCTION_STRICT forbids debug logging"
+    }
+    require(enablePiiSanitization) {
+        "PRODUCTION_STRICT requires PII sanitization"
+    }
+    require(storageType == StorageType.SQLITE) {
+        "PRODUCTION_STRICT requires the durable SQLite outbox"
+    }
+    require(uploader !is LogcatApmUploader) {
+        "PRODUCTION_STRICT forbids Logcat event delivery"
+    }
+    require(uploader != null || endpoint.isStrictHttpsEndpoint()) {
+        "PRODUCTION_STRICT requires an HTTPS endpoint or a custom uploader"
+    }
+}
+
+/** Returns whether this exact endpoint is an HTTPS URL without embedded credentials. */
+private fun String.isStrictHttpsEndpoint(): Boolean {
+    if (isBlank() || this != trim()) {
+        return false
+    }
+    return try {
+        val parsed = URI(this)
+        parsed.scheme.equals(STRICT_HTTPS_SCHEME, ignoreCase = true) &&
+            !parsed.host.isNullOrBlank() &&
+            parsed.userInfo == null
+    } catch (_: Exception) {
+        false
+    }
+}
+
+/** HTTPS scheme required by strict production delivery. */
+private const val STRICT_HTTPS_SCHEME = "https"
 
 /** Controls where and when [BizContextProvider] is evaluated. */
 enum class BizContextCaptureMode {

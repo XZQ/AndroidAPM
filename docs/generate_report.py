@@ -80,8 +80,8 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "157", "152 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "95", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
+        ("主源码", "158", "153 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "96", "JVM、Robolectric、instrumented benchmark、host budget gate、插件和 native 契约测试"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -107,6 +107,7 @@ def add_bullets(document: Document, items: list[str]) -> None:
 def add_capability_table(document: Document) -> None:
     """Describe capabilities without presenting configured flags as implementations."""
     rows = [
+        ("生产安全入口", "Strict profile、显式 consent、撤回清理", "初始化前 fail closed；停止 delivery 后清理 queue/outbox/IPC"),
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
@@ -179,6 +180,8 @@ def build_status_report() -> Document:
     add_bullets(
         document,
         [
+            "Strict production profile 在创建 SDK 资源前校验显式 consent、HTTPS/自定义 uploader、SQLite、PII 与 debug logging。",
+            "Consent revoke 不做优雅 drain；停止 delivery 后清理活动队列、SQLite/File outbox 与 IPC hand-off 文件。",
             "内存队列有界，批处理在专用工作循环完成，避免调用方同步执行数据库写入。",
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",

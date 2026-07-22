@@ -1,5 +1,8 @@
 package com.apm.core
 
+import com.apm.model.ApmEvent
+import com.apm.uploader.ApmUploader
+import com.apm.uploader.LogcatApmUploader
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -181,5 +184,72 @@ class ApmConfigTest {
         assertEquals("before", snapshot.defaultContext["app"])
         assertEquals("before", snapshot.httpHeaders["X-App"])
         assertEquals(listOf("network"), snapshot.customProcessModules["worker"])
+    }
+
+    /** Compatibility mode keeps the existing empty-endpoint behavior for source compatibility. */
+    @Test
+    fun `compatibility profile accepts existing defaults`() {
+        ApmConfig().validateForRuntime()
+    }
+
+    /** Strict production requires an explicit grant and a secure delivery path. */
+    @Test
+    fun `strict production accepts explicit consent and https`() {
+        ApmConfig(
+            runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
+            initialCollectionConsent = CollectionConsent.GRANTED,
+            endpoint = "https://collector.example.com/v1/events"
+        ).validateForRuntime()
+    }
+
+    /** A custom non-Logcat uploader is a valid strict delivery path without an endpoint string. */
+    @Test
+    fun `strict production accepts custom uploader`() {
+        ApmConfig(
+            runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
+            initialCollectionConsent = CollectionConsent.GRANTED,
+            uploader = AcceptingUploader()
+        ).validateForRuntime()
+    }
+
+    /** Missing consent, unsafe endpoints, and weakened privacy settings fail before initialization. */
+    @Test
+    fun `strict production rejects unsafe configuration`() {
+        val strictBase = ApmConfig(
+            runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
+            initialCollectionConsent = CollectionConsent.GRANTED,
+            endpoint = "https://collector.example.com/v1/events"
+        )
+
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(initialCollectionConsent = CollectionConsent.UNSPECIFIED).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(endpoint = "").validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(endpoint = "http://collector.example.com").validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(endpoint = "logcat://production").validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(enablePiiSanitization = false).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(debugLogging = true).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(storageType = StorageType.FILE).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(uploader = LogcatApmUploader()).validateForRuntime()
+        }
+    }
+
+    /** Minimal custom uploader used only to validate strict-profile routing. */
+    private class AcceptingUploader : ApmUploader {
+        /** Accepts the test event without performing IO. */
+        override fun upload(event: ApmEvent): Boolean = true
     }
 }

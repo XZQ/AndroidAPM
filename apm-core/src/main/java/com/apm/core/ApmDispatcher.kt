@@ -35,6 +35,19 @@ internal inline fun runAggregationMaintenance(
 }
 
 /**
+ * Process-local event data removed during consent revocation.
+ *
+ * @property discardedQueuedEventCount events removed before dispatcher processing
+ * @property clearedStoredEventCount pending durable rows observed before clearing, when supported
+ * @property storageCleared whether [EventStore.clear] completed successfully
+ */
+internal data class ConsentStorageCleanupResult(
+    val discardedQueuedEventCount: Int,
+    val clearedStoredEventCount: Int?,
+    val storageCleared: Boolean
+)
+
+/**
  * APM 事件分发器。
  * 负责聚合 → 限流检查 → PII 脱敏 → 本地存储 → 上传的五阶段流水线。
  *
@@ -614,6 +627,74 @@ internal class ApmDispatcher(
         shutdownPhase("store") { store.close() }
     }
 
+    /**
+     * Stops delivery without draining queued or aggregated telemetry, then erases local event data.
+     *
+     * Consent revocation deliberately differs from graceful [shutdown]: queued work is discarded,
+     * aggregation residue is not flushed, the uploader is stopped before storage is cleared, and
+     * the outbox is closed only after the clear attempt.
+     *
+     * @return counts and success state for the process-local privacy erase
+     */
+    internal fun shutdownForConsentRevocation(): ConsentStorageCleanupResult {
+        shutdown = true
+        shutdownPhase("aggregation executor") { aggregationExecutor?.shutdownNow() }
+        running = false
+
+        val discardedQueuedEvents = clearQueuedEventsForConsentRevocation()
+        workerThread.interrupt()
+        try {
+            workerThread.join(DISPATCH_SHUTDOWN_TIMEOUT_MS)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        if (workerThread.isAlive) {
+            logger.w("Dispatcher did not stop within ${DISPATCH_SHUTDOWN_TIMEOUT_MS}ms during consent revocation")
+        }
+
+        if (persistentUploadWorker != null) {
+            shutdownPhase("persistent uploader") { persistentUploadWorker.shutdown() }
+        } else {
+            shutdownPhase("uploader") { uploader.shutdown() }
+        }
+
+        val storedEventCount = try {
+            (store as? PendingEventStore)?.pendingCount()
+        } catch (error: Exception) {
+            logger.e("Failed to count pending events before consent erase", error)
+            Apm.recordInternalError(ERROR_CONSENT_PENDING_COUNT, error)
+            null
+        }
+        val storageCleared = try {
+            store.clear()
+            true
+        } catch (error: Exception) {
+            logger.e("Failed to clear event storage after consent revocation", error)
+            Apm.recordInternalError(ERROR_CONSENT_STORAGE_CLEAR, error)
+            false
+        }
+        shutdownPhase("store") { store.close() }
+        return ConsentStorageCleanupResult(
+            discardedQueuedEventCount = discardedQueuedEvents,
+            clearedStoredEventCount = storedEventCount,
+            storageCleared = storageCleared
+        )
+    }
+
+    /** Removes all queued work and resets per-module occupancy under the admission lock. */
+    private fun clearQueuedEventsForConsentRevocation(): Int {
+        admissionLock.lock()
+        return try {
+            val discarded = queue.size
+            queue.clear()
+            queuedModuleCounts.clear()
+            selfMonitor?.recordDrops(discarded)
+            discarded
+        } finally {
+            admissionLock.unlock()
+        }
+    }
+
     /** Executes one dispatcher shutdown phase and continues after degradation. */
     private inline fun shutdownPhase(name: String, block: () -> Unit) {
         try {
@@ -710,6 +791,12 @@ internal class ApmDispatcher(
 
         /** Internal-error tag for a custom dynamic policy provider failure. */
         private const val ERROR_DYNAMIC_EVENT_POLICY = "dispatcher_dynamic_event_policy"
+
+        /** Internal-error tag for a failed pending-row count during consent erase. */
+        private const val ERROR_CONSENT_PENDING_COUNT = "consent_pending_count"
+
+        /** Internal-error tag for a failed event-store clear during consent erase. */
+        private const val ERROR_CONSENT_STORAGE_CLEAR = "consent_storage_clear"
 
         /** worker 单轮最多批量取出的事件数。 */
         private const val MAX_BATCH_DRAIN = 32

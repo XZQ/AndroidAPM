@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜27 个构建单元｜157 个主源码文件（152 Kotlin + 4 C + 1 proto）｜95 个测试/benchmark 文件
+> 文档同步：2026-07-22｜27 个构建单元｜158 个主源码文件（153 Kotlin + 4 C + 1 proto）｜96 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -52,8 +52,8 @@ monitor module
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 157：152 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 95 |
+| 主源码 | 158：153 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 96 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -134,7 +134,7 @@ monitor module
 
 ## 六、分发与宿主开销
 
-`Apm.init` 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。业务上下文默认采用 `SYNCHRONOUS` 精确事件时刻快照，兼容既有语义，但 provider 必须 O(1)、无 IO、无等待锁。可能阻塞的 provider 应使用 `ASYNC_CACHED`：`apm-biz-context` 后台线程按 100 ms–24 h 有界周期刷新，emit 只原子读取最近一次成功的不可变快照；失败保留 LKG，首次成功前为空。登录、退出或租户切换可调用 `Apm.refreshBizContext()` 合并式触发后台刷新，重复调用不无界积压。两种模式都会复制宿主 map，后续修改不会改写已发生事件，recoverable provider 异常记录 internal error 而不向业务调用栈外泄。
+`Apm.init` 先执行 runtime profile 校验，再创建 diagnostics/store/thread。默认 `COMPATIBILITY` 保留历史接入；`PRODUCTION_STRICT` 必须显式 `CollectionConsent.GRANTED`、SQLite durable outbox、PII 脱敏、关闭 debug logging，并使用精确 HTTPS endpoint 或显式非 Logcat custom uploader。`DENIED` 在所有 profile 下拒绝初始化。校验通过后 SDK 会复制宿主持有的配置集合；`Apm.emit` 在调用线程捕获时间戳、线程名及顶层 fields/extras 快照，再把事件构建延迟到 dispatcher worker。业务上下文默认采用 `SYNCHRONOUS` 精确事件时刻快照，兼容既有语义，但 provider 必须 O(1)、无 IO、无等待锁。可能阻塞的 provider 应使用 `ASYNC_CACHED`：`apm-biz-context` 后台线程按 100 ms–24 h 有界周期刷新，emit 只原子读取最近一次成功的不可变快照；失败保留 LKG，首次成功前为空。登录、退出或租户切换可调用 `Apm.refreshBizContext()` 合并式触发后台刷新，重复调用不无界积压。两种模式都会复制宿主 map，后续修改不会改写已发生事件，recoverable provider 异常记录 internal error 而不向业务调用栈外泄。
 
 队列容量 2048，producer 准入只做非等待 `tryLock` + `offer`；默认在总队列达到 75% 后，已占总容量 50% 的同一来源模块不能继续写入 NORMAL/LOW，给其他模块预留压力槽位。HIGH/CRITICAL 绕过该隔离门禁；满载时仍可原子替换队列内最旧的更低优先级事件，同级保持先到先得。竞争时立即丢弃并计入自监控，业务线程不等待 worker 或其他 producer。模块占用用有界队列内的 O(1) 计数维护，元素 drain 或淘汰时同步释放，不扫描 payload。
 
@@ -144,11 +144,13 @@ worker 单轮 drain 最多 32 条：
 2. 签名动态采样；按全局→模块→事件覆盖，ERROR/FATAL 绕过
 3. 可选聚合
 4. 动态 rate limit；按全局→模块→事件覆盖，ERROR/FATAL 绕过
-5. PII 脱敏（默认启用，可显式关闭）
+5. PII 脱敏（默认启用；仅 compatibility 可显式关闭，strict 禁止）
 6. `appendBatch` 单事务落盘
 7. 唤醒 persistent uploader
 
-停止顺序：先切断新事件入口，再停止模块，排空 dispatcher，处理聚合残留，停止 uploader，关闭 store。排空均有超时上限。
+正常停止顺序：先切断新事件入口，再停止模块，排空 dispatcher，处理聚合残留，停止 uploader，关闭 store。排空均有超时上限。
+
+同意撤回采用不同的隐私顺序：设置进程内 sticky gate 并切断新 emit，停止配置/模块/IPC producer，丢弃 dispatcher queue 且不 flush 聚合残留，停止 uploader 后清理 store。`Apm.revokeCollectionConsent(application)` 还会清理上一会话的 SQLite、File 兼容存储和 `.ipc/.tmp` artifacts，适合冷启动/已停止状态；无参版本未初始化且无法定位 app-private 目录时明确返回未清理。重新同意必须先调用 `grantCollectionConsent()` 再显式 `init`，不会自动复活。多进程宿主必须把撤回传播到每个 SDK 进程以关闭各自内存 producer。
 
 ## 七、持久化与上传
 
@@ -181,7 +183,7 @@ PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证
 
 `StorageType.FILE` 是 500 行 ring buffer 兼容路径，不提供成功确认、重启重放等 durable 语义，初始化会输出降级警告。
 
-默认 HTTP uploader 支持静态协议身份 Header 和逐请求 `HttpHeaderProvider`。动态 provider 用于短期 Token，每次网络请求重新取值；provider 异常、Header 控制字符或覆盖 Content-Type/Content-Length/Host 等 transport Header 时请求失败，durable 行保留。`enableDynamicHttpEndpoint=true` 后才读取签名键 `apm.upload.endpoint`，且远程值只接受无 user-info 的 HTTPS URL；非法值或 provider 异常回退 APK 内置 endpoint。未配置或使用未知 scheme 时采用 payload-safe discard uploader：事件被确认丢弃以避免 outbox 无界增长，只输出一次不含 payload 的配置警告；开发期 Logcat 输出必须显式配置 `logcat://...`。
+默认 HTTP uploader 支持静态协议身份 Header 和逐请求 `HttpHeaderProvider`。动态 provider 用于短期 Token，每次网络请求重新取值；provider 异常、Header 控制字符或覆盖 Content-Type/Content-Length/Host 等 transport Header 时请求失败，durable 行保留。`enableDynamicHttpEndpoint=true` 后才读取签名键 `apm.upload.endpoint`，且远程值只接受无 user-info 的 HTTPS URL；非法值或 provider 异常回退 APK 内置 endpoint。compatibility 模式未配置或使用未知 scheme 时采用 payload-safe discard uploader：事件被确认丢弃以避免 outbox 无界增长，只输出一次不含 payload 的配置警告；开发期 Logcat 输出必须显式配置 `logcat://...`。strict 模式在 factory 之前拒绝空/HTTP/Logcat endpoint，除非提供显式非 Logcat custom uploader。
 
 `apm-remote-config` 通过认证 GET `/v1/config` 拉取配置，发送 app/environment/installation 身份与 ETag。响应按服务端 canonical JSON 规则重建签名字节，并用 APK 固定的 32 字节原始 Ed25519 公钥通过 Tink 验签。只有验签、revision 单调、同 revision 签名一致且 app-private 缓存同步提交成功后才发布；204 主动停用，304 更新可信时间锚点，网络失败沿用未过期 LKG。最高 revision 即使配置过期或停用也不会回退。Android 平台原生 Ed25519 保证从 API 33 才开始，因此 minSdk 24 使用官方支持 Android 24+ 的 Tink 实现。
 
@@ -215,6 +217,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 | 配置 | 默认 | 说明 |
 |---|---:|---|
+| `runtimeProfile` | `COMPATIBILITY` | 保持源兼容；正式接入显式选择 `PRODUCTION_STRICT` |
+| `initialCollectionConsent` | `UNSPECIFIED` | strict 必须显式 `GRANTED`；`DENIED` 总是拒绝 |
 | `storageType` | `SQLITE` | durable outbox |
 | `maxEventPayloadBytes` | 262144 | 单事件 durable payload 软上限，超限单独拒绝 |
 | `maxStoredPayloadBytes` | 67108864 | 活跃 payload 逻辑预算，不含 SQLite page/WAL 开销 |
@@ -223,11 +227,11 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `dispatcherMaxModuleQueueSharePercent` | 50 | 压力期单模块占总容量上限，运行时不超过高水位 |
 | `bizContextCaptureMode` | `SYNCHRONOUS` | 精确事件时刻快照；provider 必须 O(1)/无 IO/无等待锁，慢 provider 使用 `ASYNC_CACHED` |
 | `bizContextRefreshIntervalMs` | 1000 ms | 异步缓存刷新周期，运行时约束到 100 ms–24 h |
-| `endpoint` | 空 | 安全丢弃、不输出 payload；Logcat 需显式 `logcat://...` |
+| `endpoint` | 空 | 仅 compatibility 安全丢弃；strict 要求 HTTPS 或非 Logcat custom uploader |
 | `rateLimitEventsPerWindow` | 10/60s | 按 module/name 分桶 |
 | `enableAggregation` | false | 高频 metric 与 alert 去重不默认启用 |
-| `enablePiiSanitization` | true | 文本规则 + 高置信敏感字段名；关闭前需要隐私评审 |
-| `debugLogging` | false | 默认关闭 SDK 调试日志 |
+| `enablePiiSanitization` | true | 文本规则 + 高置信敏感字段名；strict 禁止关闭 |
+| `debugLogging` | false | 默认关闭 SDK 调试日志；strict 禁止开启 |
 | `enableRetry` | true | durable 路径由 persistent worker 负责 |
 | `uploadBatchSize` | 20 | 单次 durable batch 上限 |
 | `uploadLeaseDurationMs` | 120000 ms | 一次上传 owner 租约 |
@@ -297,6 +301,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-22 的客户端闭环全根刷新在 JDK 17.0.14 下执行根 `testDebugUnitTest --rerun-tasks --no-daemon`：92 suites / 605 tests；同一源码状态的 `:apm-model:test`：4 suites / 40 tests；included `apm-plugin test --rerun-tasks --no-daemon`：1 suite / 18 tests。全部为 0 failures/errors/skips。根 Android + model 形成当前 96 suites / 645 tests 的客户端基线，plugin 18 tests 独立报告；这取代 2026-07-16 的 595-test 旧根基线。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。
 
+2026-07-22 的第十批 strict-production/consent hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest --rerun-tasks --no-daemon`：25 suites / 180 tests，0 failures/errors/skips；`:apm-core:lintDebug --rerun-tasks --no-daemon` 通过，文本报告为 `No issues found`；`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。测试覆盖 compatibility/strict 配置、显式 consent、活动 runtime 清理、冷启动 dormant outbox 清理、sticky re-init 拒绝与 IPC artifact 删除。该结果是当前源码的 core 定向证据；前述 605-test 仍是最近全根运行，不将旧全根结果自动外推到本变更。
+
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
 设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。物理机在安装 benchmark APK 时被设备安全策略以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此未产生物理性能数值；emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后，`encodeDurableEvent`、`decodeDurableEvent`、`appendDispatcherBatch` 三个方法均完成并生成 benchmark JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
@@ -305,7 +311,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-95 个测试/benchmark 文件覆盖配置默认值、事件 identity/typed codec v1-v3/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
+96 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、配置默认值、事件 identity/typed codec v1-v3/Protobuf、dispatcher 单事件故障隔离/fatal 边界/优先级淘汰/单模块高水位隔离与关闭开关、业务上下文同步快照/异步线程/LKG/请求合并/停止、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 单调时间窗口与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 host budget verifier 的通过/超限/缺项/emulator 完整性分支。
 
 测试通过不能代替以下验证：
 
@@ -317,7 +323,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、单事件/总量 payload 预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、FPS 单调时间窗口、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断，以及带固定预算和 host verifier 的 benchmark gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 本地 durable round-trip 已通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。Line Protocol 与 Protobuf 继续输出字符串 field map；如果未来需要 Collector 接收 typed wire fields，仍必须通过服务端协商的新协议版本演进，不能复用本次客户端本地格式升级静默改变传输。
 

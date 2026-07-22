@@ -58,6 +58,26 @@ class ProcessEventCoordinatorTest {
         }
     }
 
+    /** Consent revocation removes ready hand-off files instead of flushing or consuming them. */
+    @Test
+    fun `consent revocation clears ipc artifacts`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-consent-test").toFile()
+        try {
+            val coordinator = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            coordinator.start()
+            assertTrue(coordinator.writeEventSync(ApmEvent(module = "ipc", name = "private")))
+
+            val result = coordinator.stopAndClearForConsentRevocation()
+
+            assertEquals(1, result.clearedFileCount)
+            assertTrue(result.allFilesCleared)
+            assertEquals(0, dir.listFilesByExtension(READY_EXTENSION).size)
+            assertEquals(0, dir.listFilesByExtension(TEMP_EXTENSION).size)
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
     /** 上传进程扫描应消费已发布事件并删除 ready 文件。 */
     @Test
     fun `scanner consumes published ipc file and deletes it`() {

@@ -7,8 +7,20 @@ import com.apm.model.ApmEventCodec
 import java.io.File
 import java.io.FileWriter
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * IPC artifacts removed during process-local consent revocation.
+ *
+ * @property clearedFileCount ready or temporary hand-off files successfully removed
+ * @property allFilesCleared whether every observed SDK hand-off file was removed
+ */
+internal data class IpcConsentCleanupResult(
+    val clearedFileCount: Int,
+    val allFilesCleared: Boolean
+)
 
 /**
  * 多进程事件协调器。
@@ -123,14 +135,19 @@ class ProcessEventCoordinator internal constructor(
             return
         }
 
-        writeExecutor.execute {
-            try {
-                // 进入合批缓冲：按行数阈值或定时器触发批量发布
-                bufferEvent(event)
-            } catch (e: Exception) {
-                // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
-                Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
+        try {
+            writeExecutor.execute {
+                try {
+                    // 进入合批缓冲：按行数阈值或定时器触发批量发布
+                    bufferEvent(event)
+                } catch (e: Exception) {
+                    // IPC 写入失败不影响主流程，但记入自监控避免静默丢失
+                    Apm.recordInternalError(ERROR_TAG_IPC_WRITE, e)
+                }
             }
+        } catch (error: RejectedExecutionException) {
+            // Consent revocation may close the writer between the started check and submission.
+            Apm.recordInternalError(ERROR_TAG_IPC_WRITE, error)
         }
     }
 
@@ -208,11 +225,13 @@ class ProcessEventCoordinator internal constructor(
         if (isUploaderProcess) {
             return false
         }
-        if (!started) {
-            return false
+        synchronized(pendingLock) {
+            if (!started) {
+                return false
+            }
+            // Serialize against consent cleanup so every completed file is deleted before return.
+            return runCatching { publishBatchFile(listOf(event)) }.getOrDefault(false)
         }
-        // critical 事件不进缓冲，立即单文件发布保证可见性
-        return runCatching { publishBatchFile(listOf(event)) }.getOrDefault(false)
     }
 
     /**
@@ -432,7 +451,67 @@ class ProcessEventCoordinator internal constructor(
         scanExecutor = null
     }
 
+    /**
+     * Stops IPC without flushing buffered telemetry and deletes process-shared hand-off artifacts.
+     *
+     * @return deletion count and completeness for the local IPC directory
+     */
+    internal fun stopAndClearForConsentRevocation(): IpcConsentCleanupResult {
+        started = false
+        synchronized(pendingLock) {
+            pendingEvents.clear()
+            flushScheduled = false
+        }
+        // Cancel queued writes before waiting for any in-flight file operation to finish.
+        writeExecutor.shutdownNow()
+        scanExecutor?.shutdownNow()
+        var writersStopped = false
+        var scannerStopped = scanExecutor == null
+        try {
+            writersStopped = writeExecutor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            scannerStopped = scanExecutor?.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS) ?: true
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+        scanExecutor = null
+        synchronized(pendingLock) {
+            // An in-flight buffer callback may have raced the first clear before observing shutdown.
+            pendingEvents.clear()
+            flushScheduled = false
+        }
+        val cleanup = clearIpcFilesForConsentRevocation()
+        return cleanup.copy(allFilesCleared = cleanup.allFilesCleared && writersStopped && scannerStopped)
+    }
+
+    /** Deletes every ready or temporary SDK hand-off file after IPC executors have stopped. */
+    private fun clearIpcFilesForConsentRevocation(): IpcConsentCleanupResult {
+        return clearIpcFilesForConsentRevocation(ipcDir)
+    }
+
     companion object {
+        /** Clears dormant ready/temp IPC files when no coordinator runtime is available. */
+        internal fun clearConsentArtifacts(context: Context): IpcConsentCleanupResult {
+            return clearIpcFilesForConsentRevocation(File(context.cacheDir, IPC_DIR_NAME))
+        }
+
+        /** Performs best-effort deletion after active writers have stopped or before SDK init. */
+        private fun clearIpcFilesForConsentRevocation(ipcDirectory: File): IpcConsentCleanupResult {
+            val files = ipcDirectory.listFiles { file ->
+                file.name.startsWith(IPC_FILE_PREFIX) &&
+                    (file.name.endsWith(IPC_FILE_EXTENSION) || file.name.endsWith(IPC_TEMP_EXTENSION))
+            }.orEmpty()
+            var cleared = 0
+            var complete = true
+            for (file in files) {
+                if (file.delete() || !file.exists()) {
+                    cleared += 1
+                } else {
+                    complete = false
+                }
+            }
+            return IpcConsentCleanupResult(clearedFileCount = cleared, allFilesCleared = complete)
+        }
+
         /** 自监控 tag：IPC 写入失败。 */
         private const val ERROR_TAG_IPC_WRITE = "ipc_write"
 

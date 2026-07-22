@@ -161,7 +161,7 @@ File path 是显式 `StorageType.FILE` 的兼容/调试方案：
 - `readRecent` 返回 Line Protocol
 - 不实现 `PendingEventStore`
 
-它没有成功确认删除、重启 outbox 重放和 durable retry。core 初始化会输出清晰降级警告。不要把它画成默认生产主链路。
+它没有成功确认删除、重启 outbox 重放和 durable retry。core compatibility 初始化会输出清晰降级警告；`PRODUCTION_STRICT` 在资源创建前直接拒绝 FILE。不要把它画成默认生产主链路。
 
 ## 7. Uploader 契约
 
@@ -194,7 +194,7 @@ interface BatchApmUploader : ApmUploader {
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。
+每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict profile 在 uploader factory 之前拒绝 HTTP/Logcat/空 endpoint（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
 
 ## 9. Durable retry
 

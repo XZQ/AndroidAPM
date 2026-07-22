@@ -100,6 +100,10 @@ object Apm {
     @Volatile
     private var state: State? = null
 
+    /** Sticky process-local consent revocation gate; explicit grant is required before re-init. */
+    @Volatile
+    private var collectionConsentRevoked: Boolean = false
+
     /** 初始化锁，防止多线程并发 init 导致竞态条件。 */
     private val initLock = Any()
 
@@ -120,6 +124,10 @@ object Apm {
             if (state != null) {
                 return
             }
+            check(!collectionConsentRevoked) {
+                "APM collection consent is revoked; call grantCollectionConsent after host consent"
+            }
+            config.validateForRuntime()
             try {
                 doInit(application, config)
             } catch (error: Exception) {
@@ -572,6 +580,169 @@ object Apm {
         }
     }
 
+    /**
+     * Records a new host consent grant and allows a later [init] call.
+     *
+     * This method does not restart the SDK automatically. The host must call [init] with a fresh
+     * configuration after obtaining consent so credentials and privacy context are also refreshed.
+     */
+    fun grantCollectionConsent() {
+        synchronized(initLock) {
+            collectionConsentRevoked = false
+        }
+    }
+
+    /** Returns whether collection has been revoked in this Android process since the last grant. */
+    fun isCollectionConsentRevoked(): Boolean = collectionConsentRevoked
+
+    /**
+     * Revokes collection consent, stops delivery without draining, and clears pending telemetry.
+     *
+     * The revocation gate is sticky for this process. Every app process using the SDK must invoke
+     * this API when consent changes; a later opt-in requires [grantCollectionConsent] and [init].
+     *
+     * @return process-local queue, outbox, and IPC cleanup outcome
+     */
+    fun revokeCollectionConsent(): ConsentRevocationResult {
+        return revokeCollectionConsentInternal(application = null)
+    }
+
+    /**
+     * Revokes consent and also clears dormant telemetry when the SDK is not currently initialized.
+     *
+     * Passing [application] lets the SDK locate a previous process session's SQLite/file outbox and
+     * IPC hand-off directory. Hosts should prefer this overload for cold-start opt-out handling.
+     * Every Android process that can initialize the SDK must still invoke revocation to close its
+     * in-memory producers before the shared app-private artifacts are erased. Call from a worker
+     * thread because dormant SQLite/file cleanup performs synchronous app-private IO.
+     *
+     * @param application host application used to locate app-private telemetry
+     * @return process-local runtime and persisted-artifact cleanup outcome
+     */
+    fun revokeCollectionConsent(application: Application): ConsentRevocationResult {
+        return revokeCollectionConsentInternal(application)
+    }
+
+    /** Executes active-runtime shutdown and optional cold-start artifact erasure. */
+    private fun revokeCollectionConsentInternal(application: Application?): ConsentRevocationResult {
+        val currentState = synchronized(initLock) {
+            collectionConsentRevoked = true
+            val active = state
+            state = null
+            active
+        }
+        val resolvedApplication = application ?: currentState?.context?.application
+        if (currentState == null) {
+            return resolvedApplication?.let(::clearDormantTelemetryForConsentRevocation)
+                ?: ConsentRevocationResult(
+                    wasInitialized = false,
+                    discardedQueuedEventCount = 0,
+                    clearedStoredEventCount = null,
+                    clearedIpcFileCount = 0,
+                    ipcFilesCleared = false,
+                    storageCleared = false
+                )
+        }
+
+        cleanupSafely(ERROR_TAG_STOP_DYNAMIC_CONFIG) {
+            (currentState.context.config.dynamicConfigProvider as? ManagedDynamicConfigProvider)?.stop()
+        }
+        cleanupSafely(ERROR_TAG_STOP_BIZ_CONTEXT) { currentState.bizContextSource.stop() }
+        cleanupSafely(ERROR_TAG_STOP_MONITOR) { currentState.selfMonitorExecutor?.shutdownNow() }
+
+        val ipcCleanup = try {
+            currentState.processCoordinator?.stopAndClearForConsentRevocation()
+                ?: IpcConsentCleanupResult(clearedFileCount = 0, allFilesCleared = true)
+        } catch (error: Exception) {
+            recordInternalError(ERROR_TAG_CONSENT_IPC_CLEAR, error)
+            IpcConsentCleanupResult(clearedFileCount = 0, allFilesCleared = false)
+        }
+        currentState.startedModules.forEach { module ->
+            cleanupSafely("$ERROR_TAG_STOP_MODULE_PREFIX${module.name}") { module.onStop() }
+        }
+        currentState.startedModules.clear()
+
+        val storageCleanup = currentState.dispatcher.shutdownForConsentRevocation()
+        try {
+            ApmDiagnostics.record(
+                DiagnosticLevel.INFO,
+                CORE_MODULE,
+                EVENT_DIAGNOSTIC_CONSENT_REVOKED,
+                MESSAGE_CONSENT_REVOKED,
+                null
+            )
+            ApmDiagnostics.flush(DIAGNOSTICS_FLUSH_TIMEOUT_MS)
+        } finally {
+            ApmDiagnostics.shutdown()
+        }
+        val dormantCleanup = resolvedApplication?.let(::clearDormantTelemetryForConsentRevocation)
+        return ConsentRevocationResult(
+            wasInitialized = true,
+            discardedQueuedEventCount = storageCleanup.discardedQueuedEventCount,
+            clearedStoredEventCount = combineNullableCounts(
+                storageCleanup.clearedStoredEventCount,
+                dormantCleanup?.clearedStoredEventCount
+            ),
+            clearedIpcFileCount = ipcCleanup.clearedFileCount +
+                (dormantCleanup?.clearedIpcFileCount ?: 0),
+            ipcFilesCleared = ipcCleanup.allFilesCleared &&
+                (dormantCleanup?.ipcFilesCleared ?: true),
+            storageCleared = storageCleanup.storageCleared &&
+                (dormantCleanup?.storageCleared ?: true)
+        )
+    }
+
+    /** Clears every supported persisted event path when no active runtime owns the stores. */
+    private fun clearDormantTelemetryForConsentRevocation(
+        application: Application
+    ): ConsentRevocationResult {
+        var sqliteCount: Int? = null
+        val sqliteCleared = try {
+            val sqliteStore = SQLiteEventStore(EventDbHelper(application))
+            try {
+                sqliteCount = sqliteStore.pendingCount()
+                sqliteStore.clear()
+                true
+            } finally {
+                sqliteStore.close()
+            }
+        } catch (error: Exception) {
+            recordInternalError(ERROR_TAG_CONSENT_STORAGE_CLEAR, error)
+            false
+        }
+        val fileCleared = try {
+            val fileStore = FileEventStore(application)
+            try {
+                fileStore.clear()
+                true
+            } finally {
+                fileStore.close()
+            }
+        } catch (error: Exception) {
+            recordInternalError(ERROR_TAG_CONSENT_STORAGE_CLEAR, error)
+            false
+        }
+        val ipcCleanup = try {
+            ProcessEventCoordinator.clearConsentArtifacts(application)
+        } catch (error: Exception) {
+            recordInternalError(ERROR_TAG_CONSENT_IPC_CLEAR, error)
+            IpcConsentCleanupResult(clearedFileCount = 0, allFilesCleared = false)
+        }
+        return ConsentRevocationResult(
+            wasInitialized = false,
+            discardedQueuedEventCount = 0,
+            clearedStoredEventCount = sqliteCount,
+            clearedIpcFileCount = ipcCleanup.clearedFileCount,
+            ipcFilesCleared = ipcCleanup.allFilesCleared,
+            storageCleared = sqliteCleared && fileCleared
+        )
+    }
+
+    /** Adds supported cleanup counts while preserving unknown-count semantics. */
+    private fun combineNullableCounts(first: Int?, second: Int?): Int? {
+        return if (first == null && second == null) null else (first ?: 0) + (second ?: 0)
+    }
+
     /** Resolves process, global kill switch, module flag, and gray-release eligibility. */
     private fun shouldModuleRun(currentState: State, module: ApmModule): Boolean {
         val config = currentState.context.config
@@ -823,6 +994,9 @@ object Apm {
     /** Diagnostic code for SDK session stop. */
     private const val EVENT_DIAGNOSTIC_SESSION_STOP = "session_stop"
 
+    /** Diagnostic code for explicit host consent revocation. */
+    private const val EVENT_DIAGNOSTIC_CONSENT_REVOKED = "consent_revoked"
+
     /** Diagnostic code for the periodic payload-free SDK health summary. */
     private const val EVENT_DIAGNOSTIC_SDK_HEALTH = "sdk_health"
 
@@ -843,6 +1017,9 @@ object Apm {
 
     /** Safe shutdown message. */
     private const val MESSAGE_STOPPED = "APM stopped"
+
+    /** Payload-free diagnostic message for explicit host consent revocation. */
+    private const val MESSAGE_CONSENT_REVOKED = "APM collection consent revoked and local telemetry cleared"
 
     /** Bounded diagnostics flush during init failure and normal shutdown. */
     private const val DIAGNOSTICS_FLUSH_TIMEOUT_MS = 1_000L
@@ -877,6 +1054,12 @@ object Apm {
     private const val ERROR_TAG_STOP_MODULE_PREFIX = "stop_module_"
     /** Shutdown tag for the dispatcher. */
     private const val ERROR_TAG_STOP_DISPATCHER = "stop_dispatcher"
+
+    /** Consent-revocation tag for failed IPC artifact cleanup. */
+    private const val ERROR_TAG_CONSENT_IPC_CLEAR = "consent_ipc_clear"
+
+    /** Consent-revocation tag for failed persisted event cleanup outside the active dispatcher. */
+    private const val ERROR_TAG_CONSENT_STORAGE_CLEAR = "consent_storage_clear"
     /** Startup tag for a managed dynamic-config provider. */
     private const val ERROR_TAG_DYNAMIC_CONFIG_START = "dynamic_config_start"
     /** Read tag for a dynamic-config provider failure. */
