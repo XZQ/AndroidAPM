@@ -53,6 +53,13 @@ internal class ProtobufWriter(private val stream: ByteArrayOutputStream) {
         writeVarint32(if (value) 1 else 0)
     }
 
+    /** Writes one embedded protobuf message as a length-delimited field. */
+    fun writeMessage(fieldNumber: Int, payload: ByteArray) {
+        writeTag(fieldNumber, WIRE_TYPE_LENGTH_DELIMITED)
+        writeVarint32(payload.size)
+        stream.write(payload)
+    }
+
     /**
      * 写入 string → string map entry。
      *

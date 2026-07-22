@@ -6,7 +6,7 @@
 
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、单事件/总量 payload 预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；75% 高水位后，单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
@@ -32,8 +32,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 158：153 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 96 |
+| 主源码 | 161：156 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 97 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -101,6 +101,9 @@ Apm.emit
 - runtime profile：默认 `COMPATIBILITY` 保持源兼容；生产显式选择 `PRODUCTION_STRICT`
 - consent：默认 `UNSPECIFIED`；strict 初始化必须显式 `GRANTED`，`DENIED` 在所有 profile 下拒绝
 - endpoint 空/未知 scheme：仅兼容模式安全确认后丢弃；strict 要求 HTTPS 或非 Logcat 自定义 uploader
+- serialization：默认 legacy `LINE_PROTOCOL`；strict built-in HTTP 要求 `PROTOBUF_ENVELOPE_V2`
+- V2 resource：service/version/environment/匿名 installation 四项固定字段；strict 必须完整且有界
+- V2 request bytes：gzip 前默认 1 MiB、绝对上限 4 MiB；按实际编码拆分，每个物理 batch 独立 exact ACK
 - dynamic HTTP endpoint：默认关闭；开启也只接受无凭据 HTTPS URL
 - static HTTP headers / per-request header provider：默认空；长期密钥不能打进 APK
 - SQLite durable storage：开启
@@ -155,11 +158,13 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-22 的第八批 performance-budget 定向验证：JDK 17.0.14 下 5 个 host verifier unittest 通过，已有 emulator JSON 只在显式 parser-only override 下完成 3 个预算比较，`:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 通过。预算固定 durable encode/decode 与 32-event SQLite batch 的 median time/allocation 上限；Gradle release gate 默认拒绝 emulator，并对缺项、坏指标和超预算 fail closed。`python docs/verify_docs.py` 通过 42 Markdown / 41 links。当前物理设备安装策略仍阻止接受真机运行，因此这里只证明 gate 实现，不声明物理预算通过。
 
-2026-07-22 的第九批 typed-durable-field 定向验证：JDK 17.0.14 下 `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 通过 model 4 suites / 40 tests 与 storage 6 suites / 36 tests，均为 0 failures/errors/skips；benchmark 编译通过。codec v3 测试覆盖 12 类标量类型保真、任意对象字符串 fallback、4,096 字符大数边界、v1/v2 读取和未知 tag 拒绝，storage 全套覆盖 SQLite 重放链；`python docs/verify_docs.py` 通过 42 Markdown / 41 links。Line/Protobuf 仍是字符串 fields，Collector 契约未随本地格式升级。
+2026-07-22 的第九批 typed-durable-field 定向验证：JDK 17.0.14 下 `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 通过 model 4 suites / 40 tests 与 storage 6 suites / 36 tests，均为 0 failures/errors/skips；benchmark 编译通过。codec v3 测试覆盖 12 类标量类型保真、任意对象字符串 fallback、4,096 字符大数边界、v1/v2 读取和未知 tag 拒绝，storage 全套覆盖 SQLite 重放链；`python docs/verify_docs.py` 通过 42 Markdown / 41 links。当时 legacy Line/Protobuf 仍是字符串 fields，本地格式升级没有静默改变 Collector 契约；后续 V2 是独立显式 schema。
 
 2026-07-22 的闭环全根刷新：JDK 17.0.14 下根 `testDebugUnitTest --rerun-tasks --no-daemon` 通过 92 suites / 605 tests，同一源码状态的 model 通过 4 suites / 40 tests，included plugin 通过 1 suite / 18 tests，全部 0 failures/errors/skips。当前根 Android + model 基线为 96 suites / 645 tests，plugin 18 tests 独立报告；该结果取代 2026-07-16 的 595-test 旧根基线。`python docs/verify_docs.py` 通过 42 Markdown / 41 links。
 
 2026-07-22 的第十批 strict-production/consent 定向验证：JDK 17.0.14 下 `:apm-core:testDebugUnitTest --rerun-tasks --no-daemon` 通过 25 suites / 180 tests，0 failures/errors/skips；`:apm-core:lintDebug --rerun-tasks --no-daemon` 通过且文本报告为 `No issues found`；`python docs/verify_docs.py` 通过 42 Markdown / 41 links。测试覆盖 strict/compatibility 配置校验、显式 consent、活动 runtime 清理、冷启动 dormant outbox 清理、sticky re-init 拒绝和 IPC artifacts 删除。该结果是当前源码的 core 定向证据；上面的 605-test 结果仍是最近一次全根运行，不外推为本变更的全根结论。
+
+2026-07-22 的第十一批 collector-wire-V2 定向验证：JDK 17.0.14 下 `:apm-model:test :apm-uploader:testDebugUnitTest :apm-uploader:lintDebug :apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 Markdown / 47 links。测试覆盖 typed scalar、append-only event field 15、稳定 batch identity、固定 resource、编码后字节预算、协议保留请求头、exact whole-batch ACK、strict 协议/resource 校验及 legacy 兼容。该结果是当前源码的定向证据；上面的 605-test 结果仍是最近一次全根运行。
 
 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。物理机安装被 `INSTALL_FAILED_USER_RESTRICTED` 拒绝；emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 benchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation 入口已实际执行，物理性能验收仍需要设备允许测试 APK 安装后重跑，不能使用模拟器数值替代。
 
@@ -191,7 +196,7 @@ git log --oneline -n 10
 
 ## 后续优先级
 
-客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议和验收条件推进。typed wire fields 仍必须与 Collector 做版本化 schema 演进，不能把本地 codec tag 直接解释成传输协议；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
+客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护，以及固定 time/allocation 预算与 fail-closed 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全，不能把本次入口隔离误写成并行化。首次接受预算仍必须由专用真机产生，不能把模拟器 parser 证据伪装成发布通过。
 
 ## Git 与文档策略
 

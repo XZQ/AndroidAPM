@@ -1,6 +1,10 @@
 package com.apm.uploader
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmBatchEnvelopeSerializer
+import com.apm.model.ApmResourceContext
+import com.apm.model.ApmWireProtocol
+import com.apm.model.SerializationFormat
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,6 +23,107 @@ import java.util.zip.GZIPInputStream
  * Integration tests for HTTP batching and compression.
  */
 class HttpApmUploaderTest {
+
+    /** Versioned 2xx is accepted only when schema, stable batch ID, and event count all match. */
+    @Test
+    fun `versioned batch requires exact whole batch ack`() {
+        val events = listOf(event("versioned-a"), event("versioned-b"))
+        val expected = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
+        val requestHeaders = AtomicReference<Map<String, String>>()
+        val ackHeaders = mapOf(
+            ApmWireProtocol.HEADER_SCHEMA_VERSION to ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+            ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
+            ApmWireProtocol.HEADER_EVENT_COUNT to events.size.toString()
+        )
+        withRawHttpServer(
+            responses = listOf(RawResponse(HTTP_OK, ackHeaders)),
+            createUploader = { endpoint -> versionedUploader(endpoint) },
+            requestHeaderSink = requestHeaders::set
+        ) { uploader, requestCount ->
+            assertTrue(uploader.uploadBatch(events))
+            assertEquals(1, requestCount.get())
+            assertEquals(
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                requestHeaders.get()[ApmWireProtocol.HEADER_SCHEMA_VERSION.lowercase(Locale.US)]
+            )
+            assertEquals(
+                expected.batchId,
+                requestHeaders.get()[ApmWireProtocol.HEADER_BATCH_ID.lowercase(Locale.US)]
+            )
+            assertEquals(
+                events.size.toString(),
+                requestHeaders.get()[ApmWireProtocol.HEADER_EVENT_COUNT.lowercase(Locale.US)]
+            )
+            assertEquals(
+                ApmWireProtocol.CONTENT_TYPE_ENVELOPE_V2,
+                requestHeaders.get()["content-type"]
+            )
+        }
+    }
+
+    /** Missing or partial 2xx ACK metadata keeps the complete durable batch pending. */
+    @Test
+    fun `versioned batch rejects missing or mismatched ack`() {
+        val events = listOf(event("versioned-reject"))
+        val expected = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
+        withRawHttpServer(
+            responses = listOf(
+                RawResponse(HTTP_OK),
+                RawResponse(
+                    HTTP_OK,
+                    mapOf(
+                        ApmWireProtocol.HEADER_SCHEMA_VERSION to
+                            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                        ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
+                        ApmWireProtocol.HEADER_EVENT_COUNT to "2"
+                    )
+                )
+            ),
+            createUploader = { endpoint -> versionedUploader(endpoint) }
+        ) { uploader, requestCount ->
+            assertFalse(uploader.uploadBatch(events))
+            assertFalse(uploader.uploadBatch(events))
+            assertEquals(2, requestCount.get())
+        }
+    }
+
+    /** Encoded-size budget creates separately ACKed physical requests without changing event order. */
+    @Test
+    fun `versioned batch splits by encoded byte budget`() {
+        val events = listOf(event("split-a"), event("split-b"))
+        val first = ApmBatchEnvelopeSerializer.serialize(listOf(events[0]), RESOURCE)
+        val second = ApmBatchEnvelopeSerializer.serialize(listOf(events[1]), RESOURCE)
+        val combined = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
+        assertTrue(combined.payload.size > maxOf(first.payload.size, second.payload.size))
+        val responses = listOf(first, second).map { batch ->
+            RawResponse(
+                HTTP_OK,
+                mapOf(
+                    ApmWireProtocol.HEADER_SCHEMA_VERSION to
+                        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                    ApmWireProtocol.HEADER_BATCH_ID to batch.batchId,
+                    ApmWireProtocol.HEADER_EVENT_COUNT to "1"
+                )
+            )
+        }
+        withRawHttpServer(
+            responses = responses,
+            createUploader = { endpoint ->
+                versionedUploader(endpoint, maxBatchBytes = maxOf(first.payload.size, second.payload.size))
+            }
+        ) { uploader, requestCount ->
+            assertTrue(uploader.uploadBatch(events))
+            assertEquals(2, requestCount.get())
+        }
+    }
+
+    /** One event larger than the configured envelope budget fails before opening a connection. */
+    @Test
+    fun `versioned oversized single event fails before network`() {
+        val uploader = versionedUploader("http://127.0.0.1:1/events", maxBatchBytes = 1)
+
+        assertFalse(uploader.uploadBatch(listOf(event("oversized"))))
+    }
 
     /** A gzip batch is transmitted as one request with a matching header. */
     @Test
@@ -209,9 +314,18 @@ class HttpApmUploaderTest {
      * 因此复用与 gzip 测试相同的 ServerSocket 方案。
      *
      * @param responses 依次回放的响应列表
+     * @param createUploader 使用监听地址创建被测 uploader
+     * @param requestHeaderSink 可选的请求头观察回调
      * @param block 测试体，接收 uploader 与已处理请求计数
      */
-    private fun withRawHttpServer(responses: List<RawResponse>, block: (HttpApmUploader, AtomicInteger) -> Unit) {
+    private fun withRawHttpServer(
+        responses: List<RawResponse>,
+        createUploader: (String) -> HttpApmUploader = { endpoint ->
+            HttpApmUploader(endpoint = endpoint, logger = SILENT_LOGGER)
+        },
+        requestHeaderSink: ((Map<String, String>) -> Unit)? = null,
+        block: (HttpApmUploader, AtomicInteger) -> Unit
+    ) {
         ServerSocket(0).use { server ->
             val requestCount = AtomicInteger(0)
             val serverThread = Thread {
@@ -221,6 +335,7 @@ class HttpApmUploaderTest {
                         server.accept().use { socket ->
                             val input = BufferedInputStream(socket.getInputStream())
                             val headers = readHeaders(input)
+                            requestHeaderSink?.invoke(headers)
                             // 读尽请求体，模拟真实服务端行为
                             val length = headers["content-length"]?.toInt() ?: 0
                             input.readNBytes(length)
@@ -249,11 +364,7 @@ class HttpApmUploaderTest {
                 start()
             }
             try {
-                val uploader = HttpApmUploader(
-                    endpoint = "http://127.0.0.1:${server.localPort}/events",
-                    // JVM 单测没有 android.util.Log 实现，注入静默 logger
-                    logger = SILENT_LOGGER
-                )
+                val uploader = createUploader("http://127.0.0.1:${server.localPort}/events")
                 block(uploader, requestCount)
             } finally {
                 serverThread.join(TimeUnit.SECONDS.toMillis(TEST_TIMEOUT_SECONDS))
@@ -301,6 +412,18 @@ class HttpApmUploaderTest {
      */
     private fun event(name: String): ApmEvent = ApmEvent(module = "test", name = name)
 
+    /** Creates a versioned uploader with a caller-selected byte budget. */
+    private fun versionedUploader(
+        endpoint: String,
+        maxBatchBytes: Int = HttpApmUploader.DEFAULT_MAX_BATCH_BYTES
+    ): HttpApmUploader = HttpApmUploader(
+        endpoint = endpoint,
+        serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+        resourceContext = RESOURCE,
+        maxBatchBytes = maxBatchBytes,
+        logger = SILENT_LOGGER
+    )
+
     companion object {
         /** CRLF sequence ending an HTTP header block. */
         private val HEADER_TERMINATOR = byteArrayOf(13, 10, 13, 10)
@@ -330,5 +453,13 @@ class HttpApmUploaderTest {
         /** Minimal successful HTTP response returned by the dynamic-header test server. */
         private const val SUCCESS_RESPONSE =
             "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+
+        /** Complete standard resource supplied by every versioned HTTP test. */
+        private val RESOURCE = ApmResourceContext(
+            serviceName = "wallet",
+            serviceVersion = "1.0.0",
+            deploymentEnvironment = "test",
+            installationId = "install-http-test"
+        )
     }
 }

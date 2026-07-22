@@ -44,7 +44,7 @@ Apm.init(application, config)
   -> start registered modules
 ```
 
-`state` 只有基础设施组装完成后才发布。runtime profile/consent 在 diagnostics、event store 和线程之前校验：`DENIED` 总是拒绝；`PRODUCTION_STRICT` 还要求显式 `GRANTED`、SQLite、PII on、debug off，以及 HTTPS endpoint 或非 Logcat custom uploader。校验通过后初始化复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此其后的部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；普通 `stop` 后可以重新初始化，consent revoke 后必须先显式 grant。
+`state` 只有基础设施组装完成后才发布。runtime profile/consent 在 diagnostics、event store 和线程之前校验：`DENIED` 总是拒绝；`PRODUCTION_STRICT` 还要求显式 `GRANTED`、SQLite、PII on、debug off，以及 HTTPS endpoint 或非 Logcat custom uploader。strict built-in HTTP 进一步要求 `PROTOBUF_ENVELOPE_V2`、四项完整有界的 standard resource、64 KiB–4 MiB batch budget，并给 `maxEventPayloadBytes` 至少保留 16 KiB envelope headroom。校验通过后初始化复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此其后的部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；普通 `stop` 后可以重新初始化，consent revoke 后必须先显式 grant。
 
 初始化模式必须二选一：
 
@@ -159,7 +159,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 3. 显式 `logcat://` endpoint -> `LogcatApmUploader`
 4. 其他/空 endpoint -> payload-safe discard uploader
 
-该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
+该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现；built-in HTTP 同时要求 V2/resource/byte budget。factory 把固定 resource 和 `maxUploadBatchBytes` 传给 `HttpApmUploader`。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
 
 默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
 
@@ -264,6 +264,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 - `ProcessEventCoordinatorTest`
 - RateLimiter/Gray/DynamicConfig
 - managed kill switch、dynamic sampling/rate-limit、dynamic endpoint wiring
+- strict V2/resource/batch-byte 配置门禁与 uploader factory wiring
 - Aggregator/StackFingerprinter
 - PII sanitizer
 - SDK self-monitor

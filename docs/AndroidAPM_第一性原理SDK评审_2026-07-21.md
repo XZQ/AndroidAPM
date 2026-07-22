@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-22｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，158 个主源码文件，96 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；其后的 strict-production/consent core 定向验证为 25 suites / 180 tests，0 failures/errors/skips。
+> 当前基线：`develop` 分支，27 个构建单元，161 个主源码文件，97 个测试/benchmark 文件。2026-07-22 最近全根 Android 测试 92 suites / 605 tests、model 4 suites / 40 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；其后的 collector-wire-V2 定向验证为 model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个受影响 Android 模块 lint 均无问题。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -27,7 +27,7 @@
 
 **结论：这是一个明显高于“普通内部 SDK”水平的成熟实现。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、资源硬上限）。本次列出的 R1–R12 客户端改进均已实现或以明确的有界替代方案闭环；仍需生产 Collector、专用真机 runner 和设备矩阵完成外部验收。
 
-**闭环后综合评分：4.8 / 5.0**。剩余扣分来自单 dispatcher worker 的已知吞吐上限、typed wire 协议仍需 Collector 协商，以及预算 gate 尚未在接受的物理设备上形成首个发布基线；这些不再是未实现的客户端代码缺口。
+**闭环后综合评分：4.9 / 5.0**。剩余扣分来自单 dispatcher worker 的已知吞吐上限、已冻结 typed wire V2 尚需生产 Collector 部署，以及预算 gate 尚未在接受的物理设备上形成首个发布基线；这些不再是未实现的客户端代码缺口。
 
 | 维度 | 评分 | 一句话 |
 |---|---:|---|
@@ -39,7 +39,7 @@
 | P6 宿主安全 | 4.9 | fail-safe 边界近乎最佳实践 |
 | P7 模块化 | 4.8 | 内部分层保持独立，`apm-bundle` 提供单依赖分发入口 |
 | P8 自身可观测 | 4.8 | 每份 `sdk_health` 先写独立诊断摘要，再尝试 HIGH 遥测副本 |
-| P9 兼容演进 | 4.7 | durable codec v3 typed scalar + v1/v2 兼容读取；wire typed fields 仍需协议协商 |
+| P9 兼容演进 | 4.9 | legacy wire 保持不变；独立 V2 冻结 typed/resource/batch/size/exact-ACK 语义 |
 
 ---
 
@@ -66,13 +66,16 @@
 Tink Ed25519 + 固定 32 字节 **pinned** raw key（非随响应下发）、`RAW` 输出前缀、对 **canonical JSON 字节**做 detached 验签；验签失败统一返回 `false` 不泄露"缺 key 还是签名错"；LKG 用 `SharedPreferences.commit()` 同步原子落盘（`RemoteConfigStore.kt:39-56`），保证进程死亡不会写出半个 revision。满足 P3。
 
 **F. 资源硬上限几乎全覆盖（架构文档 §9）**
-队列 2048 / drain 32 / 行 50,000 / 活跃 payload 64 MiB / durable 单事件 256 KiB / codec 2 MiB / map 4096 / big-number text 4096 字符 / 限流 LRU 256 / 非持久队列 500 / 诊断 200+256 记录各 4 MiB / IPC 100 行。溢出、拒绝和淘汰都有明确策略与健康计数。
+队列 2048 / drain 32 / 行 50,000 / 活跃 payload 64 MiB / durable 单事件 256 KiB / V2 HTTP envelope 默认 1 MiB、绝对 4 MiB / codec 2 MiB / map 4096 / big-number text 4096 字符 / 限流 LRU 256 / 非持久队列 500 / 诊断 200+256 记录各 4 MiB / IPC 100 行。溢出、拒绝和淘汰都有明确策略与健康计数。
 
 **G. 线程治理统一（`ApmExecutors.kt`）**
 全部 daemon 线程、`apm-` 前缀、后台 `MIN_PRIORITY` / 测量 `NORM_PRIORITY` 两级，便于 systrace/线程 dump 定位且不抢宿主 CPU。
 
 **H. eventId 抗碰撞且跨编码稳定（`ApmEventIdGenerator.kt`）**
 `UUID.randomUUID()` 作进程前缀 + `AtomicLong` 单调序列（base-16），进程内零碰撞，跨进程碰撞概率可忽略；且 eventId 在 Line Protocol / Protobuf / durable codec / SQLite / IPC 全程保留，供服务端幂等。
+
+**I. Collector wire contract 已版本化冻结（`ApmBatchEnvelopeSerializer.kt` / `COLLECTOR_WIRE_V2.md`）**
+legacy Line/standalone Protobuf 保持原字符串语义；独立 `PROTOBUF_ENVELOPE_V2` 用 field 15 显式区分 12 类标量，batch 携带 schema/SDK/fixed resource/retry-stable batchId，按实际编码字节拆批。2xx 只有 response schema、batchId、event count 精确匹配才允许 ACK/delete，partial ACK 明确不支持。
 
 ---
 
@@ -109,8 +112,8 @@ worker 仍顺序执行，这是明确保留的 ordering/线程安全取舍；项
 **R4. `bizContext` 调用线程风险——已完成双模式**
 `SYNCHRONOUS` 保留精确发生时快照与兼容性，但 KDoc/接入文档明确要求 O(1)、无 IO、无等待锁。`ASYNC_CACHED` 只在 emit 读取最近一次成功的不可变快照，provider 在 `apm-biz-context` 后台线程按有界周期运行；失败保留 LKG，显式 refresh 合并请求，stop 终止刷新。
 
-**R5. durable codec 字段类型——已完成 v3**
-format v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger、BigDecimal 写显式 tag 并恢复原运行时类型；大数文本最多 4,096 字符。v1/v2 继续按历史 String 读取，未知 tag 只让损坏事件失败，任意对象通过 bounded `toString()` 降级而不启用危险对象反序列化。Line/Protobuf wire map 仍为字符串，因此不静默改变 Collector 协议。
+**R5. durable codec 字段类型——已完成 v3，并以独立 wire V2 演进**
+format v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger、BigDecimal 写显式 tag 并恢复原运行时类型；大数文本最多 4,096 字符。v1/v2 继续按历史 String 读取，未知 tag 只让损坏事件失败，任意对象通过 bounded `toString()` 降级而不启用危险对象反序列化。legacy Line/standalone Protobuf 仍为字符串，不被静默重解释；Collector typed fields 通过单独 V2 schema 提供。
 
 **R6. Auto-throttle 自动恢复——已完成迟滞自愈**
 退化立即且 sticky；恢复要求连续 3 个周期同时满足 drop rate <= 20% 与平均上传延迟 <= 3 秒。退化或迟滞区间会重置 streak；恢复时重新检查进程、动态签名配置与灰度门禁，注册/配置更新也不能绕过自动降级集合。
@@ -145,7 +148,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 2 | PII 默认安全 + `fields` 字段级脱敏（R2） | P0 | 已实现并默认开启 |
 | 3 | noisy-module 隔离与单 worker 边界（R3） | P1 | 已实现入口容量隔离；吞吐上限明确保留 |
 | 4 | bizContext 契约化 / async cache（R4） | P1 | 已实现双模式、LKG 与 refresh 生命周期 |
-| 5 | typed durable field schema（R5） | P1 | codec v3 已实现，兼容 v1/v2；wire 保持字符串 |
+| 5 | typed durable field schema（R5） | P1 | codec v3 兼容 v1/v2；legacy wire 不变，独立 typed wire V2 已冻结 |
 | 6 | Auto-throttle 迟滞自愈（R6） | P1 | 已实现连续 3 健康周期恢复 |
 | 7 | FPS 时间窗口（R7） | P2 | 已实现 1 秒默认单调窗口 |
 | 8 | FrameMetrics 主路径降分配（R8） | P2 | 已实现 primitive rolling accumulator |

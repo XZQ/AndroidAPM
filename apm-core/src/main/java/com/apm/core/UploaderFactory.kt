@@ -87,7 +87,9 @@ internal object UploaderFactory {
                 headerProvider = config.httpHeaderProvider,
                 enableGzip = config.enableHttpGzip,
                 serializationFormat = config.serializationFormat,
-                logger = uploaderLogger
+                logger = uploaderLogger,
+                resourceContext = config.resourceContext,
+                maxBatchBytes = config.maxUploadBatchBytes
             )
             endpoint.startsWith(LOGCAT_PREFIX) -> LogcatApmUploader(endpoint = endpoint)
             else -> DiscardingApmUploader(uploaderLogger)

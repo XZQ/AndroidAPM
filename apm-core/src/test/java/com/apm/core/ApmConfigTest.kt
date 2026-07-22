@@ -1,6 +1,8 @@
 package com.apm.core
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmResourceContext
+import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.LogcatApmUploader
 import org.junit.Assert.*
@@ -109,6 +111,7 @@ class ApmConfigTest {
 
         assertEquals(256 * 1024, config.maxEventPayloadBytes)
         assertEquals(64L * 1024L * 1024L, config.maxStoredPayloadBytes)
+        assertEquals(1024 * 1024, config.maxUploadBatchBytes)
     }
 
     /** 默认 dispatcher 在 75% 水位限制单模块占用到队列容量的 50%。 */
@@ -198,7 +201,9 @@ class ApmConfigTest {
         ApmConfig(
             runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
             initialCollectionConsent = CollectionConsent.GRANTED,
-            endpoint = "https://collector.example.com/v1/events"
+            endpoint = "https://collector.example.com/v1/events",
+            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+            resourceContext = productionResource()
         ).validateForRuntime()
     }
 
@@ -218,7 +223,9 @@ class ApmConfigTest {
         val strictBase = ApmConfig(
             runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
             initialCollectionConsent = CollectionConsent.GRANTED,
-            endpoint = "https://collector.example.com/v1/events"
+            endpoint = "https://collector.example.com/v1/events",
+            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+            resourceContext = productionResource()
         )
 
         assertThrows(IllegalArgumentException::class.java) {
@@ -245,7 +252,24 @@ class ApmConfigTest {
         assertThrows(IllegalArgumentException::class.java) {
             strictBase.copy(uploader = LogcatApmUploader()).validateForRuntime()
         }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(serializationFormat = SerializationFormat.PROTOBUF).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(resourceContext = ApmResourceContext()).validateForRuntime()
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(maxUploadBatchBytes = strictBase.maxEventPayloadBytes).validateForRuntime()
+        }
     }
+
+    /** Complete anonymous standard resource used by strict default HTTP tests. */
+    private fun productionResource(): ApmResourceContext = ApmResourceContext(
+        serviceName = "wallet",
+        serviceVersion = "1.0.0",
+        deploymentEnvironment = "production",
+        installationId = "install-test"
+    )
 
     /** Minimal custom uploader used only to validate strict-profile routing. */
     private class AcceptingUploader : ApmUploader {

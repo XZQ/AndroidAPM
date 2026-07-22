@@ -3,6 +3,7 @@ package com.apm.core
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
 import com.apm.core.diagnostics.DiagnosticsConfig
+import com.apm.model.ApmResourceContext
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.HttpHeaderProvider
@@ -108,7 +109,7 @@ data class ApmConfig(
     val grayController: GrayReleaseController? = null,
 
     // --- Phase 8: 序列化 ---
-    /** 事件序列化格式：LINE_PROTOCOL（文本）或 PROTOBUF（二进制，体积约 1/3~1/5）。 */
+    /** Wire encoding; strict default HTTP delivery requires the versioned protobuf envelope. */
     val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL,
 
     // --- Phase 8: 聚合 ---
@@ -163,7 +164,11 @@ data class ApmConfig(
     /** Runtime safety profile; strict production is opt-in for source compatibility. */
     val runtimeProfile: ApmRuntimeProfile = ApmRuntimeProfile.COMPATIBILITY,
     /** Consent state captured by the host before this initialization attempt. */
-    val initialCollectionConsent: CollectionConsent = CollectionConsent.UNSPECIFIED
+    val initialCollectionConsent: CollectionConsent = CollectionConsent.UNSPECIFIED,
+    /** Standard batch-level service/release/environment/anonymous-installation identity. */
+    val resourceContext: ApmResourceContext = ApmResourceContext(),
+    /** Maximum uncompressed protobuf envelope bytes in one versioned HTTP request. */
+    val maxUploadBatchBytes: Int = com.apm.uploader.HttpApmUploader.DEFAULT_MAX_BATCH_BYTES
 ) {
     companion object {
         /** 默认限流：每窗口 10 条事件。 */
@@ -236,6 +241,35 @@ internal fun ApmConfig.validateForRuntime() {
     require(uploader != null || endpoint.isStrictHttpsEndpoint()) {
         "PRODUCTION_STRICT requires an HTTPS endpoint or a custom uploader"
     }
+    if (uploader == null) {
+        require(serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
+            "PRODUCTION_STRICT default HTTP delivery requires PROTOBUF_ENVELOPE_V2"
+        }
+        require(resourceContext.hasStrictResourceIdentity()) {
+            "PRODUCTION_STRICT requires bounded service, version, environment, and installation resource identity"
+        }
+        require(maxUploadBatchBytes in MIN_STRICT_BATCH_BYTES..com.apm.uploader.HttpApmUploader.MAX_BATCH_BYTES) {
+            "PRODUCTION_STRICT maxUploadBatchBytes is outside the supported range"
+        }
+        require(maxEventPayloadBytes > 0 &&
+            maxUploadBatchBytes.toLong() >= maxEventPayloadBytes.toLong() + MIN_ENVELOPE_HEADROOM_BYTES
+        ) {
+            "PRODUCTION_STRICT maxUploadBatchBytes must leave envelope headroom above maxEventPayloadBytes"
+        }
+    }
+}
+
+/** Returns whether all fixed production resource values are non-blank, trimmed, and bounded. */
+private fun ApmResourceContext.hasStrictResourceIdentity(): Boolean {
+    return serviceName.isStrictResourceValue() &&
+        serviceVersion.isStrictResourceValue() &&
+        deploymentEnvironment.isStrictResourceValue() &&
+        installationId.isStrictResourceValue()
+}
+
+/** Applies the fixed resource-value bound before any protobuf allocation occurs. */
+private fun String.isStrictResourceValue(): Boolean {
+    return isNotBlank() && this == trim() && length <= MAX_RESOURCE_VALUE_CHARS
 }
 
 /** Returns whether this exact endpoint is an HTTPS URL without embedded credentials. */
@@ -255,6 +289,15 @@ private fun String.isStrictHttpsEndpoint(): Boolean {
 
 /** HTTPS scheme required by strict production delivery. */
 private const val STRICT_HTTPS_SCHEME = "https"
+
+/** Maximum UTF-16 characters in each strict standard resource value. */
+private const val MAX_RESOURCE_VALUE_CHARS = 256
+
+/** Minimum strict request budget: 64 KiB. */
+private const val MIN_STRICT_BATCH_BYTES = 64 * 1024
+
+/** Reserved protobuf/resource/header growth above the configured durable event soft limit. */
+private const val MIN_ENVELOPE_HEADROOM_BYTES = 16 * 1024L
 
 /** Controls where and when [BizContextProvider] is evaluated. */
 enum class BizContextCaptureMode {

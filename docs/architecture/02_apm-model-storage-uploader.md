@@ -65,7 +65,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - version 1/2 的 field 值按历史契约读取为 String；version 2 起保存 eventId，version 1 迁移行由 SQLite `event_id` 回填
 - 未知 version-3 type tag 使单个损坏 payload 解码失败，由 storage 隔离坏行，不猜测长度或类型
 
-因此客户端 durable round-trip 对受支持标量类型保真，同时避免 Java/Kotlin 任意对象反序列化。Line Protocol 与 Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format v3 不改变 Collector wire contract。
+因此客户端 durable round-trip 对受支持标量类型保真，同时避免 Java/Kotlin 任意对象反序列化。legacy Line Protocol 与 standalone Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format v3 不改变旧 Collector 契约。独立 `PROTOBUF_ENVELOPE_V2` 在 event field 15 写 `map<string,ApmTypedValue>`，是显式新协议而非 durable tag 的复用。
 
 ## 4. EventStore 契约
 
@@ -189,12 +189,12 @@ interface BatchApmUploader : ApmUploader {
 - Header 名/值拒绝控制字符，且不能覆盖 Content-Type/Encoding/Length、Host 等 transport 语义
 - 可选逐请求 endpoint；远程覆盖只接受无 user-info 的 HTTPS URL，异常回退 bootstrap 地址
 - 所有 header 在获取 output stream 前设置
-- 2xx 为成功
+- legacy 格式以 2xx 为成功；V2 还要求 exact whole-batch ACK
 - 429/503 解析 `Retry-After` 秒数或 HTTP-date
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-每个序列化事件包含 eventId，但当前接口没有 batch id 或服务端 ack token，HTTP 2xx 是整批唯一确认信号。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict profile 在 uploader factory 之前拒绝 HTTP/Logcat/空 endpoint（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
+legacy 每个序列化事件包含 eventId，但没有 batch ID，HTTP 2xx 是整批唯一确认信号。V2 body 是 `ApmBatchEnvelope`：包含 schema/SDK、固定 resource、retry-stable batchId、repeated events 和 field-15 typed values；gzip 前完整 envelope 默认限制 1 MiB、绝对 4 MiB，按实际编码拆分，单事件超预算不打开连接。transport 拥有 `X-Apm-Schema-Version` / `Sdk-Version` / `Batch-Id` / `Event-Count`，宿主 Header 不能覆盖；response schema/batchId/eventCount 全匹配才成功，不支持 partial ACK。前一物理 batch 已 ACK、后一批失败时逻辑 claim 返回失败并可能整组重发，Collector 继续按 eventId 去重。规范见 [Collector Wire Protocol V2](../protocol/COLLECTOR_WIRE_V2.md)。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict built-in HTTP 在 factory 之前要求 HTTPS/V2/resource/batch headroom（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
 
 ## 9. Durable retry
 
@@ -238,20 +238,21 @@ claimPending(owner, lease)
 - retry/TTL pruning
 - batch/Gzip/Retry-After
 - typed durable scalar fields with version-1/2 compatibility
+- V2 typed/resource/batch identity/encoded-byte split/exact ACK
 
 外部/协议缺口：
 
 - exactly-once server protocol and server-side eventId deduplication
-- typed wire fields（仅在 Collector 需要非字符串 field 时，通过新协议版本协商）
+- Collector 部署 V2 parser、exact whole-batch ACK、协议错误指标和 dead-letter
 - Token 签发/刷新/撤销与租户授权服务（客户端逐请求注入已完成）
 - collector compatibility/version negotiation
 
 ## 12. 测试
 
-`apm-model`：Line Protocol、codec v1/v2 兼容、v3 scalar type/value round-trip、未知 tag/fallback、priority、Protobuf。
+`apm-model`：Line Protocol、codec v1/v2 兼容、v3 scalar type/value round-trip、未知 tag/fallback、priority、legacy Protobuf、V2 typed/resource/batch identity。
 
 `apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/row+payload-byte eviction/单事件隔离/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
-`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护与 HTTPS endpoint 轮换。
+`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2 byte split 与 exact ACK。
 
 `apm-core`：PersistentUploadWorker success/failure/fallback 与 UploaderFactory retry ownership。

@@ -58,4 +58,42 @@ message ApmEventMessage {
 
   // Stable opaque client identity used by collectors for deduplication.
   string event_id = 14;
+
+  // Versioned-envelope typed fields. Legacy field 10 remains for old standalone messages only.
+  map<string, ApmTypedValue> typed_fields = 15;
+}
+
+// Explicit scalar value used by schema version 2; `value` is absent only for NULL.
+message ApmTypedValue {
+  // Stable discriminator: NULL/STRING/BOOLEAN/BYTE/SHORT/INT/LONG/FLOAT/DOUBLE/CHAR/BIG_INTEGER/BIG_DECIMAL.
+  string type = 1;
+
+  // Canonical text preserving the discriminator-specific value.
+  string value = 2;
+}
+
+// Standard resource shared by every event in a batch.
+message ApmResource {
+  string service_name = 1;
+  string service_version = 2;
+  string deployment_environment = 3;
+  string installation_id = 4;
+}
+
+// Collector request schema for SerializationFormat.PROTOBUF_ENVELOPE_V2.
+message ApmBatchEnvelope {
+  uint32 schema_version = 1;
+  string sdk_name = 2;
+  string sdk_version = 3;
+  string batch_id = 4;
+  int64 sent_at_ms = 5;
+  ApmResource resource = 6;
+  repeated ApmEventMessage events = 7;
+}
+
+// Logical whole-batch ACK mirrored by X-Apm-* HTTP response headers.
+message ApmBatchAck {
+  uint32 schema_version = 1;
+  string batch_id = 2;
+  uint32 accepted_event_count = 3;
 }

@@ -42,6 +42,16 @@ object ProtobufSerializer {
      * @return protobuf 编码的字节数组
      */
     fun serialize(event: ApmEvent): ByteArray {
+        return serializeEvent(event, typedFields = false)
+    }
+
+    /** Encodes one event for the schema-v2 batch envelope using explicit typed fields. */
+    internal fun serializeVersionedEvent(event: ApmEvent): ByteArray {
+        return serializeEvent(event, typedFields = true)
+    }
+
+    /** Writes common event fields while selecting either legacy or versioned field semantics. */
+    private fun serializeEvent(event: ApmEvent, typedFields: Boolean): ByteArray {
         val buffer = ByteArrayOutputStream()
         val writer = ProtobufWriter(buffer)
 
@@ -58,9 +68,16 @@ object ProtobufSerializer {
         event.scene?.let { writer.writeString(FIELD_SCENE, it) }
         event.foreground?.let { writer.writeBool(FIELD_FOREGROUND, it) }
 
-        // fields map：编码为 repeated {string key=1; string value=2}
-        for ((key, value) in event.fields) {
-            writer.writeStringMapEntry(FIELD_FIELDS, key, value?.toString() ?: "")
+        if (typedFields) {
+            for ((key, value) in event.fields) {
+                // V2 uses a map entry whose value is an embedded discriminator/value message.
+                writer.writeMessage(FIELD_TYPED_FIELDS, serializeTypedFieldEntry(key, ApmTypedValue.from(value)))
+            }
+        } else {
+            // Legacy standalone messages retain map<string,string> field 10 exactly.
+            for ((key, value) in event.fields) {
+                writer.writeStringMapEntry(FIELD_FIELDS, key, value?.toString() ?: "")
+            }
         }
 
         // globalContext map
@@ -80,6 +97,26 @@ object ProtobufSerializer {
 
         writer.flush()
         return buffer.toByteArray()
+    }
+
+    /** Encodes one protobuf map entry: string key plus embedded [ApmTypedValue]. */
+    private fun serializeTypedFieldEntry(key: String, typedValue: ApmTypedValue): ByteArray {
+        val entryBuffer = ByteArrayOutputStream()
+        val entryWriter = ProtobufWriter(entryBuffer)
+        entryWriter.writeString(MAP_ENTRY_KEY, key)
+        entryWriter.writeMessage(MAP_ENTRY_VALUE, serializeTypedValue(typedValue))
+        entryWriter.flush()
+        return entryBuffer.toByteArray()
+    }
+
+    /** Encodes the stable discriminator and optional canonical scalar text. */
+    private fun serializeTypedValue(typedValue: ApmTypedValue): ByteArray {
+        val valueBuffer = ByteArrayOutputStream()
+        val valueWriter = ProtobufWriter(valueBuffer)
+        valueWriter.writeString(TYPED_VALUE_TYPE, typedValue.type.name)
+        typedValue.value?.let { valueWriter.writeString(TYPED_VALUE_TEXT, it) }
+        valueWriter.flush()
+        return valueBuffer.toByteArray()
     }
 
     /**
@@ -136,6 +173,17 @@ object ProtobufSerializer {
     private const val FIELD_PRIORITY = 13
     /** Field 14: stable client-generated event identity. */
     private const val FIELD_EVENT_ID = 14
+    /** Field 15: versioned typed event fields. */
+    private const val FIELD_TYPED_FIELDS = 15
+
+    /** Protobuf map-entry key field. */
+    private const val MAP_ENTRY_KEY = 1
+    /** Protobuf map-entry value field. */
+    private const val MAP_ENTRY_VALUE = 2
+    /** Typed-value discriminator field. */
+    private const val TYPED_VALUE_TYPE = 1
+    /** Typed-value canonical text field. */
+    private const val TYPED_VALUE_TEXT = 2
 
     /** 字节掩码。 */
     private const val BYTE_MASK = 0xFF

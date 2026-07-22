@@ -1,6 +1,10 @@
 package com.apm.uploader
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmBatchEnvelopeSerializer
+import com.apm.model.ApmResourceContext
+import com.apm.model.ApmWireProtocol
+import com.apm.model.EncodedApmBatch
 import com.apm.model.ProtobufSerializer
 import com.apm.model.SerializationFormat
 import com.apm.model.toLineProtocol
@@ -54,8 +58,18 @@ class HttpApmUploader(
     /** 事件序列化格式。 */
     private val serializationFormat: SerializationFormat = SerializationFormat.LINE_PROTOCOL,
     /** 日志输出，由宿主注入以尊重全局 debugLogging 开关。 */
-    private val logger: UploaderLogger = UploaderLogger.DEFAULT
+    private val logger: UploaderLogger = UploaderLogger.DEFAULT,
+    /** Standard resource identity embedded in versioned batch envelopes. */
+    private val resourceContext: ApmResourceContext = ApmResourceContext(),
+    /** Maximum uncompressed encoded bytes in one versioned HTTP request. */
+    private val maxBatchBytes: Int = DEFAULT_MAX_BATCH_BYTES
 ) : BatchApmUploader {
+
+    init {
+        require(maxBatchBytes in 1..MAX_BATCH_BYTES) {
+            "maxBatchBytes must be between 1 and $MAX_BATCH_BYTES"
+        }
+    }
 
     /**
      * 最近一次失败时服务端建议的重试延迟（毫秒）。
@@ -88,14 +102,66 @@ class HttpApmUploader(
         if (events.isEmpty()) {
             return true
         }
+        if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
+            return uploadVersionedBatches(events)
+        }
         val payload = when (serializationFormat) {
             SerializationFormat.PROTOBUF -> ProtobufSerializer.serializeBatch(events)
             SerializationFormat.LINE_PROTOCOL -> {
                 events.joinToString(separator = LINE_SEPARATOR) { it.toLineProtocol() }
                     .toByteArray(Charsets.UTF_8)
                 }
+            SerializationFormat.PROTOBUF_ENVELOPE_V2 -> error("Handled before legacy serialization")
         }
-        return sendHttpPost(payload)
+        return sendHttpPost(payload, ackExpectation = null)
+    }
+
+    /** Splits a versioned logical upload by encoded bytes and requires an exact ACK for each part. */
+    private fun uploadVersionedBatches(events: List<ApmEvent>): Boolean {
+        val encodedBatches = encodeWithinBudget(events) ?: return false
+        for (batch in encodedBatches) {
+            val accepted = sendHttpPost(
+                payload = batch.payload,
+                ackExpectation = AckExpectation(batch.batchId, batch.eventCount)
+            )
+            if (!accepted) {
+                // Earlier parts may already be ACKed; at-least-once retry safely resends them by eventId.
+                return false
+            }
+        }
+        return true
+    }
+
+    /** Builds deterministic sub-batches whose uncompressed protobuf payload stays within budget. */
+    private fun encodeWithinBudget(events: List<ApmEvent>): List<EncodedApmBatch>? {
+        val encodedBatches = ArrayList<EncodedApmBatch>()
+        val currentEvents = ArrayList<ApmEvent>()
+        var currentEncoded: EncodedApmBatch? = null
+        val sentAtMs = System.currentTimeMillis()
+        for (event in events) {
+            currentEvents += event
+            val candidate = ApmBatchEnvelopeSerializer.serialize(currentEvents, resourceContext, sentAtMs)
+            if (candidate.payload.size <= maxBatchBytes) {
+                currentEncoded = candidate
+                continue
+            }
+            // Remove the overflowing event and commit the preceding non-empty candidate.
+            currentEvents.removeAt(currentEvents.lastIndex)
+            if (currentEncoded == null) {
+                logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
+                return null
+            }
+            encodedBatches += currentEncoded
+            currentEvents.clear()
+            currentEvents += event
+            currentEncoded = ApmBatchEnvelopeSerializer.serialize(currentEvents, resourceContext, sentAtMs)
+            if (currentEncoded.payload.size > maxBatchBytes) {
+                logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
+                return null
+            }
+        }
+        currentEncoded?.let(encodedBatches::add)
+        return encodedBatches
     }
 
     /**
@@ -104,7 +170,7 @@ class HttpApmUploader(
      * @param payload 请求体字节数组
      * @return true 表示服务端接受（HTTP 2xx），false 表示失败
      */
-    private fun sendHttpPost(payload: ByteArray): Boolean {
+    private fun sendHttpPost(payload: ByteArray, ackExpectation: AckExpectation?): Boolean {
         var connection: HttpURLConnection? = null
         try {
             // Resolve credentials before opening the connection. Provider failures keep durable
@@ -121,6 +187,7 @@ class HttpApmUploader(
                 val contentType = when (serializationFormat) {
                     SerializationFormat.PROTOBUF -> CONTENT_TYPE_PROTOBUF
                     SerializationFormat.LINE_PROTOCOL -> CONTENT_TYPE_TEXT
+                    SerializationFormat.PROTOBUF_ENVELOPE_V2 -> ApmWireProtocol.CONTENT_TYPE_ENVELOPE_V2
                 }
                 setRequestProperty(HEADER_CONTENT_TYPE, contentType)
                 setRequestProperty(HEADER_ACCEPT, CONTENT_TYPE_JSON)
@@ -132,6 +199,19 @@ class HttpApmUploader(
             // 设置自定义 Headers（鉴权、设备信息等）
             for ((key, value) in requestHeaders) {
                 connection.setRequestProperty(key, value)
+            }
+            if (ackExpectation != null) {
+                // Protocol-owned headers let collectors reject unsupported schemas before parsing.
+                connection.setRequestProperty(
+                    ApmWireProtocol.HEADER_SCHEMA_VERSION,
+                    ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString()
+                )
+                connection.setRequestProperty(ApmWireProtocol.HEADER_SDK_VERSION, ApmWireProtocol.SDK_VERSION)
+                connection.setRequestProperty(ApmWireProtocol.HEADER_BATCH_ID, ackExpectation.batchId)
+                connection.setRequestProperty(
+                    ApmWireProtocol.HEADER_EVENT_COUNT,
+                    ackExpectation.eventCount.toString()
+                )
             }
             // All headers must be set before outputStream establishes the connection.
             if (enableGzip) {
@@ -175,7 +255,12 @@ class HttpApmUploader(
             return when {
                 // 成功：2xx
                 responseCode in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> {
-                    true
+                    if (ackExpectation == null || hasMatchingAck(connection, ackExpectation)) {
+                        true
+                    } else {
+                        logger.w("Versioned batch received 2xx without an exact whole-batch ACK")
+                        false
+                    }
                 }
                 // 限流：429
                 responseCode == HTTP_TOO_MANY_REQUESTS -> {
@@ -201,6 +286,16 @@ class HttpApmUploader(
             return false
         }
         // 正常完成的交换不调用 disconnect()，让底层连接回到 keep-alive 池复用
+    }
+
+    /** Returns true only when the collector echoes the exact schema, batch identity, and event count. */
+    private fun hasMatchingAck(connection: HttpURLConnection, expectation: AckExpectation): Boolean {
+        val schema = connection.getHeaderField(ApmWireProtocol.HEADER_SCHEMA_VERSION)?.toIntOrNull()
+        val batchId = connection.getHeaderField(ApmWireProtocol.HEADER_BATCH_ID)
+        val eventCount = connection.getHeaderField(ApmWireProtocol.HEADER_EVENT_COUNT)?.toIntOrNull()
+        return schema == ApmWireProtocol.ENVELOPE_SCHEMA_VERSION &&
+            batchId == expectation.batchId &&
+            eventCount == expectation.eventCount
     }
 
     /**
@@ -352,6 +447,12 @@ class HttpApmUploader(
         /** 默认读取超时：15 秒。 */
         private const val DEFAULT_READ_TIMEOUT_MS = 15_000
 
+        /** Default uncompressed request-body budget for versioned batch envelopes. */
+        const val DEFAULT_MAX_BATCH_BYTES = 1024 * 1024
+
+        /** Absolute constructor bound preventing unreviewed multi-megabyte request buffers. */
+        const val MAX_BATCH_BYTES = 4 * 1024 * 1024
+
         /** HTTP 成功状态码下限。 */
         private const val HTTP_SUCCESS_MIN = 200
 
@@ -405,10 +506,22 @@ class HttpApmUploader(
             HEADER_CONTENT_TYPE.lowercase(Locale.US),
             HEADER_CONTENT_ENCODING.lowercase(Locale.US),
             HEADER_ACCEPT.lowercase(Locale.US),
+            ApmWireProtocol.HEADER_SCHEMA_VERSION.lowercase(Locale.US),
+            ApmWireProtocol.HEADER_SDK_VERSION.lowercase(Locale.US),
+            ApmWireProtocol.HEADER_BATCH_ID.lowercase(Locale.US),
+            ApmWireProtocol.HEADER_EVENT_COUNT.lowercase(Locale.US),
             "content-length",
             "transfer-encoding",
             "connection",
             "host"
         )
     }
+
+    /** Expected collector acknowledgement for one physical versioned request. */
+    private data class AckExpectation(
+        /** Stable batch identity sent in both body and request header. */
+        val batchId: String,
+        /** Complete event count required in the response ACK. */
+        val eventCount: Int
+    )
 }

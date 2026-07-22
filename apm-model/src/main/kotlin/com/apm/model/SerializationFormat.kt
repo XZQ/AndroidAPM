@@ -20,5 +20,11 @@ enum class SerializationFormat {
      * 体积约为 LINE_PROTOCOL 的 1/3~1/5，适合生产环境大规模上报。
      * Content-Type: application/x-protobuf
      */
-    PROTOBUF
+    PROTOBUF,
+
+    /**
+     * Versioned protobuf batch envelope with typed fields, standard resource context, stable batch
+     * identity, explicit SDK/schema versions, encoded-size bounds, and whole-batch ACK semantics.
+     */
+    PROTOBUF_ENVELOPE_V2
 }
