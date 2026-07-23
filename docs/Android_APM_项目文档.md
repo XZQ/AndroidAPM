@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-22｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
+> 文档同步：2026-07-23｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -326,7 +326,11 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 `apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
 
-设备侧同日验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。新的 sample-App smoke runner 安装 5,916,050 字节 debug APK 时再次被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，尚未进入只清理 `com.apm.sample.debug` 数据的 acquisition 阶段；早先 benchmark APK 也被同一设备安全策略拒绝，因此未产生物理性能数值。emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后完成三个 microbenchmark 方法并生成 JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
+2026-07-22 设备侧验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。当时新的 sample-App smoke runner 安装 5,916,050 字节 debug APK 时再次被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，尚未进入只清理 `com.apm.sample.debug` 数据的 acquisition 阶段；早先 benchmark APK 也被同一设备安全策略拒绝，因此当日未产生物理性能数值。emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后完成三个 microbenchmark 方法并生成 JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
+
+2026-07-23 在同一台物理 Redmi/Xiaomi `22041216UC`（Android 13）上重新验证。JDK 17.0.14 下 `:apm-sample-app:assembleDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过；启用设备的 USB 安装控制后，sample 与 benchmark AndroidTest APK 均可通过直接 ADB 安装。MIUI 会拒绝 benchmark 进程后台拉起 AndroidX `IsolationActivity`，因此只对 `com.apm.benchmark.test` 临时允许该 app-op，正式 `AndroidBenchmarkRunner` 随后无错误完成 3/3 测试，结束后权限已恢复为原始 `ignore`。fail-closed JSON 预算验证通过：durable encode median `4,640.93 ns` / `22.00 allocations`，decode `4,841.81 ns` / `46.00 allocations`，32-event SQLite transaction `1,258,990.52 ns` / `1,400.21 allocations`。但 Gradle aggregate task 的 session-based APK 安装仍被该 OEM 以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此不能把 Gradle 一键任务写成通过；接受数值来自直接安装同一构建 APK 后运行其声明的正式 runner，且未抑制 AndroidX 环境错误。
+
+同日完整执行两次物理 `smoke` acquisition。两次都满足实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程操作 P95、PSS、app-private disk 与 thermal 约束，但平均 CPU 分别为 `28.425%` 和 `32.046%`，连续超过 checked-in `20%` 上限，校验器均 fail closed。由此当前真机结论是“microbenchmark 三项预算通过、smoke CPU 预算失败”，不是生产验收通过；`24h`、`72h` 与长稳功耗证据均未执行。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
@@ -338,6 +342,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 - 真机 Native 行为与符号化
 - 真机真正执行进程被杀/断电/磁盘满场景
+- 真机 smoke 平均 CPU 优化后重新通过 checked-in 预算
 - 真机跑满 24/72 小时的功耗、内存、离线和重启结果
 - 多 OEM/Android 版本兼容
 - 真实 Collector 协议与服务端幂等
@@ -348,7 +353,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及在允许测试 APK 安装的物理机上真正跑满并保存 smoke/24h/72h、功耗仪或 UID、热与磁盘数值，全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及修复当前物理 smoke 的 CPU 超限、重新通过该门禁并继续跑满 24h/72h、功耗仪或 UID、热与磁盘数值，全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 

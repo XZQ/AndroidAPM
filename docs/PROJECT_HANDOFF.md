@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-22｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-07-23｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -178,7 +178,11 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-22 的第十五批 physical-device-soak gate 定向验证：JDK 17.0.14 下 14 个 host Python tests 全部通过；`:apm-sample-app:assembleDebug :apm-sample-app:lintDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过，sample lint 为 0 errors / 25 warnings。Sample 支持零 SDK control、永远失败的 offline uploader、有界主线程合成事件与 app-private 进程结果；host runner 跨冷进程采启动、SDK init、CPU、PSS、disk、app UID power、charge counter 与 thermal。`smoke`/`24h`/`72h` profile 对物理机、实际时长、重启、离线模式、资源字段和长稳功耗 fail closed。`python docs/verify_docs.py` 通过 43 Markdown / 48 links。该结果不替代第十四批 636-test 全根基线。
 
-设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。新的 device-soak runner 尝试安装 5,916,050 字节 sample debug APK 时被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，未进入明确限定为 `com.apm.sample.debug` 的数据清理与 acquisition；早先 benchmark 安装也被同一策略拒绝。emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 microbenchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此 instrumentation/host 入口已有可执行证据，物理 smoke 与 24/72 小时仍需设备允许安装后真正跑满，不能使用模拟器数值替代。
+2026-07-22 设备侧可见 Xiaomi `22041216UC` 和 Android 17 emulator。当时新的 device-soak runner 尝试安装 5,916,050 字节 sample debug APK 时被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，未进入明确限定为 `com.apm.sample.debug` 的数据清理与 acquisition；早先 benchmark 安装也被同一策略拒绝。emulator 抑制预期 `EMULATOR` 门禁后完成 3 个 microbenchmark 方法并产出 JSON/Perfetto，但 runner 结束阶段因 `IsolationActivity` 启动超时使 Gradle task 失败。因此在当日状态下 instrumentation/host 入口已有可执行证据，物理 smoke 与 24/72 小时仍待设备允许安装后真正执行，不能使用模拟器数值替代；该状态已由下方 2026-07-23 真机刷新取代。
+
+2026-07-23 的物理设备刷新：同一台 Redmi/Xiaomi `22041216UC`（Android 13）启用 USB 安装控制后可直接 ADB 安装 sample 和 benchmark AndroidTest APK。JDK 17.0.14 下相关 sample/benchmark 构建通过；仅对 benchmark 测试包临时允许 MIUI 后台拉起 `IsolationActivity` 后，正式 `AndroidBenchmarkRunner` 无抑制完成 3/3 测试，app-op 随即恢复为原始 `ignore`。预算验证通过 encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`。Gradle aggregate task 的 session-based 安装仍会被 OEM 以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，所以这里只确认同一构建 APK 的 runner 与预算通过，不伪造一键 Gradle task 成功。
+
+同日两轮完整物理 `smoke` 均只失败平均 CPU：`28.425%`、`32.046%`，超过 `20%` 上限；实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程 P95、PSS、disk 和 thermal 均通过。当前发布结论必须保持为 microbenchmark 通过但 smoke 不接受；24/72 小时与长稳功耗尚未执行。
 
 ## 新电脑接手
 
@@ -209,7 +213,7 @@ python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 
 ## 后续优先级
 
-客户端代码可独立完成的既定缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。首次物理 smoke 与 24/72 小时接受结果仍必须由允许安装测试 APK 的专用真机真正产生，不能把 host tests 或模拟器 parser 证据伪装成发布通过。
+客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。当前必须先定位并修复物理 smoke 的 CPU 超限，重新通过该门禁后再执行 24/72 小时和长稳功耗验收；不能把已通过的 microbenchmark、host tests 或模拟器 parser 证据伪装成发布通过。
 
 ## Git 与文档策略
 
