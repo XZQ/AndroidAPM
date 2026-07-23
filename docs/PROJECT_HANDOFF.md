@@ -192,6 +192,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日 dispatcher 分阶段尾延迟证据完成：self-monitor 开启时，单 worker 对 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize`、`storeHandoff` 使用单调纳秒和固定 6 × 22 桶直方图，周期性输出 count / avgMicros / p95UpperBoundMicros / maxMicros；记录不分配逐样本对象，关闭 self-monitor 时不读时钟。JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 27 suites / 197 tests，0 failures/errors/skips，lint 为 `No issues found`。`python docs/verify_docs.py` 通过 43 Markdown / 49 links，两份 DOCX 已重新生成并确认 P95 正文。P95 是桶上界，store 按 batch 而其他阶段按实际 invocation 计数；该机制只提供定位证据，尚无真机/24h 分布，也没有据此改成多 worker。
 
+同日 OnePlus `PLK110`（Android 16）暴露出 ADB shell 无 `CLEAR_APP_USER_DATA` 权限的 OEM 差异。device-soak runner 只在错误同时包含 `SecurityException` 和该权限名时，对明确选择的 `com.apm.sample.debug` 执行卸载重装；断连、包名错误和其他 ADB 失败仍 fail closed，工件记录 `appDataResetStrategy`。21 个 host tests 通过，JDK 17.0.14 下 benchmark Release/AndroidTest Kotlin 构建成功。相同 APK SHA-256 `213f5d73c93472b77da0909ac7be4c4cb92ededcc00a3dc5bfa548681689cb59` 的 schema-v2 smoke 以 `uninstall-reinstall` 取得 `30.225s`、2 starts、enabled CPU `6.161%`、control CPU `6.793%`、main-thread P95 `354.896us`、UID power `29.062 mAh/hour`，原预算全项通过。文档校验为 43 Markdown / 49 links，两份 DOCX 已重生成并验证。该工件关闭 OnePlus 的 reset/power 前置缺口，但不是 24h/72h 长稳接受结果。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。

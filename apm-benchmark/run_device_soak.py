@@ -23,6 +23,10 @@ DEFAULT_PACKAGE = "com.apm.sample.debug"
 DEFAULT_ACTIVITY = "com.apm.sample.MainActivity"
 RESULT_FILE = "files/apm-device-soak-result.json"
 EMULATOR_MARKERS = ("emulator", "generic", "sdk_gphone", "emu64")
+CLEAR_DATA_PERMISSION_MARKERS = (
+    "securityexception",
+    "android.permission.clear_app_user_data",
+)
 PROFILE_DEFAULTS = {
     "smoke": {
         "durationSeconds": 30,
@@ -114,6 +118,48 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _reports_success(output: str) -> bool:
+    """Accept only an explicit standalone ADB success line."""
+    return any(line.strip() == "Success" for line in output.splitlines())
+
+
+def _install_apk(adb: Adb, apk: Path, replace: bool) -> None:
+    """Install the selected sample APK and require an explicit success marker."""
+    arguments = ["install"]
+    if replace:
+        arguments.append("-r")
+    arguments.append(str(apk))
+    output = adb.run(*arguments, timeout=180).strip()
+    if not _reports_success(output):
+        raise DeviceSoakRunError(f"APK install did not report Success: {output}")
+
+
+def _reset_sample_app_data(adb: Adb, package: str, apk: Path) -> str:
+    """Reset only the selected sample package, with a policy-safe reinstall fallback."""
+    try:
+        output = adb.shell("pm", "clear", package, timeout=60).strip()
+    except DeviceSoakRunError as error:
+        detail = str(error).lower()
+        if not all(marker in detail for marker in CLEAR_DATA_PERMISSION_MARKERS):
+            raise
+
+        # Some production OEM builds deny CLEAR_APP_USER_DATA to the ADB shell.
+        uninstall_output = adb.run("uninstall", package, timeout=180).strip()
+        if not _reports_success(uninstall_output):
+            raise DeviceSoakRunError(
+                f"Sample uninstall did not report Success for {package}: "
+                f"{uninstall_output}"
+            ) from error
+        _install_apk(adb, apk, replace=False)
+        return "uninstall-reinstall"
+
+    if not _reports_success(output):
+        raise DeviceSoakRunError(
+            f"App-data reset did not report Success for {package}: {output}"
+        )
+    return "pm-clear"
 
 
 def _getprop(adb: Adb, name: str) -> str:
@@ -521,14 +567,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     adb = Adb(args.adb, args.serial)
     adb.run("get-state")
     device = _device_identity(adb, args.serial)
-    install_output = adb.run("install", "-r", str(args.apk), timeout=180)
-    if "Success" not in install_output:
-        raise DeviceSoakRunError(f"APK install did not report Success: {install_output.strip()}")
-    clear_output = adb.shell("pm", "clear", args.package, timeout=60).strip()
-    if clear_output != "Success":
-        raise DeviceSoakRunError(
-            f"App-data reset did not report Success for {args.package}: {clear_output}"
-        )
+    _install_apk(adb, args.apk, replace=True)
+    reset_strategy = _reset_sample_app_data(adb, args.package, args.apk)
     uid = _package_uid(adb, args.package)
     clock_ticks_per_second = _clock_ticks_per_second(adb)
     component = f"{args.package}/{args.activity}"
@@ -579,6 +619,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "offlineCollector": True,
             "clockTicksPerSecond": clock_ticks_per_second,
             "externalPowerMah": args.external_power_mah,
+            "appDataResetStrategy": reset_strategy,
         },
         "control": control,
         "segments": segments,

@@ -113,7 +113,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；FPS observer 修复后两轮原绝对预算 smoke 以 12.928% / 12.362% CPU 通过；schema v2 新增 control/enabled/delta CPU 归因且不放宽门禁；24h/72h 未执行"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；Redmi 修复后两轮原预算 smoke 通过；OnePlus Android 16 以限定包重装回退通过并产出 29.062 mAh/hour UID 功耗；24h/72h 未执行"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -175,7 +175,8 @@ def build_status_report() -> Document:
         "AndroidAPM 已形成可构建、可测试的多模块 Android 客户端 APM SDK：采集事件进入有界异步管线，"
         "通过 SQLite outbox 持久化并交给可注入上传器。它仍是客户端框架，不包含生产采集后端、查询、"
         "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过；FPS 静态页面 VSync observer 修复后，"
-        "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过。短 smoke 不替代 24h/72h 长稳验收。"
+        "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过；OnePlus Android 16 预检也在原预算下通过并产出 UID 功耗证据。"
+        "短 smoke 不替代 24h/72h 长稳验收。"
     )
     add_summary_table(document)
 
@@ -255,7 +256,7 @@ def build_architecture_report() -> Document:
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
             "单 dispatcher worker 保留顺序语义；sdk_health 的六阶段 count/平均/P95 上界/最大延迟字段"
             "用于先归因再决定是否分区或并行。",
-            "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因。",
+            "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因；OEM 禁止 pm clear 时只对所选 sample APK 卸载重装并记录 provenance。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")

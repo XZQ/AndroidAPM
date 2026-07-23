@@ -6,6 +6,7 @@ import importlib.util
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import Mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "run_device_soak.py"
@@ -29,6 +30,87 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         """Application UIDs map to the display label used by dumpsys batterystats."""
         self.assertEqual("u0a234", RUNNER._uid_label(10234))
         self.assertEqual("u10a234", RUNNER._uid_label(1010234))
+
+    def test_streamed_install_requires_a_standalone_success_line(self) -> None:
+        """Standard multi-line install output passes without accepting fuzzy text."""
+        adb = Mock()
+        adb.run.return_value = "Performing Streamed Install\nSuccess\n"
+
+        RUNNER._install_apk(adb, Path("sample.apk"), replace=True)
+
+        adb.run.assert_called_once_with(
+            "install",
+            "-r",
+            "sample.apk",
+            timeout=180,
+        )
+        self.assertFalse(RUNNER._reports_success("Not Success"))
+
+    def test_app_data_reset_prefers_package_manager_clear(self) -> None:
+        """A supported device clears only the selected package without reinstalling."""
+        adb = Mock()
+        adb.shell.return_value = "Success\n"
+
+        strategy = RUNNER._reset_sample_app_data(
+            adb,
+            "com.apm.sample.debug",
+            Path("sample.apk"),
+        )
+
+        self.assertEqual("pm-clear", strategy)
+        adb.shell.assert_called_once_with(
+            "pm",
+            "clear",
+            "com.apm.sample.debug",
+            timeout=60,
+        )
+        adb.run.assert_not_called()
+
+    def test_app_data_reset_reinstalls_after_oem_permission_denial(self) -> None:
+        """A CLEAR_APP_USER_DATA policy denial falls back to the same sample APK."""
+        adb = Mock()
+        adb.shell.side_effect = RUNNER.DeviceSoakRunError(
+            "java.lang.SecurityException: shell does not have permission "
+            "android.permission.CLEAR_APP_USER_DATA"
+        )
+        adb.run.side_effect = ["Success\n", "Success\n"]
+
+        strategy = RUNNER._reset_sample_app_data(
+            adb,
+            "com.apm.sample.debug",
+            Path("sample.apk"),
+        )
+
+        self.assertEqual("uninstall-reinstall", strategy)
+        self.assertEqual(
+            [
+                unittest.mock.call(
+                    "uninstall",
+                    "com.apm.sample.debug",
+                    timeout=180,
+                ),
+                unittest.mock.call(
+                    "install",
+                    "sample.apk",
+                    timeout=180,
+                ),
+            ],
+            adb.run.call_args_list,
+        )
+
+    def test_app_data_reset_does_not_mask_unrelated_adb_failures(self) -> None:
+        """Disconnects and other ADB failures remain fail-closed."""
+        adb = Mock()
+        adb.shell.side_effect = RUNNER.DeviceSoakRunError("device offline")
+
+        with self.assertRaisesRegex(RUNNER.DeviceSoakRunError, "device offline"):
+            RUNNER._reset_sample_app_data(
+                adb,
+                "com.apm.sample.debug",
+                Path("sample.apk"),
+            )
+
+        adb.run.assert_not_called()
 
     def test_summary_uses_weighted_cpu_and_uid_power_delta(self) -> None:
         """Aggregation spans process restarts without averaging percentages incorrectly."""

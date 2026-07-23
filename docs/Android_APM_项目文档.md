@@ -340,6 +340,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 同日完成 dispatcher 分阶段尾延迟证据。仅在 self-monitor 开启时，worker 以单调纳秒包围六个固定阶段，使用 6 × 22 个固定桶、无逐样本对象分配的短同步直方图，并在周期报告时生成 count、向上取整平均微秒、P95 桶上界和最大微秒；关闭 self-monitor 时直接执行原 block，不读取时钟。JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 27 suites / 197 tests，0 failures/errors/skips，lint 为 `No issues found`。测试覆盖确定性平均/P95 上界/max/reset、健康事件与独立 journal 字段一致，以及真实 dispatcher 配置全阶段均被观测。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 49 个本地链接，两个 DOCX 报告重新生成并确认包含 P95 证据。该结果证明证据机制，不代表已有真机/24h 尾延迟分布，也不触发自动并行化。
 
+同日连接 OnePlus `PLK110`（Android 16）继续 24h 前置验证。该 OEM 允许直接安装 debug sample，却拒绝 ADB shell 执行 `pm clear`，返回 `SecurityException` / `android.permission.CLEAR_APP_USER_DATA`。device-soak runner 现在只对这一精确权限拒绝回退为卸载并重装同一个明确选择的 sample APK，其他 ADB 失败仍 fail closed；工件记录 `appDataResetStrategy`。21 个 host Python tests 通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 成功。当前 APK SHA-256 `213f5d73c93472b77da0909ac7be4c4cb92ededcc00a3dc5bfa548681689cb59` 在该设备完成 schema-v2 smoke，reset strategy 为 `uninstall-reinstall`，实际时长 `30.225s`、2 次进程启动、enabled CPU `6.161%`、control CPU `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour`，原预算全项通过。`python docs/verify_docs.py` 通过 43 个 Markdown / 49 个本地链接，两份 DOCX 已重生成并验证包含 OnePlus/功耗证据。该结果证明第二种 OEM 的干净基线回退与 UID 功耗采集可用，不替代 24h/72h 验收。
+
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略

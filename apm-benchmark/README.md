@@ -17,6 +17,8 @@ The `2026-07-23` run on a physical Redmi/Xiaomi `22041216UC` (Android 13) produc
 
 MIUI still rejects the Gradle/UTP session-based test-APK install with `INSTALL_FAILED_USER_RESTRICTED`, although direct installation of the exact built test APK succeeds. Record this as an OEM installer-path failure: a direct runner success must not be reported as a successful `verifyReleasePerformanceBudgets` Gradle aggregate task.
 
+A second physical preflight on a OnePlus `PLK110` (Android 16) exposed an OEM policy that denies `pm clear` to the ADB shell. The runner now falls back only for the exact `SecurityException` plus `CLEAR_APP_USER_DATA` denial: it uninstalls and reinstalls only the selected sample APK, records `appDataResetStrategy=uninstall-reinstall`, and keeps all unrelated ADB failures fail-closed. The resulting schema-v2 smoke artifact passed the unchanged budgets at `6.161%` enabled CPU and produced app-UID power evidence at `29.062 mAh/hour`. This proves power acquisition readiness on that device, not 24-hour acceptance.
+
 ## Microbenchmark release gate
 
 Use a physical, unlocked Android device on stable power and temperature:
@@ -46,7 +48,7 @@ The sample Activity accepts host-only intent extras before it touches interactiv
 
 Each enabled process performs the same bounded map construction at 10 operations/second on the main thread and calls `Apm.emit`; control mode retains the map work but skips the SDK. A primitive 4,096-entry rolling reservoir reports emit P50/P95/max without allocating one report object per operation. The host independently samples `/proc`, `dumpsys meminfo`, `run-as du`, thermal service, charge counter, and cumulative app-UID `batterystats` power.
 
-`run_device_soak.py` requires `--reset-app-data`. That explicit flag clears only the selected sample package before acquisition, preventing an old outbox from contaminating disk and restart evidence. It does not clear any other app and does not alter device networking.
+`run_device_soak.py` requires `--reset-app-data`. That explicit flag clears only the selected sample package before acquisition, preventing an old outbox from contaminating disk and restart evidence. It first uses `pm clear`; if and only if the OEM returns a `SecurityException` for `android.permission.CLEAR_APP_USER_DATA`, it uninstalls and reinstalls the same selected APK. The artifact records `appDataResetStrategy` as `pm-clear` or `uninstall-reinstall`. It does not clear any other app, does not alter device networking, and does not turn disconnects or unrelated ADB failures into a reinstall.
 
 Result schema version 2 makes CPU semantics explicit:
 
