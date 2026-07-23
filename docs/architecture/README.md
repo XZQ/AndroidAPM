@@ -1,8 +1,10 @@
 # AndroidAPM 架构文档索引
 
-> 同步日期：2026-07-22。当前源码与测试优先于历史文档。
+> 同步日期：2026-07-23。当前源码与测试优先于历史文档。
 
 构建基线统一为 Java 17 toolchain 和 Java 17 字节码；主构建、included builds 与独立 Maven consumer 允许使用 Gradle/AGP 支持的 JDK 17+ runtime。
+
+当前性能准入状态：物理设备上的三项 AndroidX microbenchmark 预算通过；两轮端到端 smoke 因平均 CPU `28.425%`、`32.046%` 超过 `20%` 上限而失败，24h/72h 未执行。详细证据与 OEM 安装器边界见 [apm-benchmark](22_apm-benchmark.md)。
 
 ## 推荐阅读顺序
 
@@ -86,5 +88,6 @@ python docs/verify_docs.py
 - 明确区分自动采集与宿主接线。
 - 明确区分实现存在与默认开启。
 - 明确区分客户端 SDK 与外部后台。
+- 模块文档的同步日期表示该模块行为最后一次源码复核；全局构建与真机证据只进入项目、交接和 benchmark 文档，不机械复制到无关模块。
 - 不使用“exactly-once”描述当前上传；当前是 acknowledged at-least-once。
 - 不把 `.github/` 描述为跟踪中的云端 CI；该目录按项目策略忽略。

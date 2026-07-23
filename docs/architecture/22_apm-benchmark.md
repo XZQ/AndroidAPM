@@ -1,6 +1,6 @@
 # apm-benchmark 架构
 
-> 同步日期：2026-07-22
+> 同步日期：2026-07-23
 
 ## 1. 边界
 
@@ -67,3 +67,14 @@ Release gate 同时检查 build metadata 与 AndroidX benchmark 名称，拒绝 
 `run_device_soak.py --reset-app-data` 只清理明确选择的 sample package，避免旧 outbox 污染基线；不修改网络，不重置系统 batterystats。`--external-power-mah` 只接受外部仪器归属于 enabled 阶段的 mAh，原始仪器工件仍须随 JSON 保存。`verifyDeviceSoakFromResults` 只验证显式传入的工件，不会搜索并误用旧结果。
 
 `test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
+
+## 7. 当前物理设备证据
+
+2026-07-23 在物理 Redmi/Xiaomi `22041216UC`（Android 13）上执行同一源码构建：
+
+- 正式 `AndroidBenchmarkRunner` 完成 3/3 测试，JSON verifier 通过 encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`；
+- 两轮完整 `smoke` 都只违反平均 CPU 上限，分别为 `28.425%`、`32.046%`，超过 `20%`；其余 smoke 字段与预算通过；
+- `24h`、`72h` 和长稳功耗未执行，因此不存在对应接受结论；
+- MIUI 拒绝 Gradle/UTP 的 session-based 测试 APK 安装，但直接安装同一构建 APK 后正式 runner 可运行；该 OEM 安装器失败必须与 benchmark 预算结果分别记录，不能把手工 runner 通过写成 Gradle aggregate task 通过。
+
+当前判定是：microbenchmark gate 的物理数值通过，device-soak smoke gate 失败。下一步应先分解 control/enabled CPU 样本和模块贡献，修复后按原 `20%` 上限复验；不得因一次失败直接放宽 checked-in 预算。
