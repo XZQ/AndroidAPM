@@ -460,11 +460,13 @@ python apm-benchmark/run_device_soak.py --profile smoke --serial <serial> --apk 
 python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-budgets.json --results apm-benchmark/build/device-soak/smoke.json --profile smoke
 ```
 
-`verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件，其他 ADB 失败仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 同时输出 control CPU、enabled 绝对 CPU 和带符号 delta，校验器从原始 jiffies 重算并核对；原 `cpuAveragePercent` 绝对门禁与预算保持不变，旧 schema v1 工件继续兼容。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
+`verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件。只读采样命令对三种明确 transport 瞬断做最多 30 次一秒间隔重试，安装/卸载/清理/Activity 启停绝不自动重放；工件记录 `transientAdbRetryCount`，持续离线仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 同时输出 control CPU、enabled 绝对 CPU 和带符号 delta，校验器从原始 jiffies 重算并核对；原 `cpuAveragePercent` 绝对门禁与预算保持不变，旧 schema v1 工件继续兼容。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
 
 2026-07-23 的 Redmi/Xiaomi `22041216UC` 物理验证中，AndroidX encode、decode 和 32-event SQLite 三项 microbenchmark 均通过 checked-in time/allocation 预算。最初两轮完整 `smoke` 因平均 CPU `28.425%`、`32.046%` 连续超过 `20%` 上限而失败；线程级归因定位到 FPS 模块在静态页面持续自注册 Choreographer，使主线程被每个 VSync 唤醒。改为 API 24+ 优先使用仅在真实渲染时触发的 FrameMetrics、只在禁用或注册失败时回退 Choreographer 后，同一设备、同一 `20%` 门禁和同一 APK SHA-256 的两轮 smoke 以 `12.928%`、`12.362%` CPU 全项通过。24h/72h 与长稳功耗仍未执行，所以这不是完整生产验收。MIUI 仍会拒绝 Gradle 的 session-based 测试 APK 安装；直接安装同一构建 APK 后运行正式 runner 可通过，需分别记录 OEM 安装器结果和 benchmark 结果。
 
 同日 OnePlus `PLK110`（Android 16）预检发现 ADB shell 无 `CLEAR_APP_USER_DATA` 权限；限定包卸载重装回退后，schema-v2 smoke 在原预算下通过：enabled CPU `6.161%`、control `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour`，工件明确记录 `uninstall-reinstall`。这关闭了该 OEM 的干净基线与功耗采集前置条件，但仍不是 24h/72h 接受结论。
+
+加入只读 transport 有界重试后，同一 OnePlus 再次完成原预算 smoke：enabled CPU `5.134%`、control `7.164%`、主线程 P95 `360.677us`、UID 功耗 `29.423 mAh/hour`，`transientAdbRetryCount=0`。这次未发生重试，证明新命令分类未改变正常 acquisition；确定性测试另外覆盖了瞬断恢复、持续离线拒绝和有副作用命令不重放。
 
 发布链验证：
 

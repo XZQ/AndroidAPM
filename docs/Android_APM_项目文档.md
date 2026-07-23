@@ -342,6 +342,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 同日连接 OnePlus `PLK110`（Android 16）继续 24h 前置验证。该 OEM 允许直接安装 debug sample，却拒绝 ADB shell 执行 `pm clear`，返回 `SecurityException` / `android.permission.CLEAR_APP_USER_DATA`。device-soak runner 现在只对这一精确权限拒绝回退为卸载并重装同一个明确选择的 sample APK，其他 ADB 失败仍 fail closed；工件记录 `appDataResetStrategy`。21 个 host Python tests 通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 成功。当前 APK SHA-256 `213f5d73c93472b77da0909ac7be4c4cb92ededcc00a3dc5bfa548681689cb59` 在该设备完成 schema-v2 smoke，reset strategy 为 `uninstall-reinstall`，实际时长 `30.225s`、2 次进程启动、enabled CPU `6.161%`、control CPU `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour`，原预算全项通过。`python docs/verify_docs.py` 通过 43 个 Markdown / 49 个本地链接，两份 DOCX 已重生成并验证包含 OnePlus/功耗证据。该结果证明第二种 OEM 的干净基线回退与 UID 功耗采集可用，不替代 24h/72h 验收。
 
+随后为 24h acquisition 增加 ADB transport 有界恢复，但严格区分命令副作用：只读 `getprop/pidof/proc/dumpsys/run-as/package/get-state` 对三类明确瞬断最多重试 30 次、每次间隔一秒；install/uninstall/pm clear/Activity start/force-stop 从不自动重放。持续离线即使发生在 smoke 可选功耗字段也会失败，工件新增 `transientAdbRetryCount`，verifier 校验非负整数及已知 reset strategy。25 个 host tests 通过。同一 OnePlus 复验在 `transientAdbRetryCount=0` 的正常路径下以实际 `30.221s`、2 starts、enabled CPU `5.134%`、control CPU `7.164%`、主线程 P95 `360.677us`、PSS 增长 `3,327 KiB`、disk 增长 `49,152 bytes`、UID 功耗 `29.423 mAh/hour` 全项通过原预算；工件 SHA-256 为 `63649b00680b9211325929b9601936a2b84cf5b68a5c5095c41fd289ad07bbc4`。该证据验证正常命令分类，不声称 24h 已完成。
+
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略

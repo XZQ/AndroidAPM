@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "run_device_soak.py"
@@ -45,6 +46,92 @@ class DeviceSoakRunnerTest(unittest.TestCase):
             timeout=180,
         )
         self.assertFalse(RUNNER._reports_success("Not Success"))
+
+    @patch.object(RUNNER.time, "sleep")
+    @patch.object(RUNNER.subprocess, "run")
+    def test_read_only_adb_command_retries_transient_disconnect(
+        self,
+        run_command: Mock,
+        sleep: Mock,
+    ) -> None:
+        """A read-only command may replay after a bounded transport reconnect."""
+        run_command.side_effect = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout="",
+                stderr="adb.exe: device 'serial' not found",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="123\n",
+                stderr="",
+            ),
+        ]
+        adb = RUNNER.Adb("adb", "serial")
+
+        output = adb.read_shell("pidof", "com.apm.sample.debug")
+
+        self.assertEqual("123\n", output)
+        self.assertEqual(1, adb.transient_retry_count)
+        self.assertEqual(2, run_command.call_count)
+        sleep.assert_called_once_with(RUNNER.TRANSIENT_ADB_RETRY_INTERVAL_SECONDS)
+
+    @patch.object(RUNNER.time, "sleep")
+    @patch.object(RUNNER.subprocess, "run")
+    def test_mutating_adb_command_never_retries(
+        self,
+        run_command: Mock,
+        sleep: Mock,
+    ) -> None:
+        """Commands with side effects fail immediately instead of being replayed."""
+        run_command.side_effect = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=1,
+                stdout="",
+                stderr="adb.exe: device 'serial' not found",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="Success\n",
+                stderr="",
+            ),
+        ]
+        adb = RUNNER.Adb("adb", "serial")
+
+        with self.assertRaisesRegex(RUNNER.DeviceSoakRunError, "not found"):
+            adb.shell("am", "force-stop", "com.apm.sample.debug")
+
+        self.assertEqual(1, run_command.call_count)
+        self.assertEqual(0, adb.transient_retry_count)
+        sleep.assert_not_called()
+
+    @patch.object(RUNNER, "TRANSIENT_ADB_MAX_ATTEMPTS", 2)
+    @patch.object(RUNNER.time, "sleep")
+    @patch.object(RUNNER.subprocess, "run")
+    def test_read_only_retry_exhaustion_fails_even_when_command_is_optional(
+        self,
+        run_command: Mock,
+        sleep: Mock,
+    ) -> None:
+        """A persistent transport loss cannot degrade into missing optional evidence."""
+        run_command.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=1,
+            stdout="",
+            stderr="error: device offline",
+        )
+        adb = RUNNER.Adb("adb", "serial")
+
+        with self.assertRaisesRegex(RUNNER.DeviceSoakRunError, "device offline"):
+            adb.read_shell("dumpsys", "battery", check=False)
+
+        self.assertEqual(2, run_command.call_count)
+        self.assertEqual(1, adb.transient_retry_count)
+        sleep.assert_called_once_with(RUNNER.TRANSIENT_ADB_RETRY_INTERVAL_SECONDS)
 
     def test_app_data_reset_prefers_package_manager_clear(self) -> None:
         """A supported device clears only the selected package without reinstalling."""

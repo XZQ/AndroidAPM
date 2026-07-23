@@ -194,6 +194,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日 OnePlus `PLK110`（Android 16）暴露出 ADB shell 无 `CLEAR_APP_USER_DATA` 权限的 OEM 差异。device-soak runner 只在错误同时包含 `SecurityException` 和该权限名时，对明确选择的 `com.apm.sample.debug` 执行卸载重装；断连、包名错误和其他 ADB 失败仍 fail closed，工件记录 `appDataResetStrategy`。21 个 host tests 通过，JDK 17.0.14 下 benchmark Release/AndroidTest Kotlin 构建成功。相同 APK SHA-256 `213f5d73c93472b77da0909ac7be4c4cb92ededcc00a3dc5bfa548681689cb59` 的 schema-v2 smoke 以 `uninstall-reinstall` 取得 `30.225s`、2 starts、enabled CPU `6.161%`、control CPU `6.793%`、main-thread P95 `354.896us`、UID power `29.062 mAh/hour`，原预算全项通过。文档校验为 43 Markdown / 49 links，两份 DOCX 已重生成并验证。该工件关闭 OnePlus 的 reset/power 前置缺口，但不是 24h/72h 长稳接受结果。
 
+之后仅对 device-soak 的只读 ADB 证据命令增加三类明确 transport 瞬断的有界重试（最多 30 次、一秒间隔）；所有可能有副作用的安装、卸载、清理和 Activity 命令保持单次执行。持续离线仍失败，工件记录 `transientAdbRetryCount`，verifier 校验 provenance。25 个 host tests 通过。同一 OnePlus 正常路径复验的 retry count 为 0，原预算 smoke 再次通过：`30.221s`、2 starts、enabled CPU `5.134%`、control CPU `7.164%`、main-thread P95 `360.677us`、UID power `29.423 mAh/hour`。这只证明长跑前的 transport 策略和正常路径，不替代 24h。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。

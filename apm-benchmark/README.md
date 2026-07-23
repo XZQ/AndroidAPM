@@ -50,6 +50,8 @@ Each enabled process performs the same bounded map construction at 10 operations
 
 `run_device_soak.py` requires `--reset-app-data`. That explicit flag clears only the selected sample package before acquisition, preventing an old outbox from contaminating disk and restart evidence. It first uses `pm clear`; if and only if the OEM returns a `SecurityException` for `android.permission.CLEAR_APP_USER_DATA`, it uninstalls and reinstalls the same selected APK. The artifact records `appDataResetStrategy` as `pm-clear` or `uninstall-reinstall`. It does not clear any other app, does not alter device networking, and does not turn disconnects or unrelated ADB failures into a reinstall.
 
+Read-only evidence commands (`getprop`, `pidof`, `/proc`, `dumpsys`, `run-as du/cat`, package UID and `get-state`) may replay for at most 30 attempts at one-second intervals when ADB reports only `device offline`, `device '<serial>' not found`, or `no devices/emulators found`. Install, uninstall, `pm clear`, Activity start and force-stop commands never replay automatically. Exhausted read-only transport loss raises even for optional smoke power fields, and each accepted artifact records `transientAdbRetryCount`; the verifier accepts only a non-negative integer and known reset strategy.
+
 Result schema version 2 makes CPU semantics explicit:
 
 - `cpuAveragePercent` remains the authoritative enabled-process absolute CPU field used by the unchanged budget gate;

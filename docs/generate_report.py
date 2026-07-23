@@ -257,6 +257,7 @@ def build_architecture_report() -> Document:
             "单 dispatcher worker 保留顺序语义；sdk_health 的六阶段 count/平均/P95 上界/最大延迟字段"
             "用于先归因再决定是否分区或并行。",
             "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因；OEM 禁止 pm clear 时只对所选 sample APK 卸载重装并记录 provenance。",
+            "device-soak 仅对只读证据命令做三类 ADB transport 瞬断的有界重试；安装、卸载、清理和 Activity 命令不自动重放，工件保留 retry count。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")

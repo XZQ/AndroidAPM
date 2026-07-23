@@ -232,6 +232,23 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             "rawControl": raw_control_cpu,
             "rawEnabled": raw_enabled_cpu,
         }
+    reset_strategy = config.get("appDataResetStrategy")
+    if reset_strategy is not None and reset_strategy not in (
+        "pm-clear",
+        "uninstall-reinstall",
+    ):
+        raise DeviceSoakVerificationError(
+            "config.appDataResetStrategy must be pm-clear or uninstall-reinstall"
+        )
+    transient_retry_count = config.get("transientAdbRetryCount")
+    if transient_retry_count is not None and (
+        isinstance(transient_retry_count, bool)
+        or not isinstance(transient_retry_count, int)
+        or transient_retry_count < 0
+    ):
+        raise DeviceSoakVerificationError(
+            "config.transientAdbRetryCount must be a non-negative integer"
+        )
     power_value = summary.get("chargeConsumptionMahPerHour")
     power_source = summary.get("powerSource")
     if power_value is None:
@@ -364,6 +381,11 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             f"control={cpu_attribution['control']:.3f}% "
             f"enabled={cpu_attribution['enabled']:.3f}% "
             f"delta={cpu_attribution['delta']:.3f}%"
+        )
+    if transient_retry_count is not None:
+        messages.append(
+            "INFO adbReadOnlyRetries "
+            f"count={transient_retry_count} reset={reset_strategy or 'legacy-unknown'}"
         )
     return messages
 

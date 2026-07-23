@@ -53,6 +53,8 @@ class DeviceSoakVerifierTest(unittest.TestCase):
             "config": {
                 "offlineCollector": True,
                 "clockTicksPerSecond": 100,
+                "appDataResetStrategy": "pm-clear",
+                "transientAdbRetryCount": 0,
             },
             "control": {
                 "probe": {"sdkEnabled": False},
@@ -213,6 +215,25 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         self._write_result()
 
         with self.assertRaisesRegex(VERIFIER.DeviceSoakVerificationError, "powerSource"):
+            self._verify_smoke()
+
+    def test_adb_retry_provenance_must_be_well_formed(self) -> None:
+        """New transport/reset evidence rejects invalid strategy and retry values."""
+        self.result["config"]["appDataResetStrategy"] = "clear-everything"
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "appDataResetStrategy",
+        ):
+            self._verify_smoke()
+
+        self.result["config"]["appDataResetStrategy"] = "uninstall-reinstall"
+        self.result["config"]["transientAdbRetryCount"] = -1
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "transientAdbRetryCount",
+        ):
             self._verify_smoke()
 
 

@@ -27,6 +27,12 @@ CLEAR_DATA_PERMISSION_MARKERS = (
     "securityexception",
     "android.permission.clear_app_user_data",
 )
+TRANSIENT_ADB_ERROR_MARKERS = (
+    "device offline",
+    "no devices/emulators found",
+)
+TRANSIENT_ADB_MAX_ATTEMPTS = 30
+TRANSIENT_ADB_RETRY_INTERVAL_SECONDS = 1.0
 PROFILE_DEFAULTS = {
     "smoke": {
         "durationSeconds": 30,
@@ -75,33 +81,87 @@ class Adb:
     def __init__(self, executable: str, serial: str) -> None:
         """Bind every command to the selected device."""
         self._base = [executable, "-s", serial]
+        self._transient_retry_count = 0
+
+    @property
+    def transient_retry_count(self) -> int:
+        """Return the number of bounded read-only transport retries performed."""
+        return self._transient_retry_count
 
     def run(
         self,
         *arguments: str,
         timeout: float = 30,
         check: bool = True,
+        retry_transient: bool = False,
     ) -> str:
         """Execute one ADB command and return decoded standard output."""
-        completed = subprocess.run(
-            [*self._base, *arguments],
-            check=False,
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            timeout=timeout,
-        )
-        if check and completed.returncode != 0:
-            detail = (completed.stderr or completed.stdout).strip()
-            raise DeviceSoakRunError(
-                f"ADB command failed ({completed.returncode}): {' '.join(arguments)}: {detail}"
+        for attempt in range(1, TRANSIENT_ADB_MAX_ATTEMPTS + 1):
+            completed = subprocess.run(
+                [*self._base, *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=timeout,
             )
-        return completed.stdout
+            if completed.returncode == 0:
+                return completed.stdout
 
-    def shell(self, *arguments: str, timeout: float = 30, check: bool = True) -> str:
+            detail = (completed.stderr or completed.stdout).strip()
+            transient = retry_transient and _is_transient_adb_transport_error(detail)
+            if transient and attempt < TRANSIENT_ADB_MAX_ATTEMPTS:
+                # Only callers that declared the command read-only enter this branch.
+                self._transient_retry_count += 1
+                time.sleep(TRANSIENT_ADB_RETRY_INTERVAL_SECONDS)
+                continue
+            if check or transient:
+                raise DeviceSoakRunError(
+                    f"ADB command failed ({completed.returncode}): "
+                    f"{' '.join(arguments)}: {detail}"
+                )
+            return completed.stdout
+        raise AssertionError("ADB retry loop exhausted without returning")
+
+    def shell(
+        self,
+        *arguments: str,
+        timeout: float = 30,
+        check: bool = True,
+        retry_transient: bool = False,
+    ) -> str:
         """Execute one argument-safe remote shell command."""
-        return self.run("shell", *arguments, timeout=timeout, check=check)
+        return self.run(
+            "shell",
+            *arguments,
+            timeout=timeout,
+            check=check,
+            retry_transient=retry_transient,
+        )
+
+    def read(self, *arguments: str, timeout: float = 30, check: bool = True) -> str:
+        """Execute one explicitly read-only ADB command with bounded transport retry."""
+        return self.run(
+            *arguments,
+            timeout=timeout,
+            check=check,
+            retry_transient=True,
+        )
+
+    def read_shell(
+        self,
+        *arguments: str,
+        timeout: float = 30,
+        check: bool = True,
+    ) -> str:
+        """Execute one read-only remote shell command with bounded transport retry."""
+        return self.shell(
+            *arguments,
+            timeout=timeout,
+            check=check,
+            retry_transient=True,
+        )
 
 
 def _finite_number(value: float, label: str) -> float:
@@ -109,6 +169,14 @@ def _finite_number(value: float, label: str) -> float:
     if not math.isfinite(value):
         raise DeviceSoakRunError(f"{label} is not finite")
     return value
+
+
+def _is_transient_adb_transport_error(detail: str) -> bool:
+    """Identify reconnectable ADB transport failures without matching app errors."""
+    normalized = detail.lower()
+    return any(marker in normalized for marker in TRANSIENT_ADB_ERROR_MARKERS) or bool(
+        re.search(r"\bdevice\s+['\"][^'\"]+['\"]\s+not\s+found\b", normalized)
+    )
 
 
 def _sha256(path: Path) -> str:
@@ -164,7 +232,7 @@ def _reset_sample_app_data(adb: Adb, package: str, apk: Path) -> str:
 
 def _getprop(adb: Adb, name: str) -> str:
     """Read and trim one Android system property."""
-    return adb.shell("getprop", name).strip()
+    return adb.read_shell("getprop", name).strip()
 
 
 def _device_identity(adb: Adb, serial: str) -> dict[str, Any]:
@@ -194,7 +262,7 @@ def _parse_startup_ms(output: str) -> float:
 
 def _process_id(adb: Adb, package: str) -> int:
     """Resolve exactly one running application process identifier."""
-    output = adb.shell("pidof", package).strip()
+    output = adb.read_shell("pidof", package).strip()
     candidates = [value for value in output.split() if value.isdigit()]
     if len(candidates) != 1:
         raise DeviceSoakRunError(f"Expected one PID for {package}, got {output!r}")
@@ -203,7 +271,7 @@ def _process_id(adb: Adb, package: str) -> int:
 
 def _cpu_jiffies(adb: Adb, package: str, pid: int) -> int:
     """Read app-owned process user+system ticks through run-as."""
-    stat = adb.shell("run-as", package, "cat", f"/proc/{pid}/stat").strip()
+    stat = adb.read_shell("run-as", package, "cat", f"/proc/{pid}/stat").strip()
     close_parenthesis = stat.rfind(")")
     if close_parenthesis < 0:
         raise DeviceSoakRunError("Malformed /proc process stat")
@@ -215,7 +283,7 @@ def _cpu_jiffies(adb: Adb, package: str, pid: int) -> int:
 
 def _pss_kb(adb: Adb, package: str) -> int:
     """Read total proportional set size from Android meminfo."""
-    output = adb.shell("dumpsys", "meminfo", package, timeout=60)
+    output = adb.read_shell("dumpsys", "meminfo", package, timeout=60)
     patterns = (
         r"TOTAL PSS:\s*([0-9,]+)",
         r"^\s*TOTAL\s+([0-9,]+)\s+",
@@ -229,7 +297,7 @@ def _pss_kb(adb: Adb, package: str) -> int:
 
 def _disk_bytes(adb: Adb, package: str) -> int:
     """Measure app-private database/files/cache allocation without root."""
-    output = adb.shell(
+    output = adb.read_shell(
         "run-as",
         package,
         "du",
@@ -247,7 +315,7 @@ def _disk_bytes(adb: Adb, package: str) -> int:
 
 def _thermal_status(adb: Adb) -> int:
     """Read Android's current coarse thermal throttling status."""
-    output = adb.shell("dumpsys", "thermalservice", timeout=60)
+    output = adb.read_shell("dumpsys", "thermalservice", timeout=60)
     match = re.search(r"(?:Thermal\s+)?Status:\s*(\d+)", output, re.IGNORECASE)
     if match is None:
         raise DeviceSoakRunError("dumpsys thermalservice lacks thermal status")
@@ -256,7 +324,7 @@ def _thermal_status(adb: Adb) -> int:
 
 def _charge_counter_uah(adb: Adb) -> int | None:
     """Read the device charge counter as environmental evidence when supported."""
-    output = adb.shell("dumpsys", "battery")
+    output = adb.read_shell("dumpsys", "battery")
     match = re.search(r"charge counter:\s*(-?\d+)", output, re.IGNORECASE)
     if match is None:
         return None
@@ -266,7 +334,7 @@ def _charge_counter_uah(adb: Adb) -> int | None:
 
 def _package_uid(adb: Adb, package: str) -> int:
     """Resolve the installed Linux UID used by batterystats attribution."""
-    output = adb.shell("cmd", "package", "list", "packages", "-U", package)
+    output = adb.read_shell("cmd", "package", "list", "packages", "-U", package)
     match = re.search(rf"package:{re.escape(package)}\s+uid:(\d+)", output)
     if match is None:
         raise DeviceSoakRunError(f"Cannot resolve package UID for {package}")
@@ -275,7 +343,7 @@ def _package_uid(adb: Adb, package: str) -> int:
 
 def _clock_ticks_per_second(adb: Adb) -> int:
     """Read the device kernel USER_HZ used by `/proc/<pid>/stat`."""
-    output = adb.shell("getconf", "CLK_TCK").strip()
+    output = adb.read_shell("getconf", "CLK_TCK").strip()
     if not output.isdigit() or int(output) <= 0:
         raise DeviceSoakRunError(f"Cannot resolve device CLK_TCK: {output!r}")
     return int(output)
@@ -292,7 +360,14 @@ def _uid_label(uid: int) -> str:
 
 def _uid_power_mah(adb: Adb, package: str, uid: int) -> float | None:
     """Read cumulative Android batterystats estimated power for this app UID."""
-    output = adb.shell("dumpsys", "batterystats", "--charged", package, timeout=120, check=False)
+    output = adb.read_shell(
+        "dumpsys",
+        "batterystats",
+        "--charged",
+        package,
+        timeout=120,
+        check=False,
+    )
     labels = (str(uid), _uid_label(uid))
     for label in labels:
         match = re.search(
@@ -374,7 +449,7 @@ def _read_probe_result(adb: Adb, package: str, run_id: str) -> dict[str, Any]:
     deadline = time.monotonic() + 20
     last_output = ""
     while time.monotonic() < deadline:
-        last_output = adb.run(
+        last_output = adb.read(
             "exec-out",
             "run-as",
             package,
@@ -565,7 +640,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise DeviceSoakRunError(f"APK does not exist: {args.apk}")
 
     adb = Adb(args.adb, args.serial)
-    adb.run("get-state")
+    adb.read("get-state")
     device = _device_identity(adb, args.serial)
     _install_apk(adb, args.apk, replace=True)
     reset_strategy = _reset_sample_app_data(adb, args.package, args.apk)
@@ -620,6 +695,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "clockTicksPerSecond": clock_ticks_per_second,
             "externalPowerMah": args.external_power_mah,
             "appDataResetStrategy": reset_strategy,
+            "transientAdbRetryCount": adb.transient_retry_count,
         },
         "control": control,
         "segments": segments,
