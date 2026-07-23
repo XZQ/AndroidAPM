@@ -31,8 +31,9 @@ TRANSIENT_ADB_ERROR_MARKERS = (
     "device offline",
     "no devices/emulators found",
 )
-TRANSIENT_ADB_MAX_ATTEMPTS = 30
 TRANSIENT_ADB_RETRY_INTERVAL_SECONDS = 1.0
+DEFAULT_ADB_RECONNECT_TIMEOUT_SECONDS = 30
+MAX_ADB_RECONNECT_TIMEOUT_SECONDS = 10 * 60
 PROFILE_DEFAULTS = {
     "smoke": {
         "durationSeconds": 30,
@@ -40,6 +41,7 @@ PROFILE_DEFAULTS = {
         "restartIntervalSeconds": 15,
         "sampleIntervalSeconds": 2,
         "eventsPerSecond": 10,
+        "adbReconnectTimeoutSeconds": 30,
     },
     "24h": {
         "durationSeconds": 24 * 60 * 60,
@@ -47,6 +49,7 @@ PROFILE_DEFAULTS = {
         "restartIntervalSeconds": 60 * 60,
         "sampleIntervalSeconds": 60,
         "eventsPerSecond": 10,
+        "adbReconnectTimeoutSeconds": 5 * 60,
     },
     "72h": {
         "durationSeconds": 72 * 60 * 60,
@@ -54,6 +57,7 @@ PROFILE_DEFAULTS = {
         "restartIntervalSeconds": 6 * 60 * 60,
         "sampleIntervalSeconds": 5 * 60,
         "eventsPerSecond": 10,
+        "adbReconnectTimeoutSeconds": 5 * 60,
     },
 }
 
@@ -78,10 +82,18 @@ class ProcessSample:
 class Adb:
     """Small checked subprocess wrapper bound to one explicit device serial."""
 
-    def __init__(self, executable: str, serial: str) -> None:
+    def __init__(
+        self,
+        executable: str,
+        serial: str,
+        reconnect_timeout_seconds: int = DEFAULT_ADB_RECONNECT_TIMEOUT_SECONDS,
+    ) -> None:
         """Bind every command to the selected device."""
         self._base = [executable, "-s", serial]
         self._transient_retry_count = 0
+        self._transient_max_attempts = (
+            int(reconnect_timeout_seconds / TRANSIENT_ADB_RETRY_INTERVAL_SECONDS) + 1
+        )
 
     @property
     def transient_retry_count(self) -> int:
@@ -96,7 +108,7 @@ class Adb:
         retry_transient: bool = False,
     ) -> str:
         """Execute one ADB command and return decoded standard output."""
-        for attempt in range(1, TRANSIENT_ADB_MAX_ATTEMPTS + 1):
+        for attempt in range(1, self._transient_max_attempts + 1):
             completed = subprocess.run(
                 [*self._base, *arguments],
                 check=False,
@@ -111,7 +123,7 @@ class Adb:
 
             detail = (completed.stderr or completed.stdout).strip()
             transient = retry_transient and _is_transient_adb_transport_error(detail)
-            if transient and attempt < TRANSIENT_ADB_MAX_ATTEMPTS:
+            if transient and attempt < self._transient_max_attempts:
                 # Only callers that declared the command read-only enter this branch.
                 self._transient_retry_count += 1
                 time.sleep(TRANSIENT_ADB_RETRY_INTERVAL_SECONDS)
@@ -595,6 +607,16 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _adb_reconnect_timeout(value: str) -> int:
+    """Parse a positive, absolutely bounded ADB reconnect timeout."""
+    parsed = _positive_int(value)
+    if parsed > MAX_ADB_RECONNECT_TIMEOUT_SECONDS:
+        raise argparse.ArgumentTypeError(
+            f"value must not exceed {MAX_ADB_RECONNECT_TIMEOUT_SECONDS}"
+        )
+    return parsed
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse campaign, device, and optional acquisition overrides."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -617,6 +639,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sample-interval-seconds", type=_positive_int)
     parser.add_argument("--events-per-second", type=_positive_int)
     parser.add_argument(
+        "--adb-reconnect-timeout-seconds",
+        type=_adb_reconnect_timeout,
+        help="Read-only ADB reconnect window; defaults to 30s smoke and 300s long profiles",
+    )
+    parser.add_argument(
         "--external-power-mah",
         type=float,
         help="Optional app-attributed mAh from a calibrated external meter for the enabled phase",
@@ -632,6 +659,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     restart_interval = args.restart_interval_seconds or defaults["restartIntervalSeconds"]
     sample_interval = args.sample_interval_seconds or defaults["sampleIntervalSeconds"]
     events_per_second = args.events_per_second or defaults["eventsPerSecond"]
+    adb_reconnect_timeout = (
+        args.adb_reconnect_timeout_seconds
+        or defaults["adbReconnectTimeoutSeconds"]
+    )
     if args.external_power_mah is not None and (
         not math.isfinite(args.external_power_mah) or args.external_power_mah < 0
     ):
@@ -639,7 +670,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if not args.apk.is_file():
         raise DeviceSoakRunError(f"APK does not exist: {args.apk}")
 
-    adb = Adb(args.adb, args.serial)
+    adb = Adb(
+        args.adb,
+        args.serial,
+        reconnect_timeout_seconds=adb_reconnect_timeout,
+    )
     adb.read("get-state")
     device = _device_identity(adb, args.serial)
     _install_apk(adb, args.apk, replace=True)
@@ -696,6 +731,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "externalPowerMah": args.external_power_mah,
             "appDataResetStrategy": reset_strategy,
             "transientAdbRetryCount": adb.transient_retry_count,
+            "adbReconnectTimeoutSeconds": adb_reconnect_timeout,
         },
         "control": control,
         "segments": segments,

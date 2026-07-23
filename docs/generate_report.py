@@ -113,7 +113,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；Redmi 修复后两轮原预算 smoke 通过；OnePlus Android 16 以限定包重装回退通过并产出 29.062 mAh/hour UID 功耗；24h/72h 未执行"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；Redmi 当前代码 smoke 以 11.319% CPU 通过但无 UID power；OnePlus Android 16 预检产出 UID 功耗，首次 24h 因持续断连失败；24h/72h 未完成"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -257,7 +257,7 @@ def build_architecture_report() -> Document:
             "单 dispatcher worker 保留顺序语义；sdk_health 的六阶段 count/平均/P95 上界/最大延迟字段"
             "用于先归因再决定是否分区或并行。",
             "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因；OEM 禁止 pm clear 时只对所选 sample APK 卸载重装并记录 provenance。",
-            "device-soak 仅对只读证据命令做三类 ADB transport 瞬断的有界重试；安装、卸载、清理和 Activity 命令不自动重放，工件保留 retry count。",
+            "device-soak 仅对只读证据命令做三类 ADB transport 瞬断的有界重试；smoke/long 默认窗口为 30/300 秒、绝对上限 600 秒，副作用命令不自动重放，工件保留 window/retry count。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")

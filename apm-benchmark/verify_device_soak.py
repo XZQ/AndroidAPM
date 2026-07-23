@@ -14,6 +14,7 @@ BUDGET_SCHEMA_VERSION = 1
 RESULT_SCHEMA_VERSION = 2
 SUPPORTED_RESULT_SCHEMA_VERSIONS = (1, RESULT_SCHEMA_VERSION)
 ATTRIBUTION_TOLERANCE = 1e-6
+MAX_ADB_RECONNECT_TIMEOUT_SECONDS = 10 * 60
 
 
 class DeviceSoakVerificationError(ValueError):
@@ -249,6 +250,16 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
         raise DeviceSoakVerificationError(
             "config.transientAdbRetryCount must be a non-negative integer"
         )
+    reconnect_timeout = config.get("adbReconnectTimeoutSeconds")
+    if reconnect_timeout is not None and (
+        isinstance(reconnect_timeout, bool)
+        or not isinstance(reconnect_timeout, int)
+        or reconnect_timeout <= 0
+        or reconnect_timeout > MAX_ADB_RECONNECT_TIMEOUT_SECONDS
+    ):
+        raise DeviceSoakVerificationError(
+            "config.adbReconnectTimeoutSeconds must be an integer in 1..600"
+        )
     power_value = summary.get("chargeConsumptionMahPerHour")
     power_source = summary.get("powerSource")
     if power_value is None:
@@ -385,7 +396,9 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
     if transient_retry_count is not None:
         messages.append(
             "INFO adbReadOnlyRetries "
-            f"count={transient_retry_count} reset={reset_strategy or 'legacy-unknown'}"
+            f"count={transient_retry_count} "
+            f"window={reconnect_timeout or 'legacy-unknown'}s "
+            f"reset={reset_strategy or 'legacy-unknown'}"
         )
     return messages
 

@@ -55,6 +55,7 @@ class DeviceSoakVerifierTest(unittest.TestCase):
                 "clockTicksPerSecond": 100,
                 "appDataResetStrategy": "pm-clear",
                 "transientAdbRetryCount": 0,
+                "adbReconnectTimeoutSeconds": 30,
             },
             "control": {
                 "probe": {"sdkEnabled": False},
@@ -233,6 +234,15 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         with self.assertRaisesRegex(
             VERIFIER.DeviceSoakVerificationError,
             "transientAdbRetryCount",
+        ):
+            self._verify_smoke()
+
+        self.result["config"]["transientAdbRetryCount"] = 0
+        self.result["config"]["adbReconnectTimeoutSeconds"] = 601
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "adbReconnectTimeoutSeconds",
         ):
             self._verify_smoke()
 

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import subprocess
 import sys
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -109,7 +111,6 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         self.assertEqual(0, adb.transient_retry_count)
         sleep.assert_not_called()
 
-    @patch.object(RUNNER, "TRANSIENT_ADB_MAX_ATTEMPTS", 2)
     @patch.object(RUNNER.time, "sleep")
     @patch.object(RUNNER.subprocess, "run")
     def test_read_only_retry_exhaustion_fails_even_when_command_is_optional(
@@ -124,7 +125,7 @@ class DeviceSoakRunnerTest(unittest.TestCase):
             stdout="",
             stderr="error: device offline",
         )
-        adb = RUNNER.Adb("adb", "serial")
+        adb = RUNNER.Adb("adb", "serial", reconnect_timeout_seconds=1)
 
         with self.assertRaisesRegex(RUNNER.DeviceSoakRunError, "device offline"):
             adb.read_shell("dumpsys", "battery", check=False)
@@ -132,6 +133,63 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         self.assertEqual(2, run_command.call_count)
         self.assertEqual(1, adb.transient_retry_count)
         sleep.assert_called_once_with(RUNNER.TRANSIENT_ADB_RETRY_INTERVAL_SECONDS)
+
+    def test_reconnect_timeout_is_profile_aware_and_absolutely_bounded(self) -> None:
+        """Long profiles tolerate minutes, while CLI overrides retain a hard ceiling."""
+        smoke = RUNNER.parse_args(
+            [
+                "--profile",
+                "smoke",
+                "--serial",
+                "serial",
+                "--apk",
+                "sample.apk",
+                "--output",
+                "result.json",
+                "--reset-app-data",
+            ]
+        )
+        long_run = RUNNER.parse_args(
+            [
+                "--profile",
+                "24h",
+                "--serial",
+                "serial",
+                "--apk",
+                "sample.apk",
+                "--output",
+                "result.json",
+                "--reset-app-data",
+            ]
+        )
+
+        self.assertIsNone(smoke.adb_reconnect_timeout_seconds)
+        self.assertIsNone(long_run.adb_reconnect_timeout_seconds)
+        self.assertEqual(
+            30,
+            RUNNER.PROFILE_DEFAULTS["smoke"]["adbReconnectTimeoutSeconds"],
+        )
+        self.assertEqual(
+            300,
+            RUNNER.PROFILE_DEFAULTS["24h"]["adbReconnectTimeoutSeconds"],
+        )
+        with redirect_stderr(io.StringIO()):
+            with self.assertRaises(SystemExit):
+                RUNNER.parse_args(
+                    [
+                        "--profile",
+                        "24h",
+                        "--serial",
+                        "serial",
+                        "--apk",
+                        "sample.apk",
+                        "--output",
+                        "result.json",
+                        "--reset-app-data",
+                        "--adb-reconnect-timeout-seconds",
+                        "601",
+                    ]
+                )
 
     def test_app_data_reset_prefers_package_manager_clear(self) -> None:
         """A supported device clears only the selected package without reinstalling."""
