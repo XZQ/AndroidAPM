@@ -90,7 +90,7 @@ Tink Ed25519 + 固定 32 字节 **pinned** raw key（非随响应下发）、`RA
 dispatcher 2048 条 + 8 MiB / drain 32 / IPC 4 MiB pending + 256 KiB raw event + 1 MiB file + 16 MiB ready directory / SQLite 50,000 行 + 64 MiB live payload + 256 KiB durable event / V2 HTTP envelope 默认 1 MiB、绝对 4 MiB / codec 2 MiB / map 4096 / big-number text 4096 字符 / 限流 LRU 256 / 非持久队列 500 / 诊断 200+256 记录各 4 MiB。普通 IPC 使用 lock-free pending 与单一周期 writer，ready 文件流式读取；溢出、拒绝和淘汰都有明确策略与健康计数。
 
 **G. core/监控线程治理基本统一（`ApmExecutors.kt`）**
-core 和监控模块通过 `ApmExecutors` 统一 daemon、`apm-` 前缀及后台 `MIN_PRIORITY` / 测量 `NORM_PRIORITY` 两级，便于 systrace/线程 dump 定位。`apm-uploader` 因依赖方向不能反向依赖 core，保留模块内 executor；其中 retry scheduler 显式 daemon，但 `RetryingApmUploader` 的主 executor 当前只是普通命名 `Thread`，没有显式 daemon/priority。因此"全部 SDK 线程都统一"是不准确的，后续应统一该模块的本地线程工厂或把例外写成明确契约。
+core 和监控模块通过 `ApmExecutors` 统一 daemon、`apm-` 前缀及后台 `MIN_PRIORITY` / 测量 `NORM_PRIORITY` 两级，便于 systrace/线程 dump 定位。`apm-uploader` 因依赖方向不能反向依赖 core，保留模块内 executor；当前 `RetryingApmUploader` 已用一个本地命名 factory 统一有序 worker 与 delayed-retry scheduler，显式设为 daemon / `Thread.MIN_PRIORITY`，并以实际 delegate 执行线程测试名称、daemon 和 priority。因而准确结论是“线程治理契约统一、实现入口按依赖层分为 `ApmExecutors` 与 uploader 本地 factory”，而不是强行让底层模块反向依赖 core。
 
 **H. eventId 抗碰撞且跨编码稳定（`ApmEventIdGenerator.kt`）**
 `UUID.randomUUID()` 作进程前缀 + `AtomicLong` 单调序列（base-16），进程内零碰撞，跨进程碰撞概率可忽略；且 eventId 在 Line Protocol / Protobuf / durable codec / SQLite / IPC 全程保留，供服务端幂等。
@@ -198,7 +198,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 顺序 | 改进项 | 为什么要做 | 完成判据 |
 |---|---|---|---|
 | 1 | 完善 device-soak CPU 归因字段 | **已完成**：schema v2 新增 control/enabled/delta，按 raw jiffies 重算；schema v1 兼容，绝对门禁不变 | 17 个 host tests 通过；下一次物理 campaign 才会产生 schema-v2 真机工件 |
-| 2 | 统一 `apm-uploader` 本地线程策略 | 当前主 retry executor 未显式 daemon/priority，和"所有 SDK 线程统一治理"不一致 | 使用模块内命名 thread factory 显式设定 daemon/priority；现有 uploader tests 与 lint 通过 |
+| 2 | 统一 `apm-uploader` 本地线程策略 | **已完成**：模块内命名 factory 同时治理 worker/scheduler，显式 daemon / `Thread.MIN_PRIORITY`，依赖方向不变 | JDK 17 下 uploader 4 suites / 25 tests 通过，lint `No issues found` |
 | 3 | 增加 dispatcher 分阶段尾延迟证据 | 单 worker 的容量有界不等于一次昂贵处理不会阻塞后续批次 | 对 resolve/aggregate/rate-limit/sanitize/store hand-off 建立低开销分阶段统计或 benchmark；先观察再决定分区/并行 |
 | 4 | 执行 24h 物理长稳 | 短 smoke 不能证明内存、磁盘、功耗、热和重启趋势 | 原预算、无 override、物理设备、>=24h、>=24 次进程启动、离线积压与功耗证据全部通过 |
 | 5 | 执行 72h 与 OEM/Android 矩阵 | 单台 Redmi 的短时结果不能外推全部设备 | 原预算 72h 通过，并覆盖约定的低端/主流/高刷设备及 Android 版本矩阵 |
@@ -213,7 +213,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 ## 6. 闭环验证与局限
 
 - **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：device-soak CPU 归因更新后的 17 个 host tests 通过，历史 schema-v1 物理 smoke 工件继续通过原绝对 CPU 门禁；该次 host 变更尚未生成新的 schema-v2 真机工件。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
+- **定向测试/构建**：device-soak CPU 归因更新后的 17 个 host tests 通过，历史 schema-v1 物理 smoke 工件继续通过原绝对 CPU 门禁；该次 host 变更尚未生成新的 schema-v2 真机工件。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
 - **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；FPS observer 修复后两轮 smoke 以 CPU `12.928%`、`12.362%` 通过原 `20%` 上限，其他预算同样通过。Gradle session-based APK 安装仍受 MIUI 拒绝，直接安装同一 APK 可运行正式 runner；该 OEM 安装问题与 SDK 预算结果分开记录。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 49 个本地链接。
 - **仍需真机/外部系统**：执行 24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。host tests、模拟器、microbenchmark 或短 smoke 都不能替代长稳验收。

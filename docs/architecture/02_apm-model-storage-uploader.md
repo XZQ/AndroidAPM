@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-07-22
+> 同步日期：2026-07-23
 
 ## 1. 分层关系
 
@@ -223,10 +223,11 @@ claimPending(owner, lease)
 - 满时仅允许更高优先级事件淘汰低优先级事件
 - drain batch，delegate 为 Batch 时一批调用
 - 失败批次由独立 scheduled executor 延迟重投
+- worker 与 scheduler 由同一模块内命名 factory 创建，显式 daemon / `Thread.MIN_PRIORITY`
 - 不使用 `Thread.sleep`
 - shutdown 有界 drain；尚未到期的内存 retry 会被放弃
 
-这条路径是 best effort，不替代 SQLite outbox。
+这条路径是 best effort，不替代 SQLite outbox。线程 factory 保持 `apm-uploader -> apm-model` 的依赖边界，不反向依赖 `apm-core`；稳定线程名为 `apm-upload-retry` 与 `apm-upload-retry-scheduler`。
 
 ## 11. 交付语义与缺口
 
@@ -256,6 +257,6 @@ claimPending(owner, lease)
 
 `apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/row+payload-byte eviction/单事件隔离/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
-`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2 byte split 与 exact ACK。
+`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、worker/scheduler 实际执行线程的名称/daemon/priority、真实 HTTP socket/Gzip/batch/Retry-After、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2 byte split 与 exact ACK。
 
 `apm-core`：PersistentUploadWorker success/failure/fallback 与 UploaderFactory retry ownership。

@@ -7,6 +7,7 @@ import java.util.concurrent.PriorityBlockingQueue
 import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.Semaphore
+import java.util.concurrent.ThreadFactory
 import java.util.concurrent.TimeUnit
 
 /**
@@ -91,18 +92,18 @@ class RetryingApmUploader(
     private val acceptanceLock = Any()
 
     /** 单线程执行器，保证上传顺序。 */
-    private val executor = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, THREAD_NAME)
-    }
+    private val executor = Executors.newSingleThreadExecutor(
+        backgroundThreadFactory(THREAD_NAME)
+    )
 
     /**
      * 重试调度器：失败批次延迟后重新尝试，
      * 退避等待不再阻塞主 drain 线程（新批次可继续上传）。
      */
     private val retryScheduler: ScheduledExecutorService =
-        Executors.newSingleThreadScheduledExecutor { runnable ->
-            Thread(runnable, RETRY_SCHEDULER_THREAD_NAME).apply { isDaemon = true }
-        }
+        Executors.newSingleThreadScheduledExecutor(
+            backgroundThreadFactory(RETRY_SCHEDULER_THREAD_NAME)
+        )
 
     /** 运行标志。volatile 保证工作线程可见性。 */
     @Volatile
@@ -276,11 +277,29 @@ class RetryingApmUploader(
     }
 
     companion object {
+        /**
+         * Creates one module-local thread factory without introducing an apm-core dependency.
+         *
+         * @param name stable SDK thread name
+         * @return daemon/background thread factory for in-memory retry work
+         */
+        private fun backgroundThreadFactory(name: String): ThreadFactory = ThreadFactory { runnable ->
+            Thread(runnable, name).apply {
+                // Best-effort in-memory telemetry must never define application-process liveness.
+                isDaemon = true
+                // Retry transport yields CPU scheduling preference to host application work.
+                priority = BACKGROUND_THREAD_PRIORITY
+            }
+        }
+
         /** 工作线程名。 */
         private const val THREAD_NAME = "apm-upload-retry"
 
         /** 重试调度线程名。 */
         private const val RETRY_SCHEDULER_THREAD_NAME = "apm-upload-retry-scheduler"
+
+        /** Background priority shared by both module-local retry executors. */
+        private const val BACKGROUND_THREAD_PRIORITY = Thread.MIN_PRIORITY
 
         /** 首次尝试的序号。 */
         private const val FIRST_ATTEMPT = 0

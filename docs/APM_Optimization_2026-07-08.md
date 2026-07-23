@@ -22,7 +22,7 @@
 
 ### 3.1 `apm-uploader` 的模块内执行器
 
-`apm-uploader` 位于核心上传链路的底层，不能访问 `apm-core`。它继续使用模块内执行器，并通过注入的 `UploaderLogger` 记录异常。这是依赖边界选择，不是遗漏迁移。
+`apm-uploader` 位于核心上传链路的底层，不能访问 `apm-core`。它继续使用模块内执行器，并通过注入的 `UploaderLogger` 记录异常。这是依赖边界选择，不是遗漏迁移。2026-07-23 的复核进一步收口了该例外：`RetryingApmUploader` 的 worker 与 scheduler 共享模块内命名 factory，显式设为 daemon / `Thread.MIN_PRIORITY`，测试在两个实际执行线程上核对名称、daemon 和 priority。
 
 ### 3.2 Dispatcher 专用工作线程
 
@@ -32,11 +32,10 @@
 
 - 新增 SDK 后台任务时，优先通过 `ApmExecutors` 创建；
 - 降级并吞掉的异常应调用 `Apm.recordInternalError(tag, error)`；
-- 新执行器必须有明确的线程命名、队列上限、拒绝策略和关闭方式；
+- 新执行器必须有明确的线程命名、优先级、daemon 契约、队列上限、拒绝策略和关闭方式；
 - 涉及 native 回调、Binder 回调或系统回调时，确认不在调用方主线程执行重活；
 - 真机验证线程增长、ANR 信号与多进程退出后的资源释放。
 
 ## 5. 结论
 
 线程治理优化已提交并成为当前实现的一部分。后续工作的重点是守住统一执行器规则和有界队列契约，而不是继续做一次性机械迁移。
-

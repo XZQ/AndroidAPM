@@ -194,6 +194,7 @@ def build_status_report() -> Document:
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
             "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
+            "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",
         ],
     )
     add_diagram(document, "android-apm-event-pipeline.png", "图 1：事件从采集到确认删除的真实管线")
@@ -245,7 +246,8 @@ def build_architecture_report() -> Document:
         document,
         [
             "监控模块通过 apm-core 上报，不直接操作 SQLite 或 HTTP。",
-            "apm-uploader 不反向依赖 apm-core；因此保留模块内执行器和注入式 UploaderLogger。",
+            "apm-uploader 不反向依赖 apm-core；因此保留模块内执行器和注入式 UploaderLogger，"
+            "其 worker/scheduler 由本地命名工厂显式设置 daemon 与 MIN_PRIORITY。",
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
             "apm-bundle 只聚合发布依赖，不承载运行时实现，也不自动应用慢方法插件。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",

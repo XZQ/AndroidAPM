@@ -8,6 +8,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -56,6 +57,34 @@ class RetryingApmUploaderTest {
         assertFalse(uploader.upload(createEvent("after_stop")))
     }
 
+    /** Worker and delayed retry execution both use explicit daemon/background threads. */
+    @Test
+    fun `retry executors use governed background threads`() {
+        val successLatch = CountDownLatch(1)
+        val delegate = SequenceUploader(
+            results = listOf(false, true),
+            successLatch = successLatch
+        )
+        val uploader = RetryingApmUploader(
+            delegate = delegate,
+            retryPolicy = RetryPolicy(
+                maxRetries = 1,
+                baseDelayMs = RETRY_DELAY_MS,
+                maxDelayMs = RETRY_DELAY_MS
+            ),
+            flushIntervalMs = FLUSH_INTERVAL_MS
+        )
+
+        uploader.upload(createEvent("thread_policy"))
+
+        assertTrue(successLatch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        assertEquals(2, delegate.invocationThreads.size)
+        assertThreadPolicy(delegate.invocationThreads[0], WORKER_THREAD_NAME)
+        assertThreadPolicy(delegate.invocationThreads[1], RETRY_SCHEDULER_THREAD_NAME)
+
+        uploader.shutdown()
+    }
+
     /**
      * 构造测试事件。
      *
@@ -74,12 +103,27 @@ class RetryingApmUploaderTest {
     }
 
     /**
+     * Verifies one captured uploader invocation thread.
+     *
+     * @param snapshot immutable thread attributes captured inside the delegate
+     * @param expectedName required stable SDK thread name
+     */
+    private fun assertThreadPolicy(snapshot: UploaderThreadSnapshot, expectedName: String) {
+        assertEquals(expectedName, snapshot.name)
+        assertTrue(snapshot.daemon)
+        assertEquals(Thread.MIN_PRIORITY, snapshot.priority)
+    }
+
+    /**
      * 按顺序返回上传结果的 uploader。
      */
     private class SequenceUploader(private val results: List<Boolean>, private val successLatch: CountDownLatch? = null) : ApmUploader {
 
         /** 调用次数。 */
         val attempts = AtomicInteger(0)
+
+        /** Actual executor-thread attributes for every delegate invocation. */
+        val invocationThreads = CopyOnWriteArrayList<UploaderThreadSnapshot>()
 
         /**
          * 返回预设结果。
@@ -90,6 +134,13 @@ class RetryingApmUploaderTest {
         override fun upload(event: ApmEvent): Boolean {
             // 每次上传都推进一次预设结果。
             val index = attempts.getAndIncrement()
+            val currentThread = Thread.currentThread()
+            // Capture inside the delegate so the test observes the real executor, not construction.
+            invocationThreads += UploaderThreadSnapshot(
+                name = currentThread.name,
+                daemon = currentThread.isDaemon,
+                priority = currentThread.priority
+            )
             val result = results.getOrElse(index) { results.lastOrNull() ?: false }
             if (result) {
                 successLatch?.countDown()
@@ -97,6 +148,16 @@ class RetryingApmUploaderTest {
             return result
         }
     }
+
+    /** Immutable executor-thread attributes captured during a delegate call. */
+    private data class UploaderThreadSnapshot(
+        /** Actual thread name. */
+        val name: String,
+        /** Whether the thread is daemon-governed. */
+        val daemon: Boolean,
+        /** Java scheduling priority. */
+        val priority: Int
+    )
 
     companion object {
         /** 快速重试延迟。 */
@@ -107,5 +168,11 @@ class RetryingApmUploaderTest {
 
         /** 等待重试成功的超时秒数。 */
         private const val AWAIT_TIMEOUT_SECONDS = 2L
+
+        /** Expected main in-memory retry worker name. */
+        private const val WORKER_THREAD_NAME = "apm-upload-retry"
+
+        /** Expected delayed retry scheduler name. */
+        private const val RETRY_SCHEDULER_THREAD_NAME = "apm-upload-retry-scheduler"
     }
 }

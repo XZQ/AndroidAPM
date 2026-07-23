@@ -82,6 +82,8 @@ The first-principles review was source-audited again on `2026-07-23` and now sep
 
 Device-soak CPU attribution was then made explicit without changing any checked-in ceiling. Result schema version `2` retains `cpuAveragePercent` as the enabled process's absolute gate, adds raw-sample-derived `cpuControlPercent`, `cpuEnabledAveragePercent`, and signed `cpuDeltaPercent`, and requires the verifier to recompute and reconcile those values from control/enabled jiffies. Result schema version `1` remains readable under its original absolute CPU semantics. All `17` host Python tests passed, and an accepted historical schema-v1 physical smoke artifact still passed the unchanged `20%` gate. This host-only update does not create new schema-v2 physical evidence or replace the pending `24h`/`72h` runs.
 
+Uploader thread-governance checks on `2026-07-23` used JDK `17.0.14`: `:apm-uploader:testDebugUnitTest :apm-uploader:lintDebug --rerun-tasks --no-daemon` passed `4` suites / `25` tests with zero failures/errors/skips, and lint reports `No issues found`. `RetryingApmUploader` preserves the dependency boundary that prevents `apm-uploader` from depending on `apm-core`, but both its ordered worker and delayed-retry scheduler now come from one module-local named factory that explicitly sets daemon status and `Thread.MIN_PRIORITY`. The regression test observes both actual delegate-execution threads and verifies their names, daemon status, and priority. `python docs/verify_docs.py` passed `43` Markdown files / `49` local links, and both generated DOCX reports contain valid package/document entries plus the updated thread-governance statement.
+
 ## Project Boundary
 
 AndroidAPM is a modular Android client SDK, not a complete hosted APM product. It captures, normalizes, protects, persists, and transports telemetry. A production collector, authentication, tenant isolation, query/aggregation backend, alerting, native symbolization service, and operational dashboards are outside this repository.
@@ -139,7 +141,7 @@ SDK self-diagnostics are separate from event delivery. They are enabled by defau
 - Add KDoc for all `public`, `internal`, and `private` properties and methods.
 - Add inline comments at important branches, loops, exception handling, callbacks, and business-significant assignments.
 - Extract non-trivial magic numbers and strings into named constants.
-- Create SDK threads/executors through `com.apm.core.ApmExecutors`; `apm-uploader` retains module-local executors because it cannot depend on `apm-core`.
+- Create SDK threads/executors through `com.apm.core.ApmExecutors`; `apm-uploader` retains module-local executors because it cannot depend on `apm-core`, and those executors must use its explicit named daemon/background thread factory.
 - Report degraded-and-swallowed exceptions through `Apm.recordInternalError(tag, error)`.
 - Do not route diagnostics file-sink failures back through `ApmLogger` or `Apm.recordInternalError`; that path must remain non-recursive.
 - Preserve the durable SQLite outbox as the default storage path.

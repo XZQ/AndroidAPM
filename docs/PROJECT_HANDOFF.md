@@ -188,6 +188,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 随后 device-soak result schema 升级为 v2，但 checked-in 预算保持不变。`cpuAveragePercent` 继续表示 enabled 进程绝对 CPU 并承担门禁；新增 `cpuControlPercent`、`cpuEnabledAveragePercent` 和带符号 `cpuDeltaPercent`，verifier 会从 raw jiffies/elapsed samples 重算并校验摘要一致性。v1 历史工件继续按原绝对 CPU 语义读取。17 个 host tests 通过，现有已接受的 v1 物理 smoke 工件继续通过原 `20%` 门禁；本次没有生成新的 v2 真机工件，单一 campaign 前 control 也不构成 24h/72h 配对因果估计。
 
+同日 `apm-uploader` 本地线程策略完成收口：不改变 `apm-uploader -> apm-model` 的依赖方向，`RetryingApmUploader` 的有序 worker 与 delayed-retry scheduler 统一通过模块内命名 factory 创建，并显式设为 daemon / `Thread.MIN_PRIORITY`。JDK 17.0.14 下 `:apm-uploader:testDebugUnitTest :apm-uploader:lintDebug --rerun-tasks --no-daemon` 通过 4 suites / 25 tests，0 failures/errors/skips，lint 为 `No issues found`；回归测试直接观察两个 executor 实际执行 delegate 时的名称、daemon 和 priority。`python docs/verify_docs.py` 通过 43 Markdown / 49 links，两个 DOCX 报告已重新生成并校验。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
