@@ -8,6 +8,21 @@ import com.apm.model.ApmSeverity
 import java.util.Locale
 
 /**
+ * Numeric latency summary for one fixed dispatcher stage and one health-report interval.
+ *
+ * @property sampleCount measured stage invocations
+ * @property averageMicros ceiling average duration in microseconds
+ * @property p95UpperBoundMicros conservative P95 histogram-bucket upper bound in microseconds
+ * @property maxMicros maximum measured duration in microseconds
+ */
+data class DispatcherStageLatencyReport(
+    val sampleCount: Long = 0L,
+    val averageMicros: Long = 0L,
+    val p95UpperBoundMicros: Long = 0L,
+    val maxMicros: Long = 0L
+)
+
+/**
  * SDK 健康报告数据类。
  * 汇总一次采集周期内的自监控指标，用于：
  * - 评估 SDK 自身运行健康度
@@ -42,7 +57,9 @@ data class SdkHealthReport(
     /** Complete period loss counts keyed by stable [SdkDropReason] names. */
     val dropCountsByReason: Map<String, Long> = emptyMap(),
     /** Complete period loss counts keyed by priority names plus `UNATTRIBUTED`. */
-    val dropCountsByPriority: Map<String, Long> = emptyMap()
+    val dropCountsByPriority: Map<String, Long> = emptyMap(),
+    /** Bounded dispatcher stage-latency summaries keyed by stable stage field name. */
+    val dispatcherStageLatencies: Map<String, DispatcherStageLatencyReport> = emptyMap()
 ) {
     /**
      * 计算事件丢弃率（0.0 ~ 1.0）。
@@ -97,6 +114,14 @@ data class SdkHealthReport(
         }
         fields["$FIELD_DROP_PRIORITY_PREFIX$UNATTRIBUTED_PRIORITY_FIELD"] =
             dropCountsByPriority[SdkSelfMonitor.UNATTRIBUTED_PRIORITY] ?: 0L
+        for (stage in DispatcherStage.values()) {
+            val latency = dispatcherStageLatencies[stage.fieldName] ?: DispatcherStageLatencyReport()
+            val prefix = "$FIELD_DISPATCHER_STAGE_PREFIX${stage.fieldName}."
+            fields["$prefix$FIELD_SAMPLE_COUNT"] = latency.sampleCount
+            fields["$prefix$FIELD_AVERAGE_MICROS"] = latency.averageMicros
+            fields["$prefix$FIELD_P95_UPPER_BOUND_MICROS"] = latency.p95UpperBoundMicros
+            fields["$prefix$FIELD_MAX_MICROS"] = latency.maxMicros
+        }
         return fields
     }
 
@@ -124,6 +149,15 @@ data class SdkHealthReport(
         }
         append(' ').append(FIELD_DROP_PRIORITY_PREFIX).append(UNATTRIBUTED_PRIORITY_FIELD)
             .append('=').append(dropCountsByPriority[SdkSelfMonitor.UNATTRIBUTED_PRIORITY] ?: 0L)
+        for (stage in DispatcherStage.values()) {
+            val latency = dispatcherStageLatencies[stage.fieldName] ?: DispatcherStageLatencyReport()
+            val prefix = "$FIELD_DISPATCHER_STAGE_PREFIX${stage.fieldName}."
+            append(' ').append(prefix).append(FIELD_SAMPLE_COUNT).append('=').append(latency.sampleCount)
+            append(' ').append(prefix).append(FIELD_AVERAGE_MICROS).append('=').append(latency.averageMicros)
+            append(' ').append(prefix).append(FIELD_P95_UPPER_BOUND_MICROS).append('=')
+                .append(latency.p95UpperBoundMicros)
+            append(' ').append(prefix).append(FIELD_MAX_MICROS).append('=').append(latency.maxMicros)
+        }
     }
 
     companion object {
@@ -158,6 +192,16 @@ data class SdkHealthReport(
         private const val FIELD_DROP_REASON_PREFIX = "dropReason."
         /** Prefix for one priority or unattributed drop counter. */
         private const val FIELD_DROP_PRIORITY_PREFIX = "dropPriority."
+        /** Prefix for one fixed dispatcher stage-latency group. */
+        private const val FIELD_DISPATCHER_STAGE_PREFIX = "dispatcherStage."
+        /** Field suffix: measured stage invocation count. */
+        private const val FIELD_SAMPLE_COUNT = "count"
+        /** Field suffix: ceiling average duration in microseconds. */
+        private const val FIELD_AVERAGE_MICROS = "avgMicros"
+        /** Field suffix: conservative P95 histogram upper bound in microseconds. */
+        private const val FIELD_P95_UPPER_BOUND_MICROS = "p95UpperBoundMicros"
+        /** Field suffix: maximum measured duration in microseconds. */
+        private const val FIELD_MAX_MICROS = "maxMicros"
         /** Lowercase wire field suffix for aggregate-only loss results. */
         private const val UNATTRIBUTED_PRIORITY_FIELD = "unattributed"
     }

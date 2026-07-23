@@ -5,6 +5,7 @@ import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.DispatcherStage
 import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStore
@@ -536,23 +537,40 @@ internal class ApmDispatcher(
         for (queued in batch) {
             try {
                 // 延迟构建的事件在此线程完成构建（上下文合并等）
-                val resolved = queued.resolve()
-                if (!queued.preAggregated && !passesSampling(resolved)) {
+                val resolved = measureDispatcherStage(DispatcherStage.RESOLVE) {
+                    queued.resolve()
+                }
+                val passesSampling = queued.preAggregated ||
+                    measureDispatcherStage(DispatcherStage.SAMPLING) {
+                        passesSampling(resolved)
+                    }
+                if (!passesSampling) {
                     continue
                 }
                 // 聚合检查 — 可能吞入事件（返回空）或输出聚合结果
                 val expanded = if (aggregator != null && !queued.preAggregated) {
-                    aggregator.process(resolved)
+                    measureDispatcherStage(DispatcherStage.AGGREGATE) {
+                        aggregator.process(resolved)
+                    }
                 } else {
                     listOf(resolved)
                 }
                 for (event in expanded) {
                     // 限流检查（ERROR/FATAL 跳过限流，保证关键事件不丢失）
-                    if (!passesRateLimit(event)) {
+                    val passesRateLimit = measureDispatcherStage(DispatcherStage.RATE_LIMIT) {
+                        passesRateLimit(event)
+                    }
+                    if (!passesRateLimit) {
                         continue
                     }
                     // PII 脱敏：在存储和上传前对文本字段执行脱敏
-                    toPersist += piiSanitizer?.sanitize(event) ?: event
+                    toPersist += if (piiSanitizer != null) {
+                        measureDispatcherStage(DispatcherStage.SANITIZE) {
+                            piiSanitizer.sanitize(event)
+                        }
+                    } else {
+                        event
+                    }
                 }
             } catch (error: Exception) {
                 // One malformed or failing monitor event must not terminate the shared worker.
@@ -571,7 +589,9 @@ internal class ApmDispatcher(
         try {
             val startTime = ApmClock.monotonicTimeMillis()
             // 单事务批量落盘
-            val appendResult = store.appendBatchWithResult(toPersist)
+            val appendResult = measureDispatcherStage(DispatcherStage.STORE_HANDOFF) {
+                store.appendBatchWithResult(toPersist)
+            }
             recordStorageResult(appendResult)
             if (appendResult.acceptedEventCount <= 0) {
                 return
@@ -767,6 +787,27 @@ internal class ApmDispatcher(
             discarded
         } finally {
             admissionLock.unlock()
+        }
+    }
+
+    /**
+     * Measures one fixed dispatcher stage only when SDK self-monitoring is active.
+     *
+     * The helper uses monotonic nanoseconds and records in `finally`, so recoverable stage
+     * failures remain visible without changing existing exception isolation.
+     *
+     * @param stage fixed stage identity
+     * @param block stage operation
+     * @return stage operation result
+     */
+    private inline fun <T> measureDispatcherStage(stage: DispatcherStage, block: () -> T): T {
+        val monitor = selfMonitor ?: return block()
+        val startedAtNanos = ApmClock.monotonicTimeNanos()
+        return try {
+            block()
+        } finally {
+            val elapsedNanos = (ApmClock.monotonicTimeNanos() - startedAtNanos).coerceAtLeast(0L)
+            monitor.recordDispatcherStageLatency(stage, elapsedNanos)
         }
     }
 

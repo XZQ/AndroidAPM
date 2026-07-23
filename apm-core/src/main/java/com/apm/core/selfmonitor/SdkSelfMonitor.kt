@@ -5,13 +5,163 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
+ * Fixed dispatcher stages whose worker latency is reported without business payload.
+ *
+ * @property fieldName stable lowercase suffix used by SDK health fields
+ */
+internal enum class DispatcherStage(
+    val fieldName: String
+) {
+    /** Lazy event construction and immutable event resolution. */
+    RESOLVE("resolve"),
+
+    /** Signed dynamic sampling policy evaluation. */
+    SAMPLING("sampling"),
+
+    /** Optional aggregation or alert deduplication. */
+    AGGREGATE("aggregate"),
+
+    /** Dynamic and local rate-limit evaluation. */
+    RATE_LIMIT("rateLimit"),
+
+    /** Optional PII sanitization before persistence. */
+    SANITIZE("sanitize"),
+
+    /** Batch append until the event store returns its ownership hand-off result. */
+    STORE_HANDOFF("storeHandoff")
+}
+
+/**
+ * Coherent bounded histogram for one dispatcher stage.
+ *
+ * The dispatcher has one worker, so recording normally enters an uncontended short critical
+ * section. The once-per-report snapshot uses the same monitor to avoid interval-boundary count,
+ * sum, histogram, and max mismatches.
+ */
+private class DispatcherStageLatencyAccumulator {
+    /** Number of stage invocations in the current report interval. */
+    private var sampleCount = 0L
+
+    /** Sum of non-negative stage durations in nanoseconds. */
+    private var totalNanos = 0L
+
+    /** Maximum stage duration in nanoseconds. */
+    private var maxNanos = 0L
+
+    /** Fixed histogram counts aligned with [DISPATCHER_STAGE_LATENCY_BUCKET_UPPER_BOUNDS_NANOS]. */
+    private val bucketCounts = LongArray(DISPATCHER_STAGE_LATENCY_BUCKET_UPPER_BOUNDS_NANOS.size)
+
+    /**
+     * Records one stage duration with no allocation.
+     *
+     * @param elapsedNanos measured monotonic duration; negative values are defensively clamped
+     */
+    @Synchronized
+    fun record(elapsedNanos: Long) {
+        val safeNanos = elapsedNanos.coerceAtLeast(0L)
+        sampleCount += 1L
+        totalNanos += safeNanos
+        maxNanos = maxOf(maxNanos, safeNanos)
+        val searchResult = DISPATCHER_STAGE_LATENCY_BUCKET_UPPER_BOUNDS_NANOS.binarySearch(safeNanos)
+        val bucketIndex = if (searchResult >= 0) searchResult else -searchResult - 1
+        bucketCounts[bucketIndex] += 1L
+    }
+
+    /**
+     * Returns one coherent interval snapshot and resets all bounded state.
+     *
+     * @return numeric latency evidence in microseconds
+     */
+    @Synchronized
+    fun snapshotAndReset(): DispatcherStageLatencyReport {
+        val report = if (sampleCount == 0L) {
+            DispatcherStageLatencyReport()
+        } else {
+            val percentileRank = sampleCount - sampleCount / P95_DENOMINATOR
+            var cumulativeCount = 0L
+            var p95UpperBoundNanos = maxNanos
+            // The first bucket reaching the rank is the conservative percentile upper bound.
+            for (index in bucketCounts.indices) {
+                cumulativeCount += bucketCounts[index]
+                if (cumulativeCount >= percentileRank) {
+                    val bucketUpperBound = DISPATCHER_STAGE_LATENCY_BUCKET_UPPER_BOUNDS_NANOS[index]
+                    p95UpperBoundNanos = if (bucketUpperBound == Long.MAX_VALUE) {
+                        maxNanos
+                    } else {
+                        bucketUpperBound
+                    }
+                    break
+                }
+            }
+            DispatcherStageLatencyReport(
+                sampleCount = sampleCount,
+                averageMicros = nanosToCeilingMicros(ceilingAverage(totalNanos, sampleCount)),
+                p95UpperBoundMicros = nanosToCeilingMicros(p95UpperBoundNanos),
+                maxMicros = nanosToCeilingMicros(maxNanos)
+            )
+        }
+        sampleCount = 0L
+        totalNanos = 0L
+        maxNanos = 0L
+        bucketCounts.fill(0L)
+        return report
+    }
+
+    companion object {
+        /** Divisor used by `count - floor(count / 20)` to compute the ceil(95%) rank. */
+        private const val P95_DENOMINATOR = 20L
+
+        /** Returns a ceiling average without losing a positive sub-nanosecond remainder. */
+        private fun ceilingAverage(total: Long, count: Long): Long {
+            val quotient = total / count
+            return if (total % count == 0L) quotient else quotient + 1L
+        }
+
+        /** Converts a non-negative nanosecond duration to ceiling microseconds. */
+        private fun nanosToCeilingMicros(nanos: Long): Long {
+            return if (nanos <= 0L) 0L else 1L + (nanos - 1L) / NANOS_PER_MICROSECOND
+        }
+    }
+}
+
+/** Fixed nanosecond histogram upper bounds from 1 microsecond through about 1.05 seconds. */
+private val DISPATCHER_STAGE_LATENCY_BUCKET_UPPER_BOUNDS_NANOS = longArrayOf(
+    1_000L,
+    2_000L,
+    4_000L,
+    8_000L,
+    16_000L,
+    32_000L,
+    64_000L,
+    128_000L,
+    256_000L,
+    512_000L,
+    1_024_000L,
+    2_048_000L,
+    4_096_000L,
+    8_192_000L,
+    16_384_000L,
+    32_768_000L,
+    65_536_000L,
+    131_072_000L,
+    262_144_000L,
+    524_288_000L,
+    1_048_576_000L,
+    Long.MAX_VALUE
+)
+
+/** Nanoseconds per microsecond for integer health-field conversion. */
+private const val NANOS_PER_MICROSECOND = 1_000L
+
+/**
  * SDK 自监控组件。
  * 跟踪 APM 框架自身运行指标，用于：
  * - 评估 SDK 对宿主应用的性能影响
  * - 驱动 [AutoThrottle] 自动降级策略
  * - 定期生成 [SdkHealthReport] 上报
  *
- * 线程安全：所有计数器使用 Atomic 类型，无锁更新。
+ * 线程安全：普通计数器使用 Atomic 类型；dispatcher 阶段直方图使用单 worker 下
+ * 无竞争的短同步区间，并与报告线程生成一致快照。
  */
 class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS) {
     /** 发射事件计数。 */
@@ -49,6 +199,10 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
 
     /** SDK 内部错误计数（监控模块捕获并降级处理的异常）。 */
     private val internalErrorCount = AtomicLong(0L)
+
+    /** Bounded latency histograms indexed by [DispatcherStage.ordinal]. */
+    private val dispatcherStageLatencyAccumulators =
+        Array(DispatcherStage.values().size) { DispatcherStageLatencyAccumulator() }
 
     /**
      * 记录一次事件发射。
@@ -187,6 +341,18 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     }
 
     /**
+     * Records one measured dispatcher worker stage.
+     *
+     * This is internal so SDK integrations cannot inject arbitrary health dimensions.
+     *
+     * @param stage fixed dispatcher stage
+     * @param elapsedNanos non-negative monotonic duration
+     */
+    internal fun recordDispatcherStageLatency(stage: DispatcherStage, elapsedNanos: Long) {
+        dispatcherStageLatencyAccumulators[stage.ordinal].record(elapsedNanos)
+    }
+
+    /**
      * 生成当前周期的健康报告。
      * 读取所有计数器快照并重置归零（用于下一周期）。
      *
@@ -207,6 +373,9 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
         val uploads = uploadCount.getAndSet(0L)
         val maxLatency = maxUploadLatencyMs.getAndSet(0L)
         val internalErrors = internalErrorCount.getAndSet(0L)
+        val dispatcherStageLatencies = DispatcherStage.values().associate { stage ->
+            stage.fieldName to dispatcherStageLatencyAccumulators[stage.ordinal].snapshotAndReset()
+        }
 
         // 计算平均延迟
         val avgLatency = if (uploads > 0L) totalLatency / uploads else 0L
@@ -221,7 +390,8 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
             internalErrorCount = internalErrors,
             dispatcherModuleIsolationDropCount = dispatcherIsolationDrops,
             dropCountsByReason = reasonDrops,
-            dropCountsByPriority = priorityDrops
+            dropCountsByPriority = priorityDrops,
+            dispatcherStageLatencies = dispatcherStageLatencies
         )
     }
 

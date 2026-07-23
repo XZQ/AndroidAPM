@@ -134,8 +134,8 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 
 ### P1（重要，规划处理）
 
-**R3. 单 dispatcher worker 的共享容量爆炸半径——已做有界隔离**
-worker 仍顺序执行，这是明确保留的 ordering/线程安全取舍；项目没有虚称多 worker 吞吐。入口同时受 2048 条与默认 8 MiB 估算保留内存约束；总队列达到 75% 后，已占总容量 50% 的同一模块不能再写 NORMAL/LOW，给其他模块保留容量。HIGH/CRITICAL 绕过模块门禁，并可在 admission lock 内淘汰多个旧低优事件，直至条数和字节都满足。该方案解决 noisy-neighbor 与“大事件挤爆有界条数队列”的容量风险，不消除一次昂贵 lazy factory、聚合、脱敏或 store 操作造成的瞬时 head-of-line blocking。现有 codec/SQLite microbenchmark 与队列门禁只能覆盖部分风险；若要继续演进，应先增加 dispatcher 分阶段耗时和尾延迟证据，再决定是否分区或并行。
+**R3. 单 dispatcher worker 的共享容量爆炸半径——已做有界隔离与分阶段证据**
+worker 仍顺序执行，这是明确保留的 ordering/线程安全取舍；项目没有虚称多 worker 吞吐。入口同时受 2048 条与默认 8 MiB 估算保留内存约束；总队列达到 75% 后，已占总容量 50% 的同一模块不能再写 NORMAL/LOW，给其他模块保留容量。HIGH/CRITICAL 绕过模块门禁，并可在 admission lock 内淘汰多个旧低优事件，直至条数和字节都满足。该方案解决 noisy-neighbor 与“大事件挤爆有界条数队列”的容量风险，不消除一次昂贵 lazy factory、聚合、脱敏或 store 操作造成的瞬时 head-of-line blocking。当前已在 self-monitor 开启时对 `resolve/sampling/aggregate/rateLimit/sanitize/storeHandoff` 记录固定桶 count/avg/P95 上界/max；关闭时零计时开销，开启时无逐样本对象分配。P95 是保守桶上界，store 按 batch，其他阶段按实际 invocation；这些证据尚未绑定阈值或自动并行。下一步必须先在真实 24h/72h 负载观察分布，再决定是否分区/并行并证明顺序语义。
 
 **R4. `bizContext` 调用线程风险——已完成双模式**
 `SYNCHRONOUS` 保留精确发生时快照与兼容性，但 KDoc/接入文档明确要求 O(1)、无 IO、无等待锁。`ASYNC_CACHED` 只在 emit 读取最近一次成功的不可变快照，provider 在 `apm-biz-context` 后台线程按有界周期运行；失败保留 LKG，显式 refresh 合并请求，stop 终止刷新。
@@ -199,7 +199,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 |---|---|---|---|
 | 1 | 完善 device-soak CPU 归因字段 | **已完成**：schema v2 新增 control/enabled/delta，按 raw jiffies 重算；schema v1 兼容，绝对门禁不变 | 17 个 host tests 通过；下一次物理 campaign 才会产生 schema-v2 真机工件 |
 | 2 | 统一 `apm-uploader` 本地线程策略 | **已完成**：模块内命名 factory 同时治理 worker/scheduler，显式 daemon / `Thread.MIN_PRIORITY`，依赖方向不变 | JDK 17 下 uploader 4 suites / 25 tests 通过，lint `No issues found` |
-| 3 | 增加 dispatcher 分阶段尾延迟证据 | 单 worker 的容量有界不等于一次昂贵处理不会阻塞后续批次 | 对 resolve/aggregate/rate-limit/sanitize/store hand-off 建立低开销分阶段统计或 benchmark；先观察再决定分区/并行 |
+| 3 | 增加 dispatcher 分阶段尾延迟证据 | **已完成机制**：六个固定阶段使用无逐样本分配的有界直方图，关闭 self-monitor 时跳过计时 | JDK 17 下 core 27 suites / 197 tests 通过，lint `No issues found`；真机/24h 分布仍待采集 |
 | 4 | 执行 24h 物理长稳 | 短 smoke 不能证明内存、磁盘、功耗、热和重启趋势 | 原预算、无 override、物理设备、>=24h、>=24 次进程启动、离线积压与功耗证据全部通过 |
 | 5 | 执行 72h 与 OEM/Android 矩阵 | 单台 Redmi 的短时结果不能外推全部设备 | 原预算 72h 通过，并覆盖约定的低端/主流/高刷设备及 Android 版本矩阵 |
 | 6 | 生产 Collector V2 闭环 | 客户端 eventId/ACK 机制不能自行证明服务端幂等 | V2 parser、鉴权/租户、exact whole-batch ACK、eventId 去重、协议错误与 dead-letter 通过断网/重传/重复批次测试 |
@@ -213,7 +213,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 ## 6. 闭环验证与局限
 
 - **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：device-soak CPU 归因更新后的 17 个 host tests 通过，历史 schema-v1 物理 smoke 工件继续通过原绝对 CPU 门禁；该次 host 变更尚未生成新的 schema-v2 真机工件。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
+- **定向测试/构建**：device-soak CPU 归因更新后的 17 个 host tests 通过，历史 schema-v1 物理 smoke 工件继续通过原绝对 CPU 门禁；该次 host 变更尚未生成新的 schema-v2 真机工件。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。dispatcher 阶段证据更新后，core 27 suites / 197 tests 通过且 lint 为 `No issues found`，但尚未产生真机/24h 阶段分布。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
 - **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；FPS observer 修复后两轮 smoke 以 CPU `12.928%`、`12.362%` 通过原 `20%` 上限，其他预算同样通过。Gradle session-based APK 安装仍受 MIUI 拒绝，直接安装同一 APK 可运行正式 runner；该 OEM 安装问题与 SDK 预算结果分开记录。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 49 个本地链接。
 - **仍需真机/外部系统**：执行 24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。host tests、模拟器、microbenchmark 或短 smoke 都不能替代长稳验收。

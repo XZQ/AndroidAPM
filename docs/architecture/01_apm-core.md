@@ -127,6 +127,8 @@ resolve lazy event
 
 单个 queued event 的 lazy factory、聚合、限流或脱敏出现 recoverable `Exception` 时只丢弃该事件并记录 internal error，后续事件继续；批量存储的 recoverable 异常会把整批计入 drop，但不会让 worker 退出。`VirtualMachineError` 等 fatal VM error 不转换为 drop。
 
+启用 self-monitor 时，worker 用单调纳秒测量 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize` 和 `storeHandoff`。每阶段维护固定 22 桶直方图及 count/sum/max，记录路径无逐样本对象分配；周期 snapshot 通过短同步区间取得一致 count、向上取整平均微秒、保守 P95 桶上界和最大微秒后清零。`storeHandoff` 是 batch append，因此其 count 与按 event/expanded-event 运行的其他阶段不应直接比较；聚合/脱敏禁用或 pre-aggregated bypass 时相应阶段可以为零。关闭 self-monitor 时计时 helper 直接执行原 block，不读取单调时钟。这些字段不改变 worker 顺序、采样、限流或 AutoThrottle 决策。
+
 ### 聚合维护
 
 启用聚合时，`apm-aggregation` 定期 flush 过期窗口。聚合输出以 `preAggregated` 标记重新入队，避免二次聚合。关闭时剩余聚合数据直接写 store/交 uploader。
@@ -223,10 +225,11 @@ PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身
 - dispatcher module-isolation drop count（同时计入总 drop）
 - queue size
 - queue estimated bytes
+- dispatcher fixed-stage count/average/P95-upper-bound/max latency
 - average/max upload latency
 - internal error count
 
-`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`queueBytes`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`，并把固定 `SdkDropReason` 与 LOW/NORMAL/HIGH/CRITICAL 计数展开为 `dropReason.*` / `dropPriority.*` 数值字段。队列竞争/满/字节预算/优先级淘汰/模块隔离、处理失败、采样、限流、storage reject/failure/evict、non-durable uploader reject、outbox prune、consent erase，以及 IPC pending/file/directory budget/critical failure 均有明确 reason；兼容层只返回总数时进入 `dropPriority.unattributed`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。
+`Apm.recordInternalError` 为模块吞掉并降级的异常提供统一计数和带稳定错误码、异常类型、有限堆栈的本地记录。`sdk_health` 字段包含 `internalErrorCount`、`dispatcherModuleIsolationDropCount`、`queueBytes`、`diagnosticDroppedCount` 和 `diagnosticWriteFailureCount`，并把固定 `SdkDropReason` 与 LOW/NORMAL/HIGH/CRITICAL 计数展开为 `dropReason.*` / `dropPriority.*` 数值字段。固定阶段延迟以 `dispatcherStage.<stage>.count/avgMicros/p95UpperBoundMicros/maxMicros` 展开；P95 名称明确表明它是直方图上界，不伪装成保存原始样本后的精确分位数。队列竞争/满/字节预算/优先级淘汰/模块隔离、处理失败、采样、限流、storage reject/failure/evict、non-durable uploader reject、outbox prune、consent erase，以及 IPC pending/file/directory budget/critical failure 均有明确 reason；兼容层只返回总数时进入 `dropPriority.unattributed`。每份 health report 先写一条不含业务 payload 的独立诊断摘要，再以 HIGH 优先级尝试普通事件管线；诊断 sink 的 recoverable 失败不能阻断事件尝试，也不能递归自报错。
 
 `AutoThrottleController` 根据 drop rate/upload latency 维护完整降级集合：drop rate > 50% 或平均上传延迟 > 10 秒立即关闭 LOW 模块，drop rate > 80% 时扩大到指定 NORMAL 模块。恢复阈值采用迟滞：连续 3 个周期 drop rate <= 20% 且平均上传延迟 <= 3 秒才释放；迟滞区间或再次退化会重置计数。`Apm` 在 `initLock` 下镜像该集合，后注册和动态配置不能绕过；恢复仍通过 `startModule` 重查进程、签名配置和灰度门禁。健康事件的 telemetry 副本仍经过同一 dispatcher，但 HIGH 优先级可在入口满载时替换更低优先级事件。
 
@@ -265,6 +268,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 
 - `ApmConfigTest`, `ApmConsentLifecycleTest`, `UploaderFactoryTest`
 - `ApmDispatcherTest`
+- dispatcher stage histogram/P95/reset/health-field consistency
 - `PersistentUploadWorkerTest`
 - `ProcessEventCoordinatorTest`
 - RateLimiter/Gray/DynamicConfig

@@ -195,6 +195,8 @@ def build_status_report() -> Document:
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
             "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
             "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",
+            "Dispatcher 在 self-monitor 开启时以固定无逐样本分配直方图输出六阶段 count、平均、P95 上界和最大延迟；"
+            "关闭时跳过计时，阶段证据不自动触发并行化。",
         ],
     )
     add_diagram(document, "android-apm-event-pipeline.png", "图 1：事件从采集到确认删除的真实管线")
@@ -251,6 +253,8 @@ def build_architecture_report() -> Document:
             "apm-plugin 与 build-logic 是 included build，不属于根 Gradle 子项目。",
             "apm-bundle 只聚合发布依赖，不承载运行时实现，也不自动应用慢方法插件。",
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
+            "单 dispatcher worker 保留顺序语义；sdk_health 的六阶段 count/平均/P95 上界/最大延迟字段"
+            "用于先归因再决定是否分区或并行。",
             "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因。",
         ],
     )

@@ -155,6 +155,35 @@ class SdkSelfMonitorTest {
         assertEquals(8_192L, report.queueBytes)
     }
 
+    /** Dispatcher stage histograms expose bounded interval tail evidence and reset coherently. */
+    @Test
+    fun `dispatcher stage latency report includes average p95 upper bound and max`() {
+        val monitor = SdkSelfMonitor()
+        repeat(20) { index ->
+            monitor.recordDispatcherStageLatency(
+                DispatcherStage.RESOLVE,
+                elapsedNanos = (index + 1L) * NANOS_PER_MICROSECOND
+            )
+        }
+        monitor.recordDispatcherStageLatency(DispatcherStage.SANITIZE, elapsedNanos = -1L)
+
+        val report = monitor.generateReport()
+        val resolve = checkNotNull(report.dispatcherStageLatencies[DispatcherStage.RESOLVE.fieldName])
+        val sanitize = checkNotNull(report.dispatcherStageLatencies[DispatcherStage.SANITIZE.fieldName])
+
+        assertEquals(20L, resolve.sampleCount)
+        assertEquals(11L, resolve.averageMicros)
+        assertEquals(32L, resolve.p95UpperBoundMicros)
+        assertEquals(20L, resolve.maxMicros)
+        assertEquals(1L, sanitize.sampleCount)
+        assertEquals(0L, sanitize.maxMicros)
+        val reset = checkNotNull(
+            monitor.generateReport().dispatcherStageLatencies[DispatcherStage.RESOLVE.fieldName]
+        )
+        assertEquals(0L, reset.sampleCount)
+        assertEquals(0L, reset.p95UpperBoundMicros)
+    }
+
     /** SdkHealthReport 的 dropRate 应正确计算。 */
     @Test
     fun `health report dropRate calculation`() {
@@ -244,6 +273,40 @@ class SdkSelfMonitorTest {
         assertEquals(2L, fields["dropPriority.low"])
         assertTrue(report.toDiagnosticSummary().contains("dropReason.rate_limit=2"))
         assertTrue(report.toDiagnosticSummary().contains("dropPriority.low=2"))
+    }
+
+    /** Health telemetry and the independent journal share deterministic stage-latency fields. */
+    @Test
+    fun `health fields flatten dispatcher stage latency evidence`() {
+        val report = SdkHealthReport(
+            emitCount = 1L,
+            dropCount = 0L,
+            queueSize = 0,
+            avgUploadLatencyMs = 0L,
+            maxUploadLatencyMs = 0L,
+            dispatcherStageLatencies = mapOf(
+                DispatcherStage.RESOLVE.fieldName to DispatcherStageLatencyReport(
+                    sampleCount = 3L,
+                    averageMicros = 4L,
+                    p95UpperBoundMicros = 8L,
+                    maxMicros = 7L
+                )
+            )
+        )
+
+        val fields = report.toCoreHealthFields()
+
+        assertEquals(3L, fields["dispatcherStage.resolve.count"])
+        assertEquals(4L, fields["dispatcherStage.resolve.avgMicros"])
+        assertEquals(8L, fields["dispatcherStage.resolve.p95UpperBoundMicros"])
+        assertEquals(7L, fields["dispatcherStage.resolve.maxMicros"])
+        assertEquals(0L, fields["dispatcherStage.storeHandoff.count"])
+        assertTrue(report.toDiagnosticSummary().contains("dispatcherStage.resolve.count=3"))
+        assertTrue(
+            report.toDiagnosticSummary().contains(
+                "dispatcherStage.resolve.p95UpperBoundMicros=8"
+            )
+        )
     }
 
     /** 独立诊断摘要只包含有界数值健康字段。 */
@@ -427,4 +490,9 @@ class SdkSelfMonitorTest {
             avgUploadLatencyMs = avgUploadLatencyMs,
             maxUploadLatencyMs = avgUploadLatencyMs
         )
+
+    companion object {
+        /** Nanoseconds per microsecond for deterministic latency histogram inputs. */
+        private const val NANOS_PER_MICROSECOND = 1_000L
+    }
 }

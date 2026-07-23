@@ -4,10 +4,13 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.selfmonitor.DispatcherStage
 import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
+import com.apm.core.throttle.RateLimiter
 import com.apm.storage.EventStore
 import com.apm.storage.EventStoreAppendResult
 import com.apm.uploader.ApmUploader
@@ -109,6 +112,33 @@ class ApmDispatcherTest {
         assertEquals(1L, selfMonitor.getDropCount(ApmPriority.HIGH))
 
         dispatcher.shutdown()
+    }
+
+    /** The real worker pipeline records every configured fixed stage before health publication. */
+    @Test
+    fun `dispatcher records configured stage latency evidence`() {
+        val latch = CountDownLatch(1)
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = RecordingStore(),
+            uploader = RecordingUploader(latch),
+            logger = RecordingLogger(),
+            rateLimiter = RateLimiter(maxEventsPerWindow = 10, windowMs = 60_000L),
+            aggregator = EventAggregator(enabled = false),
+            piiSanitizer = PiiSanitizer(DefaultSanitizationRules.all()),
+            selfMonitor = selfMonitor
+        )
+
+        dispatcher.dispatch(createEvent(name = "stages", fields = mapOf("phone" to RAW_PHONE)))
+
+        assertTrue(latch.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.shutdown()
+        val report = selfMonitor.generateReport()
+        for (stage in DispatcherStage.values()) {
+            val latency = checkNotNull(report.dispatcherStageLatencies[stage.fieldName])
+            assertTrue("${stage.fieldName} should be measured", latency.sampleCount > 0L)
+            assertTrue("${stage.fieldName} max must be non-negative", latency.maxMicros >= 0L)
+        }
     }
 
     /** A recoverable event factory failure must not terminate the shared dispatcher worker. */
