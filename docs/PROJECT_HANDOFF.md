@@ -184,6 +184,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日两轮完整物理 `smoke` 均只失败平均 CPU：`28.425%`、`32.046%`，超过 `20%` 上限；实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程 P95、PSS、disk 和 thermal 均通过。当前发布结论必须保持为 microbenchmark 通过但 smoke 不接受；24/72 小时与长稳功耗尚未执行。
 
+同日 CPU 归因用稳定区间线程级 `/proc` 数据定位到 FPS observer：enabled 主线程约 `26.4%`，control 主线程约 `0.8%`，而 10 events/second 的 emit P95 约 `1.7ms`，差值来自静态页面上持续 repost 的 Choreographer VSync callback。API 24+ 改为 event-driven FrameMetrics 主源、仅在禁用或注册失败时回退 Choreographer 后，JDK 17.0.14 的 `:apm-fps:testDebugUnitTest :apm-fps:lintDebug :apm-sample-app:assembleDebug --rerun-tasks --no-daemon` 通过；最终 FPS 为 `4` suites / `34` tests、0 failures/errors/skips，lint 为 `No issues found`。保持 checked-in `20%` CPU 上限且不传预算覆盖，同一物理设备和相同 APK SHA-256 的两轮完整 smoke 以 `12.928%`、`12.362%` CPU 全项通过；实际时长 `30.562s` / `30.534s`、每轮 2 次进程启动、主线程 P95 `1,853.462us` / `1,796.539us`。当前结论更新为 microbenchmark 与 smoke 原预算均通过；24/72 小时和长稳功耗仍未执行。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
@@ -213,7 +215,7 @@ python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 
 ## 后续优先级
 
-客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。当前必须先定位并修复物理 smoke 的 CPU 超限，重新通过该门禁后再执行 24/72 小时和长稳功耗验收；不能把已通过的 microbenchmark、host tests 或模拟器 parser 证据伪装成发布通过。
+客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过，下一步才是 24/72 小时和长稳功耗验收；不能用已通过的短 smoke、host tests 或模拟器 parser 证据替代长稳结果。
 
 ## Git 与文档策略
 

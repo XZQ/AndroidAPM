@@ -73,8 +73,9 @@ Release gate 同时检查 build metadata 与 AndroidX benchmark 名称，拒绝 
 2026-07-23 在物理 Redmi/Xiaomi `22041216UC`（Android 13）上执行同一源码构建：
 
 - 正式 `AndroidBenchmarkRunner` 完成 3/3 测试，JSON verifier 通过 encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`；
-- 两轮完整 `smoke` 都只违反平均 CPU 上限，分别为 `28.425%`、`32.046%`，超过 `20%`；其余 smoke 字段与预算通过；
+- 初始两轮完整 `smoke` 都只违反平均 CPU 上限，分别为 `28.425%`、`32.046%`，超过 `20%`；线程级归因定位到 FPS Choreographer 在静态页面持续唤醒主线程；
+- FPS 改为 API 24+ event-driven FrameMetrics 主源、失败时才回退 Choreographer 后，保持同一 `20%` 上限不变，两轮完整 smoke 分别以 `12.928%`、`12.362%` CPU 全项通过；APK SHA-256 均为 `e22185f6b09182e5705cea27d80f74f3ac4f05d89ac2223638c02bc4e8f55c1d`；
 - `24h`、`72h` 和长稳功耗未执行，因此不存在对应接受结论；
 - MIUI 拒绝 Gradle/UTP 的 session-based 测试 APK 安装，但直接安装同一构建 APK 后正式 runner 可运行；该 OEM 安装器失败必须与 benchmark 预算结果分别记录，不能把手工 runner 通过写成 Gradle aggregate task 通过。
 
-当前判定是：microbenchmark gate 的物理数值通过，device-soak smoke gate 失败。下一步应先分解 control/enabled CPU 样本和模块贡献，修复后按原 `20%` 上限复验；不得因一次失败直接放宽 checked-in 预算。
+当前判定是：microbenchmark 与 device-soak smoke 的物理门禁均通过，且 smoke 使用原 checked-in `20%` 上限，没有预算覆盖或放宽。下一步是执行 `24h` / `72h` 与长稳功耗验收；短 smoke 不能替代这些长 profile。

@@ -4,7 +4,7 @@
 
 构建基线统一为 Java 17 toolchain 和 Java 17 字节码；主构建、included builds 与独立 Maven consumer 允许使用 Gradle/AGP 支持的 JDK 17+ runtime。
 
-当前性能准入状态：物理设备上的三项 AndroidX microbenchmark 预算通过；两轮端到端 smoke 因平均 CPU `28.425%`、`32.046%` 超过 `20%` 上限而失败，24h/72h 未执行。详细证据与 OEM 安装器边界见 [apm-benchmark](22_apm-benchmark.md)。
+当前性能准入状态：物理设备上的三项 AndroidX microbenchmark 预算通过；FPS 静态页面 VSync observer 修复后，两轮端到端 smoke 在原 `20%` CPU 上限下以 `12.928%`、`12.362%` 全项通过。24h/72h 仍未执行。详细证据与 OEM 安装器边界见 [apm-benchmark](22_apm-benchmark.md)。
 
 ## 推荐阅读顺序
 

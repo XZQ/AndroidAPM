@@ -3,7 +3,7 @@
 > 初评日期：2026-07-21｜闭环复核：2026-07-23｜初评人：安迪（应用性能专家）
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（非运行时 APM 诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过；两轮完整 smoke 仅平均 CPU 失败，分别为 `28.425%`、`32.046%`，超过 `20%` 门禁，24h/72h 未执行。
+> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过。最初两轮 smoke 的 CPU `28.425%`、`32.046%` 超过 `20%`；定位并修复 FPS 静态页面 VSync observer 后，在未修改预算的前提下连续两轮以 `12.928%`、`12.362%` 全项通过，24h/72h 仍未执行。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -25,13 +25,13 @@
 
 ## 1. 总评
 
-**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现，但当前不能判定为生产验收通过。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、跨层资源硬上限）。R1–R12 以及后续 strict/wire/critical/time/byte-budget/physical-soak 客户端机制均已实现或采用明确有界方案；真实设备已经证明 microbenchmark 热路径预算合格，也同时暴露出 smoke 平均 CPU 连续超限。门禁存在和门禁通过是两件事。
+**结论：这是一个明显高于“普通内部 SDK”水平的成熟实现，但当前仍不能判定为完整生产验收通过。** 核心链路（采集→分发→持久化→上传→远程配置）在文档和代码两层高度一致，且多处设计达到工业级标准（outbox claim/lease、fail-safe 边界、签名远程配置、跨层资源硬上限）。R1–R12 以及后续 strict/wire/critical/time/byte-budget/physical-soak 客户端机制均已实现或采用明确有界方案；真实设备已经证明 microbenchmark 热路径预算与原预算 smoke 合格，也真实暴露并关闭了 FPS observer CPU 缺口。24h/72h、长稳功耗和外部 Collector 闭环仍未验收。
 
-**闭环复核后的代码/架构成熟度评分：4.7 / 5.0；生产准入状态：未通过。** 扣分不再只是外部 Collector 和单 dispatcher worker 的理论上限，还包括已经发生的物理 smoke CPU 门禁失败。该失败尚不能在未诊断前简单归因于某一个模块，但必须定位、优化并重新通过；不能通过放宽预算或引用 microbenchmark 结果抵消。
+**闭环复核后的代码/架构成熟度评分：4.7 / 5.0；生产准入状态：短 smoke 已通过，完整准入未完成。** 保留扣分主要来自外部 Collector、单 dispatcher worker 的理论上限、24h/72h 与功耗/OEM 长稳缺失。CPU 失败没有通过放宽门禁处理，而是先用线程级证据定位 FPS 持续 VSync observer，再改为 FrameMetrics event-driven 主路径并在原 `20%` 上限下连续复验通过。
 
 | 维度 | 评分 | 一句话 |
 |---|---:|---|
-| P1 观察者效应 | 4.0 | microbenchmark 热路径通过，但两轮物理 smoke CPU 均超过 20%；原因待分解，生产门当前失败 |
+| P1 观察者效应 | 4.7 | microbenchmark 通过；FPS observer 根因已修复，两轮物理 smoke 在原 20% 上限下以 12.928% / 12.362% 通过；长稳仍待验证 |
 | P2 投递可靠性 | 4.8 | outbox claim/lease 教科书级，几乎挑不出毛病 |
 | P3 隐私安全 | 4.8 | PII 默认开启，并覆盖文本规则与高置信敏感字段名；自定义业务字段仍需接入方治理 |
 | P4 测量方法学 | 4.8 | epoch/单调职责分离；FPS 按真实 interval/elapsed time 计算并按刷新率封顶；真机方法学仍需设备矩阵 |
@@ -86,7 +86,7 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 
 | 项 | 当前状态 | 闭环实现 | 主要提交 |
 |---|---|---|---|
-| R1 | Gate 已实现；microbenchmark 通过；smoke CPU 失败 | 固定 microbenchmark 预算 + 启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h A/B gate；缺项/坏指标/时长不足/超限/emulator 均失败 | `c2eba30` + 当前源码 |
+| R1 | Gate 已实现；microbenchmark 与原预算 smoke 通过 | 固定 microbenchmark 预算 + 启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h A/B gate；缺项/坏指标/时长不足/超限/emulator 均失败 | `c2eba30` + 当前源码 |
 | R2 | 完成 | PII 默认开启；文本正则 + 高置信字段名直接遮蔽，包括数值敏感值 | `2823038` |
 | R3 | 有界闭环 | 2048 条 + 8 MiB 双预算；75% 高水位后限制单模块 NORMAL/LOW 占总容量 50%，HIGH/CRITICAL 可多 victim 淘汰；单 worker 上限如实保留 | `b0ea7fa` + 当前源码 |
 | R4 | 完成 | 同步 provider 契约化；新增 `ASYNC_CACHED`、LKG、合并刷新和生命周期 | `f2414df` |
@@ -101,10 +101,10 @@ Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 
 
 ### P0（建议尽快处理）
 
-**R1. 开销预算 + CI 回归门——Gate 已完成，当前物理 smoke 不接受**
+**R1. 开销预算 + CI 回归门——Gate 已完成，当前物理 smoke 已按原预算接受**
 `apm-benchmark/benchmark-budgets.json` 固定 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations。`:apm-benchmark:verifyReleasePerformanceBudgets` 串联 connected benchmark 与 fail-closed verifier。新增 `device-soak-budgets.json`、sample A/B probe、host runner 与 verifier：SDK-disabled control 和 SDK-enabled/失败 uploader 冷进程构造相同 map，采启动、`Apm.init`、主线程 P95、CPU、PSS、app-private disk、UID power 与 thermal，并在 smoke/24h/72h profile 中强制实际时长与重启次数。长 profile 无 app UID 或外部功耗仪证据即失败。
 
-2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，正式 AndroidX runner 完成 3/3 测试，encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`，三项预算均通过。两轮完整 smoke 则分别得到 `28.425%` 与 `32.046%` 平均 CPU，连续超过 `20%` 上限；校验器都只报告 CPU 违规，其余 smoke 条件通过。MIUI 的 Gradle session-based 安装仍被 OEM 拒绝，但直接安装同一测试 APK 后正式 runner 可执行；这应记录为安装器兼容问题，不能覆盖 smoke 预算失败，也不能伪造成 Gradle 一键任务通过。
+2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，正式 AndroidX runner 完成 3/3 测试，encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`，三项预算均通过。初始两轮完整 smoke 分别得到 `28.425%` 与 `32.046%` CPU，连续超过 `20%`；稳定区间线程采样显示 enabled 主线程约 `26.4%`，control 主线程约 `0.8%`，根因是 FPS 在静态页面持续 repost Choreographer。改为 API 24+ FrameMetrics event-driven 主路径、注册失败或禁用时才回退 Choreographer 后，相同 APK SHA-256 的两轮 smoke 在原 `20%` 上限下以 `12.928%`、`12.362%` 全项通过。MIUI 的 Gradle session-based 安装仍被 OEM 拒绝，但直接安装同一测试 APK 后正式 runner 可执行；这应记录为安装器兼容问题，不能伪造成 Gradle 一键任务通过。
 
 **R2. PII 默认与字段级保护——已完成**
 `enablePiiSanitization=true` 是当前默认值。dispatcher 在 durable encode 之前执行脱敏：手机号/邮箱/身份证/URL credential 等文本模式继续生效，高置信字段名（authorization、token、password、API key、cookie、phone/email 等）直接遮蔽整个值，因此数值型或不匹配正则的敏感值也不会漏过。关闭仍是显式 opt-out，并要求接入方隐私评审。
@@ -149,7 +149,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 
 | 序 | 项 | 初评优先级 | 当前结果 |
 |---|---|---|---|
-| 1 | 固定开销预算 + benchmark gate（R1） | P0 | 已实现；物理 microbenchmark 通过，smoke CPU 失败，待优化复验 |
+| 1 | 固定开销预算 + benchmark gate（R1） | P0 | 已实现；物理 microbenchmark 与两轮原预算 smoke 通过 |
 | 2 | PII 默认安全 + `fields` 字段级脱敏（R2） | P0 | 已实现并默认开启 |
 | 3 | noisy-module 隔离与单 worker 边界（R3） | P1 | 已实现入口容量隔离；吞吐上限明确保留 |
 | 4 | bizContext 契约化 / async cache（R4） | P1 | 已实现双模式、LKG 与 refresh 生命周期 |
@@ -164,7 +164,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 | 13 | 关键事件 hand-off + loss reason/priority | P1 | Crash/ANR 同步本地接管；drop 三维计数并显式保留 unknown |
 | 14 | 时间语义 + 直接事件快照 | P1 | epoch/单调职责分离；异步 hand-off 冻结 fields/context/extras |
 | 15 | dispatcher / multi-process / IPC / SQLite 字节预算 | P1 | 8 MiB dispatcher；4 MiB/256 KiB/1 MiB/16 MiB IPC；256 KiB/64 MiB SQLite |
-| 16 | 真机 A/B / 离线 / 重启 / 长稳门禁 | P1 | Gate 已实现；两轮 smoke CPU 超限，24h/72h 与长稳功耗未执行 |
+| 16 | 真机 A/B / 离线 / 重启 / 长稳门禁 | P1 | Gate 已实现；两轮原预算 smoke 通过，24h/72h 与长稳功耗未执行 |
 
 ---
 
@@ -172,12 +172,12 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 
 - **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
 - **定向测试/构建**：physical-device-soak gate 的 14 个 host tests 通过；sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings。此前 cross-layer byte-budget 通过 core 27 suites / 194 tests 与 storage 6 suites / 37 tests；time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
-- **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；两轮 smoke 仅 CPU 失败（`28.425%`、`32.046%` > `20%`）。Gradle session-based APK 安装仍受 MIUI 拒绝，直接安装同一 APK 可运行正式 runner；该 OEM 安装问题与 SDK 预算结果分开记录。
+- **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；FPS observer 修复后两轮 smoke 以 CPU `12.928%`、`12.362%` 通过原 `20%` 上限，其他预算同样通过。Gradle session-based APK 安装仍受 MIUI 拒绝，直接安装同一 APK 可运行正式 runner；该 OEM 安装问题与 SDK 预算结果分开记录。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 48 个本地链接。
-- **仍需真机/外部系统**：先定位并修复 smoke CPU 超限、在物理设备重新通过，再执行 24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。host tests、模拟器或已通过的 microbenchmark 都不能替代失败的端到端 smoke。
+- **仍需真机/外部系统**：执行 24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。host tests、模拟器、microbenchmark 或短 smoke 都不能替代长稳验收。
 
 ---
 
 ## 6. 一句话结论
 
-**客户端实现已经形成跨层闭环：dispatcher/IPC/SQLite 分别按真实资源维度限界，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地；microbenchmark 证明 codec/SQLite 热路径有充足余量。** 但端到端 smoke 已真实触发 CPU 失败门，所以当前适合继续内部受控验证和性能归因，不适合宣称生产验收通过。正式上线前必须修复并重新通过 smoke，再完成 24h/72h、Collector、合规、OEM 长稳和告警闭环。
+**客户端实现已经形成跨层闭环：dispatcher/IPC/SQLite 分别按真实资源维度限界，隐私默认安全，noisy-module/业务上下文/FPS/FrameMetrics/健康证据均有有界方案，durable 字段类型、Bundle 与 HttpURLConnection 接入也已落地；microbenchmark 证明 codec/SQLite 热路径有充足余量，物理 smoke 也在不放宽预算的前提下关闭了已发现的 CPU observer 问题。** 当前仍适合内部受控验证，不应因短 smoke 通过就宣称完整生产验收；正式上线前还需完成 24h/72h、Collector、合规、OEM 长稳和告警闭环。

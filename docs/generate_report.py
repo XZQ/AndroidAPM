@@ -113,7 +113,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；两轮 smoke CPU 超过 20%，24h/72h 未执行"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 通过；FPS observer 修复后两轮原预算 smoke 以 12.928% / 12.362% CPU 通过；24h/72h 未执行"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -174,8 +174,8 @@ def build_status_report() -> Document:
     document.add_paragraph(
         "AndroidAPM 已形成可构建、可测试的多模块 Android 客户端 APM SDK：采集事件进入有界异步管线，"
         "通过 SQLite outbox 持久化并交给可注入上传器。它仍是客户端框架，不包含生产采集后端、查询、"
-        "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过，但两轮 smoke CPU 均超过 20% 门禁；"
-        "因此当前生产准入不通过，不能仅凭模块数量或热路径基准宣称生产完成。"
+        "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过；FPS 静态页面 VSync observer 修复后，"
+        "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过。短 smoke 不替代 24h/72h 长稳验收。"
     )
     add_summary_table(document)
 
@@ -200,7 +200,7 @@ def build_status_report() -> Document:
 
     document.add_heading("走向生产的优先级", level=1)
     priorities = [
-        ("P0", "定位并修复物理 smoke CPU 超限，按原 20% 上限重新通过后再启动 24h/72h"),
+        ("P1", "在原预算 smoke 已连续通过后，执行 24h/72h、长稳功耗、热与磁盘验收"),
         ("P0", "接入生产 collector，并定义鉴权、限流、协议版本和隐私治理"),
         ("P0", "在 Collector 按客户端 eventId 幂等，明确整批 ACK、重放与死信"),
         ("P1", "建立真机/OEM/API 设备矩阵，覆盖 native、ANR、多进程和长期离线"),

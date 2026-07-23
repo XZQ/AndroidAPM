@@ -8,6 +8,17 @@ import org.junit.Test
 
 /** Deterministic tests for FPS time windows and the allocation-free FrameMetrics accumulator. */
 class FrameWindowPolicyTest {
+    /** A registered real-render listener must suppress perpetual VSync fallback callbacks. */
+    @Test
+    fun `frame metrics registration suppresses choreographer fallback`() {
+        assertFalse(shouldUseChoreographerFallback(frameMetricsRegistered = true))
+    }
+
+    /** Missing or failed FrameMetrics registration must retain the compatible VSync path. */
+    @Test
+    fun `missing frame metrics registration retains choreographer fallback`() {
+        assertTrue(shouldUseChoreographerFallback(frameMetricsRegistered = false))
+    }
 
     /** FPS is based on measured intervals, not callback count or the configured refresh rate. */
     @Test

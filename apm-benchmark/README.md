@@ -12,7 +12,8 @@ Build-only or host-unit-test success does not produce physical-device performanc
 The `2026-07-23` run on a physical Redmi/Xiaomi `22041216UC` (Android 13) produced two distinct results:
 
 - the declared `AndroidBenchmarkRunner` completed all three microbenchmarks without suppressed AndroidX errors, and the checked-in verifier accepted encode at `4,640.93 ns / 22.00 allocations`, decode at `4,841.81 ns / 46.00 allocations`, and the 32-event SQLite transaction at `1,258,990.52 ns / 1,400.21 allocations`;
-- two complete `smoke` acquisitions failed only `maxCpuAveragePercent`: `28.425%` and `32.046%` against the `20%` ceiling. All other smoke requirements passed. No 24-hour, 72-hour, or long-profile power result exists.
+- the first two complete `smoke` acquisitions failed only `maxCpuAveragePercent`: `28.425%` and `32.046%` against the `20%` ceiling. Thread-level attribution identified perpetual FPS Choreographer callbacks on a static Activity as the dominant observer load;
+- after API 24+ FPS collection switched to event-driven FrameMetrics with Choreographer only as registration/disable fallback, two complete runs of the same APK SHA-256 passed every unchanged smoke budget at `12.928%` and `12.362%` CPU. No 24-hour, 72-hour, or long-profile power result exists.
 
 MIUI still rejects the Gradle/UTP session-based test-APK install with `INSTALL_FAILED_USER_RESTRICTED`, although direct installation of the exact built test APK succeeds. Record this as an OEM installer-path failure: a direct runner success must not be reported as a successful `verifyReleasePerformanceBudgets` Gradle aggregate task.
 

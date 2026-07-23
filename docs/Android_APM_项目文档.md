@@ -86,7 +86,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | ANR | SIGQUIT flag、Watchdog、堆栈采样、traces、分类/去重、同步 critical hand-off | 注册自动；Native 失败降级 Watchdog |
 | Launch | 真实进程启动基线、冷/热/温、首帧、阶段 | Activity 自动；ContentProvider/App 阶段手动 |
 | Network | OkHttp 全阶段、HttpURLConnection 总耗时、慢/错请求、聚合 | Interceptor/EventListener、显式 `traceHttpUrlConnection` 或手动回调 |
-| FPS | Choreographer 单调时间窗口、按实际回调区间计算并按刷新率封顶、FrameMetrics 原始类型滚动累计、掉帧等级 | Activity 生命周期自动 |
+| FPS | API 24+ FrameMetrics 真实渲染事件单调窗口、按实际区间计算并按刷新率封顶、原始类型滚动累计；失败时回退 Choreographer | Activity 生命周期自动 |
 | Slow Method | Looper Hook、栈采样、ASM | ASM 必须由宿主应用 Gradle 插件 |
 | IO | 流代理、慢/主线程 IO、FD/Closeable、去重吞吐窗口、PLT Hook | 显式包装流；Native 依赖运行时 xhook；回调 no-throw |
 | Battery | 电量、CPU、WakeLock/GPS/Alarm | 后三类为宿主回调 |
@@ -330,7 +330,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-23 在同一台物理 Redmi/Xiaomi `22041216UC`（Android 13）上重新验证。JDK 17.0.14 下 `:apm-sample-app:assembleDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过；启用设备的 USB 安装控制后，sample 与 benchmark AndroidTest APK 均可通过直接 ADB 安装。MIUI 会拒绝 benchmark 进程后台拉起 AndroidX `IsolationActivity`，因此只对 `com.apm.benchmark.test` 临时允许该 app-op，正式 `AndroidBenchmarkRunner` 随后无错误完成 3/3 测试，结束后权限已恢复为原始 `ignore`。fail-closed JSON 预算验证通过：durable encode median `4,640.93 ns` / `22.00 allocations`，decode `4,841.81 ns` / `46.00 allocations`，32-event SQLite transaction `1,258,990.52 ns` / `1,400.21 allocations`。但 Gradle aggregate task 的 session-based APK 安装仍被该 OEM 以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此不能把 Gradle 一键任务写成通过；接受数值来自直接安装同一构建 APK 后运行其声明的正式 runner，且未抑制 AndroidX 环境错误。
 
-同日完整执行两次物理 `smoke` acquisition。两次都满足实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程操作 P95、PSS、app-private disk 与 thermal 约束，但平均 CPU 分别为 `28.425%` 和 `32.046%`，连续超过 checked-in `20%` 上限，校验器均 fail closed。由此当前真机结论是“microbenchmark 三项预算通过、smoke CPU 预算失败”，不是生产验收通过；`24h`、`72h` 与长稳功耗证据均未执行。
+同日最初完整执行两次物理 `smoke` acquisition。两次都满足实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程操作 P95、PSS、app-private disk 与 thermal 约束，但平均 CPU 分别为 `28.425%` 和 `32.046%`，连续超过 checked-in `20%` 上限，校验器均 fail closed。当时的阶段性结论是“microbenchmark 三项预算通过、smoke CPU 预算失败”；该失败随后按下段证据完成归因、修复与原预算复验。
+
+随后保持 `device-soak-budgets.json` 的 `20%` smoke CPU 上限不变执行归因。稳定区间的线程级 `/proc` 采样显示 SDK-enabled 主线程约 `26.4%`，而 SDK-disabled control 主线程约 `0.8%`；10 events/second 下 `Apm.emit` P95 约 `1.7ms`，不足以解释差值。根因是 FPS monitor 在静态页面仍持续 repost Choreographer callback，主动把主线程按每个 VSync 唤醒。修复后 API 24+ 以仅在真实渲染时触发的 FrameMetrics 为主源，FrameMetrics 禁用或注册失败时才保留 Choreographer fallback。JDK 17.0.14 下 FPS `4` suites / `34` tests、lint 与 sample debug APK 构建通过，测试为 0 failures/errors/skips，lint 为 `No issues found`。同一 Redmi、同一配置、相同 APK SHA-256 `e22185f6b09182e5705cea27d80f74f3ac4f05d89ac2223638c02bc4e8f55c1d` 的两轮完整 smoke 分别以 CPU `12.928%`、`12.362%` 通过原 `20%` 门禁；实际时长 `30.562s` / `30.534s`，每轮 2 次进程启动，主线程 P95 `1,853.462us` / `1,796.539us`，其余 smoke 预算也全部通过。该证据关闭 smoke CPU 缺口，但不替代尚未执行的 `24h`、`72h` 与长稳功耗验收。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
@@ -342,7 +344,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 - 真机 Native 行为与符号化
 - 真机真正执行进程被杀/断电/磁盘满场景
-- 真机 smoke 平均 CPU 优化后重新通过 checked-in 预算
+- 物理设备 `24h` / `72h` 与长稳功耗、热和磁盘验收
 - 真机跑满 24/72 小时的功耗、内存、离线和重启结果
 - 多 OEM/Android 版本兼容
 - 真实 Collector 协议与服务端幂等
@@ -353,7 +355,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及修复当前物理 smoke 的 CPU 超限、重新通过该门禁并继续跑满 24h/72h、功耗仪或 UID、热与磁盘数值，全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及在原预算 smoke 已通过后继续跑满 24h/72h、功耗仪或 UID、热与磁盘数值，全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 
