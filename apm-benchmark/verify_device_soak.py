@@ -10,7 +10,10 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+BUDGET_SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
+SUPPORTED_RESULT_SCHEMA_VERSIONS = (1, RESULT_SCHEMA_VERSION)
+ATTRIBUTION_TOLERANCE = 1e-6
 
 
 class DeviceSoakVerificationError(ValueError):
@@ -43,6 +46,51 @@ def _boolean(value: Any, label: str) -> bool:
     return value
 
 
+def _segment_cpu_percent(
+    segment: dict[str, Any],
+    label: str,
+    clock_ticks_per_second: float,
+) -> tuple[float, float]:
+    """Recompute one raw segment's process CPU percent and wall-time weight."""
+    samples = segment.get("samples")
+    if not isinstance(samples, list) or len(samples) < 2:
+        raise DeviceSoakVerificationError(f"{label}.samples must contain at least two entries")
+    first = _mapping(samples[0], f"{label}.samples[0]")
+    last = _mapping(samples[-1], f"{label}.samples[-1]")
+    first_elapsed = _number(
+        first.get("elapsed_seconds"),
+        f"{label}.samples[0].elapsed_seconds",
+        minimum=0,
+    )
+    last_elapsed = _number(
+        last.get("elapsed_seconds"),
+        f"{label}.samples[-1].elapsed_seconds",
+        minimum=0,
+    )
+    first_jiffies = _number(
+        first.get("cpu_jiffies"),
+        f"{label}.samples[0].cpu_jiffies",
+        minimum=0,
+    )
+    last_jiffies = _number(
+        last.get("cpu_jiffies"),
+        f"{label}.samples[-1].cpu_jiffies",
+        minimum=0,
+    )
+    wall_seconds = last_elapsed - first_elapsed
+    if wall_seconds <= 0:
+        raise DeviceSoakVerificationError(f"{label} lacks a positive CPU sampling interval")
+    if last_jiffies < first_jiffies:
+        raise DeviceSoakVerificationError(f"{label} CPU jiffies moved backwards")
+    cpu_percent = (
+        (last_jiffies - first_jiffies)
+        / clock_ticks_per_second
+        / wall_seconds
+        * 100.0
+    )
+    return cpu_percent, wall_seconds
+
+
 def _read_json(path: Path, label: str) -> dict[str, Any]:
     """Read one UTF-8 JSON object with a stable diagnostic."""
     try:
@@ -54,7 +102,7 @@ def _read_json(path: Path, label: str) -> dict[str, Any]:
 def load_profile(path: Path, profile_name: str) -> dict[str, Any]:
     """Load and validate one named device-soak budget profile."""
     document = _read_json(path, "device-soak budgets")
-    if document.get("schemaVersion") != SCHEMA_VERSION:
+    if document.get("schemaVersion") != BUDGET_SCHEMA_VERSION:
         raise DeviceSoakVerificationError(
             f"Unsupported device-soak budget schema: {document.get('schemaVersion')}"
         )
@@ -86,7 +134,7 @@ def load_profile(path: Path, profile_name: str) -> dict[str, Any]:
 def load_result(path: Path, expected_profile: str) -> dict[str, Any]:
     """Load one runner artifact and require the requested schema/profile identity."""
     document = _read_json(path, "device-soak result")
-    if document.get("schemaVersion") != SCHEMA_VERSION:
+    if document.get("schemaVersion") not in SUPPORTED_RESULT_SCHEMA_VERSIONS:
         raise DeviceSoakVerificationError(
             f"Unsupported device-soak result schema: {document.get('schemaVersion')}"
         )
@@ -140,6 +188,50 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             summary.get("thermalMaxStatus"), "summary.thermalMaxStatus", minimum=0
         ),
     }
+    result_schema = result.get("schemaVersion")
+    cpu_attribution: dict[str, float] | None = None
+    if result_schema == RESULT_SCHEMA_VERSION:
+        clock_ticks_per_second = _number(
+            config.get("clockTicksPerSecond"),
+            "config.clockTicksPerSecond",
+            minimum=1,
+        )
+        raw_control_cpu, _ = _segment_cpu_percent(
+            control,
+            "control",
+            clock_ticks_per_second,
+        )
+        raw_enabled_pairs = [
+            _segment_cpu_percent(
+                _mapping(segment, f"segments[{index}]"),
+                f"segments[{index}]",
+                clock_ticks_per_second,
+            )
+            for index, segment in enumerate(segments)
+        ]
+        raw_enabled_weight = sum(weight for _, weight in raw_enabled_pairs)
+        raw_enabled_cpu = (
+            sum(value * weight for value, weight in raw_enabled_pairs)
+            / raw_enabled_weight
+        )
+        cpu_attribution = {
+            "control": _number(
+                summary.get("cpuControlPercent"),
+                "summary.cpuControlPercent",
+                minimum=0,
+            ),
+            "enabled": _number(
+                summary.get("cpuEnabledAveragePercent"),
+                "summary.cpuEnabledAveragePercent",
+                minimum=0,
+            ),
+            "delta": _number(
+                summary.get("cpuDeltaPercent"),
+                "summary.cpuDeltaPercent",
+            ),
+            "rawControl": raw_control_cpu,
+            "rawEnabled": raw_enabled_cpu,
+        }
     power_value = summary.get("chargeConsumptionMahPerHour")
     power_source = summary.get("powerSource")
     if power_value is None:
@@ -207,6 +299,24 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
         )
     if profile["requirePowerEvidence"] and power_rate is None:
         integrity_violations.append("power evidence is required for this profile")
+    if cpu_attribution is not None:
+        if abs(cpu_attribution["enabled"] - metrics["cpuAveragePercent"]) > ATTRIBUTION_TOLERANCE:
+            integrity_violations.append(
+                "cpuEnabledAveragePercent does not match the absolute cpuAveragePercent gate"
+            )
+        expected_delta = cpu_attribution["enabled"] - cpu_attribution["control"]
+        if abs(cpu_attribution["delta"] - expected_delta) > ATTRIBUTION_TOLERANCE:
+            integrity_violations.append(
+                "cpuDeltaPercent does not match enabled minus control CPU"
+            )
+        if abs(cpu_attribution["control"] - cpu_attribution["rawControl"]) > ATTRIBUTION_TOLERANCE:
+            integrity_violations.append(
+                "cpuControlPercent does not match raw control samples"
+            )
+        if abs(cpu_attribution["enabled"] - cpu_attribution["rawEnabled"]) > ATTRIBUTION_TOLERANCE:
+            integrity_violations.append(
+                "cpuEnabledAveragePercent does not match raw enabled samples"
+            )
     if integrity_violations:
         raise DeviceSoakVerificationError(
             "Device-soak evidence rejected:\n- " + "\n- ".join(integrity_violations)
@@ -247,6 +357,13 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
         messages.append(
             f"PASS chargeConsumptionMahPerHour={power_rate:.3f} <= "
             f"{profile['maxChargeConsumptionMahPerHour']:.3f} ({power_source})"
+        )
+    if cpu_attribution is not None:
+        messages.append(
+            "INFO cpuAttribution "
+            f"control={cpu_attribution['control']:.3f}% "
+            f"enabled={cpu_attribution['enabled']:.3f}% "
+            f"delta={cpu_attribution['delta']:.3f}%"
         )
     return messages
 

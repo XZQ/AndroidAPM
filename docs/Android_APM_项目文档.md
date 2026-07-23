@@ -334,6 +334,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 随后保持 `device-soak-budgets.json` 的 `20%` smoke CPU 上限不变执行归因。稳定区间的线程级 `/proc` 采样显示 SDK-enabled 主线程约 `26.4%`，而 SDK-disabled control 主线程约 `0.8%`；10 events/second 下 `Apm.emit` P95 约 `1.7ms`，不足以解释差值。根因是 FPS monitor 在静态页面仍持续 repost Choreographer callback，主动把主线程按每个 VSync 唤醒。修复后 API 24+ 以仅在真实渲染时触发的 FrameMetrics 为主源，FrameMetrics 禁用或注册失败时才保留 Choreographer fallback。JDK 17.0.14 下 FPS `4` suites / `34` tests、lint 与 sample debug APK 构建通过，测试为 0 failures/errors/skips，lint 为 `No issues found`。同一 Redmi、同一配置、相同 APK SHA-256 `e22185f6b09182e5705cea27d80f74f3ac4f05d89ac2223638c02bc4e8f55c1d` 的两轮完整 smoke 分别以 CPU `12.928%`、`12.362%` 通过原 `20%` 门禁；实际时长 `30.562s` / `30.534s`，每轮 2 次进程启动，主线程 P95 `1,853.462us` / `1,796.539us`，其余 smoke 预算也全部通过。该证据关闭 smoke CPU 缺口，但不替代尚未执行的 `24h`、`72h` 与长稳功耗验收。
 
+同日继续修正 device-soak 的 A/B 指标口径。历史 result schema v1 的 `cpuAveragePercent` 实际是 enabled segments 的绝对进程 CPU，只有 `startupDeltaMs` 使用 control 差值；当前 result schema v2 保留这个绝对门禁字段，并新增 `cpuControlPercent`、`cpuEnabledAveragePercent` 和带符号的 `cpuDeltaPercent`。校验器会从 control/enabled 原始 jiffies 与 elapsed samples 独立重算并核对三者，旧 schema v1 工件仍按原绝对 CPU 语义兼容。`device-soak-budgets.json` 未修改，17 个 host Python tests 通过，已接受的 schema-v1 smoke 工件继续通过原 `20%` 上限。此次只是 host 证据模型增强，没有产生新的 schema-v2 真机结果，也不能把单一前置 control 的 delta 当成 24h/72h 配对因果估计。
+
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略
@@ -372,6 +374,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 - `docs/architecture/`：当前模块架构事实源
 - `docs/architecture/21_apm-bundle.md`：单依赖分发的依赖集合、边界与取舍
+- `docs/AndroidAPM_第一性原理SDK评审_2026-07-21.md`：其他 AI 初始评审的源码闭环复核；按证据等级区分客户端架构、短时真机、长稳/OEM 和端到端产品准入，不作为生产验收证书
 - `docs/APM_Review_2026-07-08.md`：历史评审与当前处置状态
 - `docs/APM_Optimization_2026-07-08.md`：历史优化建议与落地状态
 - `docs/architecture/generated-diagrams/`：由当前架构同步生成的 SVG/PNG

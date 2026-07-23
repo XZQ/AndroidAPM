@@ -32,7 +32,21 @@ class DeviceSoakRunnerTest(unittest.TestCase):
 
     def test_summary_uses_weighted_cpu_and_uid_power_delta(self) -> None:
         """Aggregation spans process restarts without averaging percentages incorrectly."""
-        control = {"startupMs": 100.0}
+        control = self._segment(
+            startup_ms=100,
+            duration_ms=5_000,
+            operation_p95_ns=0,
+            init_ns=0,
+            first_jiffies=50,
+            last_jiffies=75,
+            wall_seconds=5,
+            first_pss=9_000,
+            last_pss=9_500,
+            first_disk=500,
+            last_disk=500,
+            first_power=0.9,
+            last_power=1.0,
+        )
         segments = [
             self._segment(
                 startup_ms=120,
@@ -74,6 +88,9 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(100.0 / 15.0, summary["cpuAveragePercent"])
+        self.assertAlmostEqual(5.0, summary["cpuControlPercent"])
+        self.assertAlmostEqual(100.0 / 15.0, summary["cpuEnabledAveragePercent"])
+        self.assertAlmostEqual(100.0 / 15.0 - 5.0, summary["cpuDeltaPercent"])
         self.assertEqual(3_000, summary["pssGrowthKb"])
         self.assertEqual(3_000, summary["diskGrowthBytes"])
         self.assertEqual(30.0, summary["sdkInitMaxMs"])

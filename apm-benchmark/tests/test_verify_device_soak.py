@@ -47,12 +47,19 @@ class DeviceSoakVerifierTest(unittest.TestCase):
             encoding="utf-8",
         )
         self.result = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "profile": "smoke",
             "device": {"isEmulator": False},
-            "config": {"offlineCollector": True},
+            "config": {
+                "offlineCollector": True,
+                "clockTicksPerSecond": 100,
+            },
             "control": {
                 "probe": {"sdkEnabled": False},
+                "samples": [
+                    {"elapsed_seconds": 0, "cpu_jiffies": 100},
+                    {"elapsed_seconds": 10, "cpu_jiffies": 110},
+                ],
             },
             "segments": [
                 {
@@ -63,7 +70,10 @@ class DeviceSoakVerifierTest(unittest.TestCase):
                         "offlineCollector": True,
                         "observedDurationMs": 15_000,
                     },
-                    "samples": [{}, {}],
+                    "samples": [
+                        {"elapsed_seconds": 0, "cpu_jiffies": 100},
+                        {"elapsed_seconds": 15, "cpu_jiffies": 175},
+                    ],
                 },
                 {
                     "runId": "segment-2",
@@ -73,7 +83,10 @@ class DeviceSoakVerifierTest(unittest.TestCase):
                         "offlineCollector": True,
                         "observedDurationMs": 15_000,
                     },
-                    "samples": [{}, {}],
+                    "samples": [
+                        {"elapsed_seconds": 0, "cpu_jiffies": 200},
+                        {"elapsed_seconds": 15, "cpu_jiffies": 275},
+                    ],
                 },
             ],
             "summary": {
@@ -83,6 +96,9 @@ class DeviceSoakVerifierTest(unittest.TestCase):
                 "sdkInitMaxMs": 50,
                 "mainThreadOperationP95Us": 500,
                 "cpuAveragePercent": 5,
+                "cpuControlPercent": 1,
+                "cpuEnabledAveragePercent": 5,
+                "cpuDeltaPercent": 4,
                 "pssGrowthKb": 1024,
                 "diskGrowthBytes": 4096,
                 "chargeConsumptionMahPerHour": None,
@@ -134,6 +150,48 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         self._write_result()
 
         with self.assertRaisesRegex(VERIFIER.DeviceSoakVerificationError, "cpuAveragePercent"):
+            self._verify_smoke()
+
+    def test_schema_two_requires_consistent_cpu_attribution(self) -> None:
+        """New artifacts fail closed when A/B CPU fields are missing or inconsistent."""
+        del self.result["summary"]["cpuControlPercent"]
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "cpuControlPercent",
+        ):
+            self._verify_smoke()
+
+        self.result["summary"]["cpuControlPercent"] = 1
+        self.result["summary"]["cpuDeltaPercent"] = 3
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "enabled minus control",
+        ):
+            self._verify_smoke()
+
+    def test_schema_one_result_remains_compatible(self) -> None:
+        """Historical artifacts retain the original absolute CPU gate semantics."""
+        self.result["schemaVersion"] = 1
+        del self.result["summary"]["cpuControlPercent"]
+        del self.result["summary"]["cpuEnabledAveragePercent"]
+        del self.result["summary"]["cpuDeltaPercent"]
+        self._write_result()
+
+        messages = self._verify_smoke()
+
+        self.assertTrue(any("cpuAveragePercent" in message for message in messages))
+
+    def test_schema_two_cpu_summary_must_match_raw_samples(self) -> None:
+        """Attribution fields cannot disagree with retained raw process evidence."""
+        self.result["control"]["samples"][-1]["cpu_jiffies"] = 120
+        self._write_result()
+
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "raw control samples",
+        ):
             self._verify_smoke()
 
     def test_long_profile_requires_power_evidence(self) -> None:

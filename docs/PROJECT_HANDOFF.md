@@ -186,6 +186,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日 CPU 归因用稳定区间线程级 `/proc` 数据定位到 FPS observer：enabled 主线程约 `26.4%`，control 主线程约 `0.8%`，而 10 events/second 的 emit P95 约 `1.7ms`，差值来自静态页面上持续 repost 的 Choreographer VSync callback。API 24+ 改为 event-driven FrameMetrics 主源、仅在禁用或注册失败时回退 Choreographer 后，JDK 17.0.14 的 `:apm-fps:testDebugUnitTest :apm-fps:lintDebug :apm-sample-app:assembleDebug --rerun-tasks --no-daemon` 通过；最终 FPS 为 `4` suites / `34` tests、0 failures/errors/skips，lint 为 `No issues found`。保持 checked-in `20%` CPU 上限且不传预算覆盖，同一物理设备和相同 APK SHA-256 的两轮完整 smoke 以 `12.928%`、`12.362%` CPU 全项通过；实际时长 `30.562s` / `30.534s`、每轮 2 次进程启动、主线程 P95 `1,853.462us` / `1,796.539us`。当前结论更新为 microbenchmark 与 smoke 原预算均通过；24/72 小时和长稳功耗仍未执行。
 
+随后 device-soak result schema 升级为 v2，但 checked-in 预算保持不变。`cpuAveragePercent` 继续表示 enabled 进程绝对 CPU 并承担门禁；新增 `cpuControlPercent`、`cpuEnabledAveragePercent` 和带符号 `cpuDeltaPercent`，verifier 会从 raw jiffies/elapsed samples 重算并校验摘要一致性。v1 历史工件继续按原绝对 CPU 语义读取。17 个 host tests 通过，现有已接受的 v1 物理 smoke 工件继续通过原 `20%` 门禁；本次没有生成新的 v2 真机工件，单一 campaign 前 control 也不构成 24h/72h 配对因果估计。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。

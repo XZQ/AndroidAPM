@@ -64,9 +64,11 @@ Release gate 同时检查 build metadata 与 AndroidX benchmark 名称，拒绝 
 
 当前回归上限是：启动增量 250 ms、`Apm.init` 200 ms、主线程合成操作 P95 2 ms、长稳平均 CPU 10%（smoke 20%）、PSS 增长 64 MiB、app-private 磁盘增长 70 MiB、功耗 300 mAh/hour、thermal status 3（SEVERE；CRITICAL 及以上拒绝）。磁盘上限高于 SQLite 64 MiB live-payload ceiling，用于容纳 page/WAL 元数据但仍能阻止无界增长。预算是回归上限，不是所有 OEM 的 SLA。
 
+device-soak result schema version 2 新增 `cpuControlPercent`、`cpuEnabledAveragePercent` 和带符号的 `cpuDeltaPercent`，同时保留 `cpuAveragePercent` 作为 enabled 进程的绝对 CPU 门禁字段。校验器从 control/enabled 原始 jiffies 与 elapsed samples 重算 CPU，要求 enabled 字段与原绝对门禁相等、delta 精确等于 enabled 减 control。旧 schema version 1 工件继续按原绝对 CPU 语义读取；checked-in `maxCpuAveragePercent` 没有修改，delta 只用于归因，不能替代或放宽绝对上限。当前仍只有 campaign 前的单一 control segment，不能把该 delta 解释成跨 24h/72h 的配对因果估计。
+
 `run_device_soak.py --reset-app-data` 只清理明确选择的 sample package，避免旧 outbox 污染基线；不修改网络，不重置系统 batterystats。`--external-power-mah` 只接受外部仪器归属于 enabled 阶段的 mAh，原始仪器工件仍须随 JSON 保存。`verifyDeviceSoakFromResults` 只验证显式传入的工件，不会搜索并误用旧结果。
 
-`test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
+`test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、control/enabled/delta CPU、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、schema-v2 CPU 缺项/不一致、schema-v1 兼容读取、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
 
 ## 7. 当前物理设备证据
 

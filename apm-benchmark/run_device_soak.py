@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 
-SCHEMA_VERSION = 1
+RESULT_SCHEMA_VERSION = 2
 DEFAULT_PACKAGE = "com.apm.sample.debug"
 DEFAULT_ACTIVITY = "com.apm.sample.MainActivity"
 RESULT_FILE = "files/apm-device-soak-result.json"
@@ -409,12 +409,14 @@ def _summarize(
     startups = [float(segment["startupMs"]) for segment in segments]
     probes = [segment["probe"] for segment in segments]
     all_samples = [sample for segment in segments for sample in segment["samples"]]
+    control_cpu, _ = _segment_cpu_percent(control, clock_ticks_per_second)
     cpu_pairs = [
         _segment_cpu_percent(segment, clock_ticks_per_second)
         for segment in segments
     ]
     cpu_weight = sum(weight for _, weight in cpu_pairs)
-    cpu_average = sum(value * weight for value, weight in cpu_pairs) / cpu_weight
+    enabled_cpu_average = sum(value * weight for value, weight in cpu_pairs) / cpu_weight
+    cpu_delta = enabled_cpu_average - control_cpu
     observed_seconds = sum(float(probe["observedDurationMs"]) for probe in probes) / 1000.0
     first_sample = all_samples[0]
     last_sample = all_samples[-1]
@@ -446,7 +448,14 @@ def _summarize(
         "startupDeltaMs": statistics.median(startups) - float(control["startupMs"]),
         "sdkInitMaxMs": max(float(probe["initDurationNs"]) for probe in probes) / 1_000_000.0,
         "mainThreadOperationP95Us": max(float(probe["operationP95Ns"]) for probe in probes) / 1000.0,
-        "cpuAveragePercent": _finite_number(cpu_average, "CPU average"),
+        # Preserve the original absolute gate field while adding explicit A/B attribution.
+        "cpuAveragePercent": _finite_number(enabled_cpu_average, "enabled CPU average"),
+        "cpuControlPercent": _finite_number(control_cpu, "control CPU average"),
+        "cpuEnabledAveragePercent": _finite_number(
+            enabled_cpu_average,
+            "enabled CPU average",
+        ),
+        "cpuDeltaPercent": _finite_number(cpu_delta, "CPU delta"),
         "pssGrowthKb": pss_growth,
         "diskGrowthBytes": disk_growth,
         "chargeConsumptionMahPerHour": (
@@ -556,7 +565,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         remaining -= segment_duration
 
     return {
-        "schemaVersion": SCHEMA_VERSION,
+        "schemaVersion": RESULT_SCHEMA_VERSION,
         "profile": args.profile,
         "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
         "apkSha256": _sha256(args.apk),

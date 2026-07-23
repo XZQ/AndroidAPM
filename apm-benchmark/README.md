@@ -48,6 +48,15 @@ Each enabled process performs the same bounded map construction at 10 operations
 
 `run_device_soak.py` requires `--reset-app-data`. That explicit flag clears only the selected sample package before acquisition, preventing an old outbox from contaminating disk and restart evidence. It does not clear any other app and does not alter device networking.
 
+Result schema version 2 makes CPU semantics explicit:
+
+- `cpuAveragePercent` remains the authoritative enabled-process absolute CPU field used by the unchanged budget gate;
+- `cpuControlPercent` is recomputed from the raw control segment jiffies and elapsed time;
+- `cpuEnabledAveragePercent` is the wall-time-weighted enabled-process CPU and must equal `cpuAveragePercent`;
+- `cpuDeltaPercent` is the signed diagnostic difference `enabled - control`.
+
+The verifier independently recomputes control and enabled CPU from raw samples and rejects mismatched summary fields. Result schema version 1 remains readable with its original absolute `cpuAveragePercent` gate, so checked-in budgets and historical physical artifacts are not invalidated. The new delta is attribution evidence only: it does not replace or relax `maxCpuAveragePercent`, and one pre-campaign control segment is not a paired causal estimate across a 24h/72h run.
+
 ```powershell
 ./gradlew.bat :apm-sample-app:assembleDebug --no-daemon
 
@@ -87,7 +96,7 @@ Checked-in ceilings in `device-soak-budgets.json` cover:
 
 - enabled-minus-control cold-start delta and maximum `Apm.init` time;
 - main-thread synthetic-operation P95;
-- process CPU and maximum PSS growth across restarts;
+- enabled-process absolute CPU and maximum PSS growth across restarts; schema-v2 control/delta CPU remains diagnostic;
 - app-private database/files/cache growth during collector outage;
 - app-attributed mAh/hour and maximum Android thermal status.
 
