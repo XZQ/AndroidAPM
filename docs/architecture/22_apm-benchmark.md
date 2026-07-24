@@ -83,8 +83,9 @@ UID 功耗优先读取 package-scoped 人类可读 `Uid <label>: <mAh>`；当 OE
 - 只读 transport 有界重试加入后，同一设备再次以 enabled CPU `5.134%`、control CPU `7.164%`、主线程 P95 `360.677us`、UID 功耗 `29.423 mAh/hour` 通过原预算；`transientAdbRetryCount=0`，证明正常路径未被重试逻辑改变；
 - 首次后台 24h 在第一小时内因设备持续离线超过当时共用的 30 秒窗口失败，stderr 保留且无 JSON；该证据推动长 profile window 改为 300 秒，但设备重新上线前没有新真机接受结果；
 - 随后重新上线的 Redmi 用当前代码 smoke 以 CPU `11.319%` 通过，工件记录 `window=30s`、retry count `0`、`pm-clear`；仍无 UID power，故没有用它启动必然缺功耗证据的长 profile；
-- 2026-07-24 用户选择继续使用当前 Redmi。新的精确 checkin fallback 能看到 UID `10217` 的 `pwi` 行，但五分钟、10 events/second 诊断后累计 computed power 仍为 `0`；30 个 host tests、Python 编译和 JDK 17 benchmark Release/AndroidTest Kotlin 构建通过。下一次 Redmi 24h 可分别评价非功耗维度，但只有 UID 累计值实际增长或提供校准外部仪器时才能获得完整接受；
+- 2026-07-24 当前 Redmi 的精确 checkin fallback 能看到 UID `10217` 的 `pwi` 行，但五分钟、10 events/second 诊断后累计 computed power 仍为 `0`；30 个 host tests、Python 编译和 JDK 17 benchmark Release/AndroidTest Kotlin 构建通过；
+- 2026-07-25 正在运行的 Redmi 24h 重试被用户明确取消，runner 与 sample 进程均停止且没有结果 JSON；这既不是长 profile 通过，也不是门禁失败。24h/72h profiles 和预算保留，延期到预生产受控设备实验室或校准功耗设施执行；
 - `24h`、`72h` 和长稳功耗未执行，因此不存在对应接受结论；
 - MIUI 拒绝 Gradle/UTP 的 session-based 测试 APK 安装，但直接安装同一构建 APK 后正式 runner 可运行；该 OEM 安装器失败必须与 benchmark 预算结果分别记录，不能把手工 runner 通过写成 Gradle aggregate task 通过。
 
-当前判定是：microbenchmark 与两种 OEM 上的 device-soak smoke 物理门禁均通过，OnePlus 还产出了可解析的 app-UID 功耗增量；smoke 使用原 checked-in `20%` 上限，没有预算覆盖或放宽。下一步是执行 `24h` / `72h` 与长稳功耗验收；短 smoke 不能替代这些长 profile。
+当前判定是：microbenchmark 与两种 OEM 上的 device-soak smoke 物理门禁均通过，OnePlus 还产出了可解析的 app-UID 功耗增量；smoke 使用原 checked-in `20%` 上限，没有预算覆盖或放宽。`24h` / `72h` 与长稳功耗是预生产准入条件，不是当前客户端实现的阻塞项；后续应在受控设备实验室执行，短 smoke 仍不能替代这些长 profile。

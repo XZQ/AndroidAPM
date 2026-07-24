@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from docx import Document
-from docx.enum.section import WD_SECTION
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -14,7 +13,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-24"
+REPORT_DATE = "2026-07-25"
 RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
@@ -113,7 +112,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；UID 功耗支持精确 checkin fallback 且要求累计值严格增长；24h/72h 未完成"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；24h/72h 门禁保留，延期到预生产受控设备实验室"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
@@ -150,7 +149,12 @@ def add_diagram(document: Document, filename: str, caption: str) -> None:
 
 def add_footer(document: Document) -> None:
     """Add a source-of-truth footer to each section."""
+    seen_footer_parts: set[str] = set()
     for section in document.sections:
+        footer_part = str(section.footer.part.partname)
+        if footer_part in seen_footer_parts:
+            continue
+        seen_footer_parts.add(footer_part)
         paragraph = section.footer.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
         run = paragraph.add_run(
@@ -176,7 +180,8 @@ def build_status_report() -> Document:
         "通过 SQLite outbox 持久化并交给可注入上传器。它仍是客户端框架，不包含生产采集后端、查询、"
         "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过；FPS 静态页面 VSync observer 修复后，"
         "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过；OnePlus Android 16 预检也在原预算下通过并产出 UID 功耗证据。"
-        "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受；短 smoke 不替代 24h/72h 长稳验收。"
+        "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
+        "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
     )
     add_summary_table(document)
 
@@ -206,9 +211,9 @@ def build_status_report() -> Document:
 
     document.add_heading("走向生产的优先级", level=1)
     priorities = [
-        ("P1", "在原预算 smoke 已连续通过后，执行 24h/72h、长稳功耗、热与磁盘验收"),
         ("P0", "接入生产 collector，并定义鉴权、限流、协议版本和隐私治理"),
         ("P0", "在 Collector 按客户端 eventId 幂等，明确整批 ACK、重放与死信"),
+        ("发布前", "在受控设备实验室按原预算执行 24h/72h、长稳功耗、热与磁盘验收"),
         ("P1", "建立真机/OEM/API 设备矩阵，覆盖 native、ANR、多进程和长期离线"),
         ("P1", "建设 Native 符号上传/后台符号化与外部制品发布"),
         ("P2", "建设查询、聚合、告警、版本对比与 SDK 自身健康观测"),
@@ -261,7 +266,8 @@ def build_architecture_report() -> Document:
             "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因；OEM 禁止 pm clear 时只对所选 sample APK 卸载重装并记录 provenance。",
             "device-soak 仅对只读证据命令做三类 ADB transport 瞬断的有界重试；smoke/long 默认窗口为 30/300 秒、绝对上限 600 秒，副作用命令不自动重放，工件保留 window/retry count。",
             "device-soak UID 功耗可从精确 current-checkin pwi 回退采集，但累计值必须严格增长；"
-            "当前 Redmi 五分钟诊断仍为零，只能等待长跑实际增长或外部仪器，不能把零值写成通过。",
+            "当前 Redmi 五分钟诊断仍为零，不能把零值写成通过；2026-07-25 的 24h 重试主动取消且无 JSON，"
+            "长 profile 保留到预生产受控设备实验室执行。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")
@@ -277,7 +283,7 @@ def build_architecture_report() -> Document:
     )
     add_diagram(document, "android-apm-slow-method-instrumentation.png", "图 4：构建期插桩与运行时上报")
 
-    document.add_section(WD_SECTION.NEW_PAGE)
+    document.add_page_break()
     document.add_heading("验证入口", level=1)
     document.add_paragraph("仓库的标准验证链如下，最终结果以项目状态文档和实际命令输出为准：")
     for command in (

@@ -346,7 +346,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 从提交 `97cdc90` 启动的首次 OnePlus 后台 24h 在第一小时内因设备持续离线超过当时统一的 30 秒窗口而失败；stderr 精确记录 `shell pidof ... device not found`，没有结果 JSON，因此不存在 duration/restart/power 接受结论。基于该真实设备实验室失败，重连窗口改为 profile-aware：smoke 保持 30 秒，24h/72h 默认 300 秒，可选 CLI 值绝对限制为 600 秒；工件同时记录 window 与 retry count，副作用命令的单次语义不变。26 个 host tests 与 Python 编译检查通过。随后重新上线的是 Redmi `22041216UC`：当前代码 smoke 实际 `30.553s`、2 starts、CPU `11.319%`、主线程 P95 `1,838.231us`，原预算通过，工件记录 `adbReconnectTimeoutSeconds=30`、retry count `0`、`pm-clear`，SHA-256 `e2893814fc981ece690e9452e14f324e7933f9b186c0e7003b44874424ea4c15`。该 Redmi 仍未产出 UID 功耗，所以当时没有用它启动必然缺证据的 24h；下一段记录后续设备选择。
 
-2026-07-24 用户改为只使用当前 Redmi 继续长稳。MIUI 在 package-scoped 人类可读 `batterystats` 中省略 sample UID，但 Android current checkin `-c` 仍输出精确 UID `10217` 的 `pwi,uid`。runner 因此增加精确 UID fallback，并把累计值严格增长设为功耗证据前提；平坦 `0→0`、回退、错误 UID、非有限或坏值都保持缺失，不再通过 `max(0, delta)` 生成伪零功耗。30 个 host Python tests 与 Python 编译检查通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过。当前 Redmi 在 10 events/second 下运行五分钟后 checkin computed power 仍为 `0`，所以这只是 OEM 能力诊断，不是功耗验收。下一次 Redmi 24h 可以独立评价 CPU/PSS/disk/thermal/restart/offline；完整长 profile 仍必须取得严格增长的 UID 功耗或校准外部功耗仪证据，checked-in 预算没有变化。
+2026-07-24 当前 Redmi 的 MIUI 在 package-scoped 人类可读 `batterystats` 中省略 sample UID，但 Android current checkin `-c` 仍输出精确 UID `10217` 的 `pwi,uid`。runner 因此增加精确 UID fallback，并把累计值严格增长设为功耗证据前提；平坦 `0→0`、回退、错误 UID、非有限或坏值都保持缺失，不再通过 `max(0, delta)` 生成伪零功耗。30 个 host Python tests 与 Python 编译检查通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过。当前 Redmi 在 10 events/second 下运行五分钟后 checkin computed power 仍为 `0`，所以这只是 OEM 能力诊断，不是功耗验收，checked-in 预算没有变化。
+
+2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是 microbenchmark 与原预算 smoke 通过，长稳尚未验收。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
@@ -369,7 +371,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及在原预算 smoke 已通过后继续跑满 24h/72h、功耗仪或 UID、热与磁盘数值，全部依赖外部系统或设备。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及预生产阶段的 24h/72h、功耗仪或 UID、热与磁盘验收，全部依赖外部系统或受控设备。长 profile 不阻塞当前客户端 SDK 迭代，但正式生产准入前仍须按原预算执行。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 

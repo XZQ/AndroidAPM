@@ -470,7 +470,7 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 
 随后从提交 `97cdc90` 启动的首次后台 24h 在第一小时内遇到设备持续离线超过 30 秒，runner 正确失败并保留 stderr，未生成 JSON，也没有长稳通过结论。长 profile 的只读重连窗口因此改为 300 秒并设 600 秒绝对上限。之后重新上线的是 Redmi 而非 OnePlus；当前代码 smoke 以 CPU `11.319%` 通过，工件记录 `window=30s`、retry count `0`、`pm-clear`，但仍没有 UID 功耗，因此当时没有启动一个注定缺功耗失败的 24h。新策略已有 26 个 host tests 与 Redmi 正常路径证据；下一段记录后续设备选择与严格证据策略。
 
-2026-07-24 用户明确改为使用当前 Redmi 继续验证。该机的人类可读 `batterystats` 会省略 sample UID，但 current checkin 仍给出 UID `10217` 的 `pwi` 行；runner 增加精确 UID fallback，同时把累计功耗“必须严格增长”作为证据条件，避免原先 `max(0, delta)` 把 OEM 的 `0→0` 或计数回退伪装成 `0 mAh/hour` 通过。30 个 host tests、Python 编译检查和 JDK 17 benchmark Release/AndroidTest Kotlin 构建通过。五分钟、10 events/second 的 Redmi 诊断中该值仍为 `0`，所以它不是功耗验收；后续可在同一 24h 工件中判断 CPU/PSS/disk/thermal/restart/offline，但只有 UID 值实际增长或存在校准外部功耗仪时，完整长 profile 才能通过。预算未修改。
+2026-07-24 当前 Redmi 的人类可读 `batterystats` 会省略 sample UID，但 current checkin 仍给出 UID `10217` 的 `pwi` 行；runner 增加精确 UID fallback，同时把累计功耗“必须严格增长”作为证据条件，避免原先 `max(0, delta)` 把 OEM 的 `0→0` 或计数回退伪装成 `0 mAh/hour` 通过。30 个 host tests、Python 编译检查和 JDK 17 benchmark Release/AndroidTest Kotlin 构建通过。五分钟、10 events/second 的诊断中该值仍为 `0`，所以它不是功耗验收。2026-07-25 项目决定不再为当前客户端迭代长期占用个人手机；已启动的 Redmi 24h 重试在完成前被明确取消，runner 与 sample 进程均已停止且没有结果 JSON，因此既不算通过，也不算门禁失败。`24h`/`72h` fail-closed 能力与原预算继续保留，改为在预生产准入阶段使用受控设备实验室或校准功耗设施执行。
 
 发布链验证：
 
@@ -485,7 +485,7 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 
 仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、dispatcher 固定阶段的有界尾延迟证据、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断、固定 microbenchmark 预算，以及 fail-closed 的物理设备 A/B/离线/重启 smoke、24h、72h campaign 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：按已冻结 V2 协议实现生产 Collector、租户/鉴权、服务端 eventId 幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线，以及在已通过原预算 smoke 的基础上跑满 24h/72h 并保存功耗仪/UID 证据。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：按已冻结 V2 协议实现生产 Collector、租户/鉴权、服务端 eventId 幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 
