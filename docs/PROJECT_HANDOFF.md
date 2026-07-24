@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-23｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-07-24｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -196,7 +196,9 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 之后仅对 device-soak 的只读 ADB 证据命令增加三类明确 transport 瞬断的有界重试（最多 30 次、一秒间隔）；所有可能有副作用的安装、卸载、清理和 Activity 命令保持单次执行。持续离线仍失败，工件记录 `transientAdbRetryCount`，verifier 校验 provenance。25 个 host tests 通过。同一 OnePlus 正常路径复验的 retry count 为 0，原预算 smoke 再次通过：`30.221s`、2 starts、enabled CPU `5.134%`、control CPU `7.164%`、main-thread P95 `360.677us`、UID power `29.423 mAh/hour`。这只证明长跑前的 transport 策略和正常路径，不替代 24h。
 
-首次后台 24h 从 `97cdc90` 启动后在第一小时内因设备持续离线超过 30 秒失败；只有 stderr，没有 JSON，不能验收。重连窗口随即改为 profile-aware：smoke 30 秒，24h/72h 300 秒，CLI 绝对上限 600 秒；artifact/verifier 同时约束 window 与 retry count，副作用命令仍不重放。26 个 host tests 和 Python 编译检查通过。随后上线的 Redmi 当前代码 smoke 以 `30.553s`、2 starts、CPU `11.319%`、main-thread P95 `1,838.231us` 通过，window `30s`、retry `0`、reset `pm-clear`；但无 UID power，所以没有启动 24h。长跑等待 power-capable OnePlus 或校准外部功耗仪。
+首次后台 24h 从 `97cdc90` 启动后在第一小时内因设备持续离线超过 30 秒失败；只有 stderr，没有 JSON，不能验收。重连窗口随即改为 profile-aware：smoke 30 秒，24h/72h 300 秒，CLI 绝对上限 600 秒；artifact/verifier 同时约束 window 与 retry count，副作用命令仍不重放。26 个 host tests 和 Python 编译检查通过。随后上线的 Redmi 当前代码 smoke 以 `30.553s`、2 starts、CPU `11.319%`、main-thread P95 `1,838.231us` 通过，window `30s`、retry `0`、reset `pm-clear`；但无 UID power，所以当时没有启动 24h。下一段记录后续用户设备选择和严格功耗策略。
+
+2026-07-24 用户明确后续只使用当前 Redmi `22041216UC`。该 MIUI 的 package-scoped 人类可读 batterystats 省略 sample UID，但 `dumpsys batterystats -c` 保留精确 `9,10217,l,pwi,uid,...`。runner 增加这一 current-checkin fallback，并要求首尾累计 UID 功耗严格增长；平坦 `0→0`、回退、错误 UID、非有限/坏值继续作为缺失证据，不能被 `max(0, delta)` 伪装为合格零功耗。30 个 host tests、Python 编译检查和 JDK 17.0.14 benchmark Release/AndroidTest Kotlin 构建通过。五分钟、10 events/second 诊断后 Redmi 的 checkin computed power 仍为 `0`，所以这不是功耗接受。下一次当前手机 24h 可分别判断 CPU/PSS/disk/thermal/restart/offline，完整 profile 仍只有在 UID 累计值实际增长或存在校准外部仪器时才能通过；预算未修改。
 
 ## 新电脑接手
 

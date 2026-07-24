@@ -34,6 +34,13 @@ TRANSIENT_ADB_ERROR_MARKERS = (
 TRANSIENT_ADB_RETRY_INTERVAL_SECONDS = 1.0
 DEFAULT_ADB_RECONNECT_TIMEOUT_SECONDS = 30
 MAX_ADB_RECONNECT_TIMEOUT_SECONDS = 10 * 60
+BATTERYSTATS_CHECKIN_MIN_POWER_FIELDS = 6
+BATTERYSTATS_CHECKIN_UID_INDEX = 1
+BATTERYSTATS_CHECKIN_SECTION_INDEX = 3
+BATTERYSTATS_CHECKIN_LABEL_INDEX = 4
+BATTERYSTATS_CHECKIN_POWER_INDEX = 5
+BATTERYSTATS_POWER_SECTION = "pwi"
+BATTERYSTATS_UID_LABEL = "uid"
 PROFILE_DEFAULTS = {
     "smoke": {
         "durationSeconds": 30,
@@ -372,7 +379,7 @@ def _uid_label(uid: int) -> str:
 
 def _uid_power_mah(adb: Adb, package: str, uid: int) -> float | None:
     """Read cumulative Android batterystats estimated power for this app UID."""
-    output = adb.read_shell(
+    human_output = adb.read_shell(
         "dumpsys",
         "batterystats",
         "--charged",
@@ -384,11 +391,43 @@ def _uid_power_mah(adb: Adb, package: str, uid: int) -> float | None:
     for label in labels:
         match = re.search(
             rf"^\s*Uid\s+{re.escape(label)}:\s*([0-9]+(?:\.[0-9]+)?)",
-            output,
+            human_output,
             re.IGNORECASE | re.MULTILINE,
         )
         if match is not None:
             return float(match.group(1))
+
+    # Some OEMs omit low-power UIDs from the human-readable list while retaining
+    # the same Power Use Item in Android's machine-readable current-stats output.
+    checkin_output = adb.read_shell(
+        "dumpsys",
+        "batterystats",
+        "-c",
+        timeout=120,
+        check=False,
+    )
+    return _checkin_uid_power_mah(checkin_output, uid)
+
+
+def _checkin_uid_power_mah(output: str, uid: int) -> float | None:
+    """Parse one exact UID Power Use Item from batterystats checkin CSV."""
+    expected_uid = str(uid)
+    for line in output.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) < BATTERYSTATS_CHECKIN_MIN_POWER_FIELDS:
+            continue
+        if (
+            fields[BATTERYSTATS_CHECKIN_UID_INDEX] != expected_uid
+            or fields[BATTERYSTATS_CHECKIN_SECTION_INDEX]
+            != BATTERYSTATS_POWER_SECTION
+            or fields[BATTERYSTATS_CHECKIN_LABEL_INDEX] != BATTERYSTATS_UID_LABEL
+        ):
+            continue
+        try:
+            power_mah = float(fields[BATTERYSTATS_CHECKIN_POWER_INDEX])
+        except ValueError:
+            return None
+        return power_mah if math.isfinite(power_mah) and power_mah >= 0 else None
     return None
 
 
@@ -570,8 +609,12 @@ def _summarize(
         first_power = first_sample.get("uid_power_mah")
         last_power = last_sample.get("uid_power_mah")
         if first_power is not None and last_power is not None:
-            power_rate = max(0.0, float(last_power) - float(first_power)) / observed_hours
-            power_source = "android-batterystats-uid"
+            power_delta = float(last_power) - float(first_power)
+            # A cumulative value that is flat or moves backwards is not power
+            # evidence; accepting a clamped zero would make unsupported OEM data pass.
+            if power_delta > 0:
+                power_rate = power_delta / observed_hours
+                power_source = "android-batterystats-uid"
 
     return {
         "observedDurationSeconds": _finite_number(observed_seconds, "observed duration"),

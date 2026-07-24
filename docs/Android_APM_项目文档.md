@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-23｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
+> 文档同步：2026-07-24｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -344,7 +344,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 随后为 24h acquisition 增加 ADB transport 有界恢复，但严格区分命令副作用：只读 `getprop/pidof/proc/dumpsys/run-as/package/get-state` 对三类明确瞬断最多重试 30 次、每次间隔一秒；install/uninstall/pm clear/Activity start/force-stop 从不自动重放。持续离线即使发生在 smoke 可选功耗字段也会失败，工件新增 `transientAdbRetryCount`，verifier 校验非负整数及已知 reset strategy。25 个 host tests 通过。同一 OnePlus 复验在 `transientAdbRetryCount=0` 的正常路径下以实际 `30.221s`、2 starts、enabled CPU `5.134%`、control CPU `7.164%`、主线程 P95 `360.677us`、PSS 增长 `3,327 KiB`、disk 增长 `49,152 bytes`、UID 功耗 `29.423 mAh/hour` 全项通过原预算；工件 SHA-256 为 `63649b00680b9211325929b9601936a2b84cf5b68a5c5095c41fd289ad07bbc4`。该证据验证正常命令分类，不声称 24h 已完成。
 
-从提交 `97cdc90` 启动的首次 OnePlus 后台 24h 在第一小时内因设备持续离线超过当时统一的 30 秒窗口而失败；stderr 精确记录 `shell pidof ... device not found`，没有结果 JSON，因此不存在 duration/restart/power 接受结论。基于该真实设备实验室失败，重连窗口改为 profile-aware：smoke 保持 30 秒，24h/72h 默认 300 秒，可选 CLI 值绝对限制为 600 秒；工件同时记录 window 与 retry count，副作用命令的单次语义不变。26 个 host tests 与 Python 编译检查通过。随后重新上线的是 Redmi `22041216UC`：当前代码 smoke 实际 `30.553s`、2 starts、CPU `11.319%`、主线程 P95 `1,838.231us`，原预算通过，工件记录 `adbReconnectTimeoutSeconds=30`、retry count `0`、`pm-clear`，SHA-256 `e2893814fc981ece690e9452e14f324e7933f9b186c0e7003b44874424ea4c15`。该 Redmi 仍未产出 UID 功耗，所以没有用它启动必然缺证据的 24h；正式长跑等待 power-capable OnePlus 或校准外部功耗仪。
+从提交 `97cdc90` 启动的首次 OnePlus 后台 24h 在第一小时内因设备持续离线超过当时统一的 30 秒窗口而失败；stderr 精确记录 `shell pidof ... device not found`，没有结果 JSON，因此不存在 duration/restart/power 接受结论。基于该真实设备实验室失败，重连窗口改为 profile-aware：smoke 保持 30 秒，24h/72h 默认 300 秒，可选 CLI 值绝对限制为 600 秒；工件同时记录 window 与 retry count，副作用命令的单次语义不变。26 个 host tests 与 Python 编译检查通过。随后重新上线的是 Redmi `22041216UC`：当前代码 smoke 实际 `30.553s`、2 starts、CPU `11.319%`、主线程 P95 `1,838.231us`，原预算通过，工件记录 `adbReconnectTimeoutSeconds=30`、retry count `0`、`pm-clear`，SHA-256 `e2893814fc981ece690e9452e14f324e7933f9b186c0e7003b44874424ea4c15`。该 Redmi 仍未产出 UID 功耗，所以当时没有用它启动必然缺证据的 24h；下一段记录后续设备选择。
+
+2026-07-24 用户改为只使用当前 Redmi 继续长稳。MIUI 在 package-scoped 人类可读 `batterystats` 中省略 sample UID，但 Android current checkin `-c` 仍输出精确 UID `10217` 的 `pwi,uid`。runner 因此增加精确 UID fallback，并把累计值严格增长设为功耗证据前提；平坦 `0→0`、回退、错误 UID、非有限或坏值都保持缺失，不再通过 `max(0, delta)` 生成伪零功耗。30 个 host Python tests 与 Python 编译检查通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过。当前 Redmi 在 10 events/second 下运行五分钟后 checkin computed power 仍为 `0`，所以这只是 OEM 能力诊断，不是功耗验收。下一次 Redmi 24h 可以独立评价 CPU/PSS/disk/thermal/restart/offline；完整长 profile 仍必须取得严格增长的 UID 功耗或校准外部功耗仪证据，checked-in 预算没有变化。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 

@@ -34,6 +34,78 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         self.assertEqual("u0a234", RUNNER._uid_label(10234))
         self.assertEqual("u10a234", RUNNER._uid_label(1010234))
 
+    def test_uid_power_prefers_human_readable_app_value(self) -> None:
+        """The package-scoped Android value avoids an unnecessary checkin dump."""
+        adb = Mock()
+        adb.read_shell.return_value = "  Uid u0a217: 1.25 ( cpu=1.25 )\n"
+
+        power_mah = RUNNER._uid_power_mah(
+            adb,
+            "com.apm.sample.debug",
+            10217,
+        )
+
+        self.assertEqual(1.25, power_mah)
+        adb.read_shell.assert_called_once_with(
+            "dumpsys",
+            "batterystats",
+            "--charged",
+            "com.apm.sample.debug",
+            timeout=120,
+            check=False,
+        )
+
+    def test_uid_power_falls_back_to_exact_checkin_power_item(self) -> None:
+        """OEM-filtered text may use the current checkin UID Power Use Item."""
+        adb = Mock()
+        adb.read_shell.side_effect = [
+            "Estimated power use (mAh):\n  UID u0a216: 9.0\n",
+            (
+                "9,10216,l,pwi,uid,8.0,0,0,8.0\n"
+                "9,10217,l,pwi,uid,1.75,0,0,1.75\n"
+            ),
+        ]
+
+        power_mah = RUNNER._uid_power_mah(
+            adb,
+            "com.apm.sample.debug",
+            10217,
+        )
+
+        self.assertEqual(1.75, power_mah)
+        self.assertEqual(
+            unittest.mock.call(
+                "dumpsys",
+                "batterystats",
+                "-c",
+                timeout=120,
+                check=False,
+            ),
+            adb.read_shell.call_args_list[-1],
+        )
+
+    def test_checkin_uid_power_rejects_wrong_or_non_finite_values(self) -> None:
+        """Only an exact finite non-negative UID power item is evidence."""
+        self.assertIsNone(
+            RUNNER._checkin_uid_power_mah(
+                "9,10216,l,pwi,uid,1.0,0,0,1.0\n",
+                10217,
+            )
+        )
+        self.assertIsNone(
+            RUNNER._checkin_uid_power_mah(
+                "9,10217,l,pwi,uid,nan,0,0,nan\n",
+                10217,
+            )
+        )
+        self.assertEqual(
+            0.0,
+            RUNNER._checkin_uid_power_mah(
+                "9,10217,l,pwi,uid,0,0,0,0\n",
+                10217,
+            ),
+        )
+
     def test_streamed_install_requires_a_standalone_success_line(self) -> None:
         """Standard multi-line install output passes without accepting fuzzy text."""
         adb = Mock()
@@ -324,6 +396,51 @@ class DeviceSoakRunnerTest(unittest.TestCase):
         self.assertEqual(750.0, summary["mainThreadOperationP95Us"])
         self.assertEqual("android-batterystats-uid", summary["powerSource"])
         self.assertAlmostEqual(60.0, summary["chargeConsumptionMahPerHour"])
+
+    def test_summary_rejects_flat_or_regressing_uid_power(self) -> None:
+        """A non-growing cumulative counter cannot masquerade as zero-power evidence."""
+        control = self._segment(
+            startup_ms=100,
+            duration_ms=5_000,
+            operation_p95_ns=0,
+            init_ns=0,
+            first_jiffies=50,
+            last_jiffies=75,
+            wall_seconds=5,
+            first_pss=9_000,
+            last_pss=9_500,
+            first_disk=500,
+            last_disk=500,
+            first_power=0.0,
+            last_power=0.0,
+        )
+        for first_power, last_power in ((0.0, 0.0), (1.0, 0.5)):
+            with self.subTest(first_power=first_power, last_power=last_power):
+                segment = self._segment(
+                    startup_ms=120,
+                    duration_ms=10_000,
+                    operation_p95_ns=500_000,
+                    init_ns=20_000_000,
+                    first_jiffies=100,
+                    last_jiffies=200,
+                    wall_seconds=10,
+                    first_pss=10_000,
+                    last_pss=12_000,
+                    first_disk=1_000,
+                    last_disk=2_000,
+                    first_power=first_power,
+                    last_power=last_power,
+                )
+
+                summary = RUNNER._summarize(
+                    control,
+                    [segment],
+                    external_power_mah=None,
+                    clock_ticks_per_second=100,
+                )
+
+                self.assertIsNone(summary["powerSource"])
+                self.assertIsNone(summary["chargeConsumptionMahPerHour"])
 
     @staticmethod
     def _segment(

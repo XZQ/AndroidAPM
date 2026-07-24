@@ -68,7 +68,9 @@ device-soak result schema version 2 新增 `cpuControlPercent`、`cpuEnabledAver
 
 `run_device_soak.py --reset-app-data` 只清理明确选择的 sample package，避免旧 outbox 污染基线；默认执行 `pm clear`。只有 OEM 返回同时包含 `SecurityException` 与 `android.permission.CLEAR_APP_USER_DATA` 的明确权限拒绝时，runner 才卸载并重装同一个已选择 APK；工件记录 `appDataResetStrategy=pm-clear|uninstall-reinstall`。只读 `getprop/pidof/proc/dumpsys/run-as/package/get-state` 命令仅对 `device offline`、精确 serial not found、no devices 三类 transport 失败按一秒间隔有界重试：smoke 默认 30 秒，24h/72h 默认 300 秒，CLI 不得超过 600 秒；安装、卸载、清理、Activity 启动/停止不重放。耗尽重试仍失败，工件记录 `transientAdbRetryCount` 与 `adbReconnectTimeoutSeconds`，verifier 校验 retry 为非负整数、window 在 `1..600` 且 reset strategy 已知。runner 不修改网络，也不重置系统 batterystats。`--external-power-mah` 只接受外部仪器归属于 enabled 阶段的 mAh，原始仪器工件仍须随 JSON 保存。`verifyDeviceSoakFromResults` 只验证显式传入的工件，不会搜索并误用旧结果。
 
-`test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、control/enabled/delta CPU、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、schema-v2 CPU 缺项/不一致、schema-v1 兼容读取、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
+UID 功耗优先读取 package-scoped 人类可读 `Uid <label>: <mAh>`；当 OEM 从可读列表隐藏低功耗 UID 时，再读取不重置状态的 current checkin `-c`，只接受第二列精确匹配 package Linux UID、section/label 为 `pwi,uid`、数值有限且非负的 Power Use Item。摘要要求 campaign 首尾累计值严格增长；`0→0`、回退、坏值或错误 UID 都不生成 `powerSource`，因此长 profile 继续因功耗缺失失败，而不会被夹成一个看似合格的零功耗。
+
+`test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、可读/checkin 功耗解析、平坦/回退功耗拒绝、control/enabled/delta CPU、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、schema-v2 CPU 缺项/不一致、schema-v1 兼容读取、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
 
 ## 7. 当前物理设备证据
 
@@ -81,6 +83,7 @@ device-soak result schema version 2 新增 `cpuControlPercent`、`cpuEnabledAver
 - 只读 transport 有界重试加入后，同一设备再次以 enabled CPU `5.134%`、control CPU `7.164%`、主线程 P95 `360.677us`、UID 功耗 `29.423 mAh/hour` 通过原预算；`transientAdbRetryCount=0`，证明正常路径未被重试逻辑改变；
 - 首次后台 24h 在第一小时内因设备持续离线超过当时共用的 30 秒窗口失败，stderr 保留且无 JSON；该证据推动长 profile window 改为 300 秒，但设备重新上线前没有新真机接受结果；
 - 随后重新上线的 Redmi 用当前代码 smoke 以 CPU `11.319%` 通过，工件记录 `window=30s`、retry count `0`、`pm-clear`；仍无 UID power，故没有用它启动必然缺功耗证据的长 profile；
+- 2026-07-24 用户选择继续使用当前 Redmi。新的精确 checkin fallback 能看到 UID `10217` 的 `pwi` 行，但五分钟、10 events/second 诊断后累计 computed power 仍为 `0`；30 个 host tests、Python 编译和 JDK 17 benchmark Release/AndroidTest Kotlin 构建通过。下一次 Redmi 24h 可分别评价非功耗维度，但只有 UID 累计值实际增长或提供校准外部仪器时才能获得完整接受；
 - `24h`、`72h` 和长稳功耗未执行，因此不存在对应接受结论；
 - MIUI 拒绝 Gradle/UTP 的 session-based 测试 APK 安装，但直接安装同一构建 APK 后正式 runner 可运行；该 OEM 安装器失败必须与 benchmark 预算结果分别记录，不能把手工 runner 通过写成 Gradle aggregate task 通过。
 
