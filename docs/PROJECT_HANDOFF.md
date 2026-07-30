@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-24｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-07-31｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -201,6 +201,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 2026-07-24 当前 Redmi `22041216UC` 的 package-scoped 人类可读 batterystats 省略 sample UID，但 `dumpsys batterystats -c` 保留精确 `9,10217,l,pwi,uid,...`。runner 增加这一 current-checkin fallback，并要求首尾累计 UID 功耗严格增长；平坦 `0→0`、回退、错误 UID、非有限/坏值继续作为缺失证据，不能被 `max(0, delta)` 伪装为合格零功耗。30 个 host tests、Python 编译检查和 JDK 17.0.14 benchmark Release/AndroidTest Kotlin 构建通过。五分钟、10 events/second 诊断后 Redmi 的 checkin computed power 仍为 `0`，所以这不是功耗接受；预算未修改。
 
 2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于三项 microbenchmark 和原预算 smoke。
+
+2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 96 suites / 642 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 101 suites / 688 tests，plugin 18 tests 独立报告，取代 2026-07-22 的 682-test 组合基线。
 
 ## 新电脑接手
 

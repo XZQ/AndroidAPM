@@ -1,9 +1,9 @@
 # AndroidAPM SDK 第一性原理评审
 
-> 原始评审材料：2026-07-21，由其他 AI 梳理｜源码闭环复核：2026-07-23
+> 原始评审材料：2026-07-21，由其他 AI 梳理｜源码闭环复核：2026-07-31
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（不是生产验收证书，也不是业务 App 的运行时问题诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-22 同一源码完整刷新通过根 Android 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 682 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过。最初两轮 smoke 的 CPU `28.425%`、`32.046%` 超过 `20%`；定位并修复 FPS 静态页面 VSync observer 后，在未修改预算的前提下连续两轮以 `12.928%`、`12.362%` 全项通过，24h/72h 仍未执行。
+> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-31 当前 tip 强制刷新通过根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 688 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过。最初两轮 smoke 的 CPU `28.425%`、`32.046%` 超过 `20%`；定位并修复 FPS 静态页面 VSync observer 后，在未修改预算的前提下连续两轮以 `12.928%`、`12.362%` 全项通过，24h/72h 仍未执行。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -212,7 +212,7 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 
 ## 6. 闭环验证与局限
 
-- **组合测试**：JDK 17.0.14 下，根 `testDebugUnitTest --rerun-tasks` 通过 96 suites / 636 tests；`apm-model:test` 通过 5 suites / 46 tests；included `apm-plugin:test` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
+- **组合测试**：2026-07-31 在 JDK 17.0.14 下，根 `testDebugUnitTest :apm-model:test --rerun-tasks` 通过 Android 96 suites / 642 tests 与 model 5 suites / 46 tests；included `apm-plugin:test --rerun-tasks` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
 - **定向测试/构建**：device-soak CPU 归因、OEM reset 回退、profile-aware ADB transport 有界重试和 UID power checkin/严格增长更新后 30 个 host tests 通过；smoke/long 默认重连窗口分别为 30/300 秒，绝对上限 600 秒。JDK 17 benchmark Release/AndroidTest Kotlin 构建通过，历史 schema-v1 物理 smoke 工件继续保留原绝对 CPU 门禁。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。dispatcher 阶段证据更新后，core 27 suites / 197 tests 通过且 lint 为 `No issues found`，但尚未产生真机/24h 阶段分布。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
 - **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；FPS observer 修复后两轮 smoke 以 CPU `12.928%`、`12.362%` 通过原 `20%` 上限。OnePlus `PLK110`（Android 16）历史 smoke 以 enabled CPU `6.161%` / `5.134%` 和 UID 功耗 `29.062` / `29.423 mAh/hour` 通过，但设备已不可用。当前 Redmi 的新电脑 smoke 以 CPU `12.201%` 通过；五分钟 10 events/second 诊断后 exact checkin UID `10217` computed power 仍为 `0`，因此不构成功耗接受。2026-07-25 的 Redmi 24h 重试被用户主动取消，runner/sample 已停止且无 JSON，所以既不是通过也不是门禁失败。长 profile 保留到预生产受控设备实验室执行；MIUI session install 与历史 OnePlus `pm clear` 权限问题均和 SDK 预算结果分开记录。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 49 个本地链接。

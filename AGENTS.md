@@ -17,7 +17,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
-- Documentation synchronization date: `2026-07-24`
+- Documentation synchronization date: `2026-07-31`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
@@ -27,6 +27,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.
+
+Current-tip full test refresh on `2026-07-31` used JDK `17.0.14` with forced task reruns. Root `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` passed Android `96` suites / `642` tests and model `5` suites / `46` tests; included `apm-plugin test --rerun-tasks --no-daemon` passed `1` suite / `18` tests. All reports contain zero failures/errors/skips. Root Android plus model therefore establishes the current `101`-suite / `688`-test client baseline, with the plugin reported separately. This supersedes the Fourteenth-batch `636`-test root / `682`-test Android-plus-model baseline below; the older entries remain historical evidence for the changes they accompanied.
 
 Fresh checks executed on `2026-07-16` against the completed client-closure tip:
 

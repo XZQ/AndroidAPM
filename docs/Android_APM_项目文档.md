@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-24｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
+> 文档同步：2026-07-31｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -349,6 +349,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 2026-07-24 当前 Redmi 的 MIUI 在 package-scoped 人类可读 `batterystats` 中省略 sample UID，但 Android current checkin `-c` 仍输出精确 UID `10217` 的 `pwi,uid`。runner 因此增加精确 UID fallback，并把累计值严格增长设为功耗证据前提；平坦 `0→0`、回退、错误 UID、非有限或坏值都保持缺失，不再通过 `max(0, delta)` 生成伪零功耗。30 个 host Python tests 与 Python 编译检查通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过。当前 Redmi 在 10 events/second 下运行五分钟后 checkin computed power 仍为 `0`，所以这只是 OEM 能力诊断，不是功耗验收，checked-in 预算没有变化。
 
 2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是 microbenchmark 与原预算 smoke 通过，长稳尚未验收。
+
+2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 96 suites / 642 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 101 suites / 688 tests，plugin 18 tests 独立报告；该结果取代 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
 
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 

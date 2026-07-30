@@ -13,7 +13,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-25"
+REPORT_DATE = "2026-07-31"
 RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
@@ -81,6 +81,7 @@ def add_summary_table(document: Document) -> None:
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "164", "159 Kotlin + 4 C + 1 proto"),
         ("测试文件", "102", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
+        ("当前完整测试", "101 suites / 688 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
