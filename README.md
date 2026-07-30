@@ -400,25 +400,30 @@ apmSlowMethod {
 
 ## 与微信 Matrix、快手 KOOM 的定位对比
 
-比较日期：2026-07-16。依据当前仓库代码，以及 [Tencent/Matrix 官方 README](https://github.com/Tencent/matrix) 与 [KwaiAppTeam/KOOM 官方 README](https://github.com/KwaiAppTeam/KOOM)。`✅` 表示该项目官方资料中有对应客户端能力，`◐` 表示范围较窄、依赖显式接入或只覆盖其中一部分，`—` 表示官方资料未声明；这不是性能排名。
+比较日期：2026-07-31。依据当前仓库代码，以及 [Tencent/Matrix 官方 README](https://github.com/Tencent/matrix) 与 [KwaiAppTeam/KOOM 官方 README](https://github.com/KwaiAppTeam/KOOM)。`✅` 表示官方资料明确提供该类客户端能力，`◐` 表示范围较窄、依赖显式接入或只覆盖其中一部分，`—` 仅表示官方 README 未声明可直接比较的能力，不等于证明项目内部不存在；这不是实现深度或性能排名。
 
 | 客户端能力 | AndroidAPM | 微信 Matrix | 快手 KOOM |
 |---|:---:|:---:|:---:|
 | 模块化综合 APM（多个性能域） | ✅ | ✅ | ◐（聚焦 OOM/内存） |
-| Activity/Fragment/ViewModel Java 泄漏 | ✅ | ✅ | ✅（Java Heap） |
+| Java Heap 泄漏、OOM 与 Hprof | ✅ | ✅（Resource Canary） | ✅（Java Leak Monitor） |
 | Native Heap 泄漏定位 | ◐（统计/预警，非全堆泄漏追踪） | ✅（Memory Hook） | ✅ |
 | Java/Native Crash 与历史退出原因 | ✅ | — | — |
-| ANR、卡顿、FPS、启动、慢方法 | ✅ | ✅（Trace Canary） | — |
-| 文件 IO / Closeable / FD | ✅ | ✅（IO Canary） | — |
-| SQLite 慢查询与 QueryPlan/Lint | ✅ | ✅（SQLite Lint） | — |
-| 电量、线程活动与系统资源信号 | ◐（部分信号需宿主回调） | ✅（Battery Canary） | ◐（线程泄漏） |
+| ANR 检测与现场证据 | ✅ | ✅（Trace Canary） | — |
+| FPS、掉帧与 UI 卡顿 | ✅ | ✅（Trace Canary） | — |
+| 启动、页面切换与首帧 | ✅ | ✅（Trace Canary） | — |
+| 慢方法与编译期字节码插桩 | ✅ | ✅（Trace Canary） | — |
+| 文件 IO、Closeable 与 FD | ✅ | ◐（File IO / Closeable） | — |
+| SQLite 慢查询与 QueryPlan/Lint | ✅（运行时 QueryPlan） | ✅（SQLite Lint） | — |
+| 电量、线程与系统资源信号 | ◐（部分信号需宿主回调） | ✅（Battery / Pthread Hook） | ◐（Thread Leak Monitor） |
 | 网络请求阶段追踪 | ✅（OkHttp/手动接入） | — | — |
-| WebView、Binder、GC、View/FrameMetrics | ◐（显式公共 API 接入） | ◐（部分相关能力） | — |
+| WebView 页面、JS 与资源观测 | ◐（按实例显式接入） | ◐（预分配内存 Hook） | — |
+| Binder / IPC 调用观测 | ◐（显式 tracing） | — | — |
+| GC、View 树与 FrameMetrics | ✅ | ◐（帧率/UI 卡顿） | — |
 | APK 静态体积分析 | — | ✅（APK Checker） | — |
 | 稳定 eventId + SQLite outbox + claim lease | ✅ | — | — |
 | 独立 SDK 自诊断日志与导出 | ✅ | — | — |
 
-Matrix 的强项是成熟的 Trace/IO/SQLite/Battery 与 Native Hook 体系；KOOM 专注 Java Heap、Native Heap 和线程泄漏；AndroidAPM 选择更宽的端上模块覆盖和可恢复传输链路。三者都不能仅凭客户端仓库等同于完整托管 APM 后台。
+Matrix 的强项是成熟的 Trace、IO、SQLite、Battery、Native Hook 与 APK 分析体系；KOOM 专注 Java Heap、Native Heap 和线程泄漏；AndroidAPM 选择更宽的端上运行时覆盖、显式公共 API 接入和可恢复传输链路。表格按能力类别比较是否存在可核实入口，不暗示同名能力具有相同算法、自动化程度、开销或生产成熟度；三者也都不能仅凭客户端仓库等同于完整托管 APM 后台。
 
 ## SDK 自诊断
 
