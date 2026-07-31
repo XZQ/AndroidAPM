@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 103 |
+| 测试/benchmark 文件 | 104 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -72,7 +72,7 @@ Apm.emit
 - `maxRetries` 是首次尝试后的重试次数；失败达到 `maxRetries + 1` 后立即清理，age > 7 天也清理。
 - 网络完成不确定时仍可能重传；服务端必须按 `eventId` 幂等。
 - FileEventStore 是非 durable 兼容路径。
-- Crash/ANR 使用 `Apm.emitCriticalSync` 绕过共享 queue/sampling/aggregation/rate limit，较低 priority 自动提升为 CRITICAL；成功表示完整事件同步到 SQLite 或 critical IPC 文件，不在现场线程执行网络 IO。IPC 同步拒绝返回准确的 event/file/directory budget reason。
+- Crash/ANR 使用 `Apm.emitCriticalSync` 绕过共享 queue/sampling/aggregation/rate limit，较低 priority 自动提升为 CRITICAL；成功表示完整事件同步到 SQLite 或 critical IPC 文件，不在现场线程执行网络 IO。上传进程对 CRITICAL IPC 继续同步落 store，只有接受后删除 ready 文件；false/recoverable failure/no consumer 保留整文件重试，已发布 `.ipc` 不按年龄先删，16 MiB directory budget 继续限界。IPC 同步拒绝返回准确的 event/file/directory budget reason。
 - SDK 自诊断使用条数 + 字节双预算内存环/队列和按进程隔离的 app-private 滚动文件，不经过 dispatcher/outbox/uploader；每个 `sdk_health` 先写独立数值摘要，再以 HIGH 优先级尝试事件通道。每个 loss 同时记录稳定 reason 与 priority，兼容聚合结果显式进入 `UNATTRIBUTED`；SQLite capacity/prune 保留精确 priority counts。`dispatcherModuleIsolationDropCount` 单列模块隔离丢弃且同时计入总 drop，`queueBytes` 与 `queueSize` 同时暴露入口压力；支持全进程聚合导出和 executor 异步读取。
 - `ApmDiagnostics.hostIntegrationSnapshot()` 以不访问文件、与 journal 开关无关的方式报告 Network/SQLite/IPC/WebView/线程池/Battery/IO 显式接线的模块状态、活跃 registration、会话内信号数和最后时间。它只保留固定枚举/计数/时间戳；`NO_RUNTIME_EVIDENCE` 是“本会话尚未发生”，不是静态失败结论。停止清零活跃 registration，重新 init 清除旧证据。
 
@@ -205,9 +205,11 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于三项 microbenchmark 和原预算 smoke。
 
-2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 97 suites / 647 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 102 suites / 693 tests，plugin 18 tests 独立报告，取代同日较早的 642-test Android 刷新和 2026-07-22 的 682-test 组合基线。
+2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 654 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 103 suites / 700 tests，plugin 18 tests 独立报告，取代同日较早的 647-test Android 刷新和 2026-07-22 的 682-test 组合基线。
 
-同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 97 suites / 647 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与新增 API 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 98 suites / 654 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与关键 hand-off 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+
+同一源码的 critical-handoff 故障注入定向验证覆盖 core/crash/ANR/storage：JDK 17.0.14 下 `43` suites / `284` tests 全部通过，0 failures/errors/skips；对应 lint 与根 `apiCheck` 通过。测试证明 Crash true/false/recoverable/fatal 分支始终只委托原 handler 一次，fatal error 在委托后仍可见；critical IPC 首次同步存储故障会保留 ready 文件，第二次扫描成功后才删除，并保持 `eventId`、priority、fields。真实 SQLite 还验证关闭并重开 store 后 CRITICAL 行不丢失。
 
 同一源码的宿主接入诊断定向验证覆盖 core 与 Network/SQLite/IPC/WebView/ThreadPool/Battery/IO 七个模块：JDK 17.0.14 下 `49` suites / `359` tests 全部通过，0 failures/errors/skips；对应 lint 与 `apm-core:apiCheck` 通过。固定大小 registry 的并发、init/stop 会话重置、late-callback 拒绝、模块/registration/observation 五态转换都有确定性测试。该证据证明运行时只读诊断的线程安全和生命周期语义，不把未发生流量的 `NO_RUNTIME_EVIDENCE` 提升为静态接入失败结论。
 

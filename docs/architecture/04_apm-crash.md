@@ -1,6 +1,6 @@
 # apm-crash 模块
 
-> 同步日期：2026-07-10｜模块名：`crash`
+> 同步日期：2026-07-31｜模块名：`crash`
 
 ## 目的与入口
 
@@ -14,7 +14,7 @@
 2. `Apm.emitCriticalSync("java_crash", FATAL, CRITICAL)`
 3. 调用原 handler
 
-同步路径只保证本地 durable hand-off，不在 crash thread 做网络。
+同步路径只保证本地 durable hand-off，不在 crash thread 做网络。true 表示完整事件已同步到本进程 SQLite，或已原子发布为子进程 critical `.ipc`；false 记录 `crash_local_handoff`。recoverable emit 异常记录 `crash_handler_emit`。原 handler 位于 `finally`，所以 false、recoverable 异常乃至 `OutOfMemoryError` 等 fatal VM error 都不会跳过宿主崩溃链；fatal error 在委托返回后仍原样传播，不伪装成普通 telemetry failure。
 
 ## Native crash
 
@@ -57,7 +57,7 @@ Native target 具备 16 KiB page-size linker alignment。
 
 ## 测试
 
-`CrashConfigTest`, `NativeCrashMonitorJniContractTest`, `ExitReasonCollectorTest` 覆盖配置、JNI 名称/绑定和退出原因映射；真实 signal/tombstone/symbolization 需真机验证。
+`CrashConfigTest`, `CrashCriticalHandoffTest`, `NativeCrashMonitorJniContractTest`, `ExitReasonCollectorTest` 覆盖配置、同步 hand-off 成功/false/recoverable/fatal 与原 handler 委托、JNI 名称/绑定和退出原因映射；真实 signal/tombstone/symbolization 需真机验证。
 
 ## 时间语义
 

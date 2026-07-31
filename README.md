@@ -9,7 +9,7 @@
 - 同步日期：2026-07-31
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 165 个主源码文件：160 Kotlin + 4 C + 1 proto
-- 103 个测试/benchmark 文件
+- 104 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -31,7 +31,7 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
   -> 接入方 Collector
 ```
 
-Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采样、聚合和限流，同步到 SQLite durable hand-off；该入口把较低调用方 priority 自动提升为 CRITICAL，但不会在崩溃/ANR 线程执行阻塞网络请求。非上传进程同步完成 `.tmp` 写入与 `.ipc` 发布后才返回成功；pending/event/file/directory 字节预算分别为 4 MiB / 256 KiB / 1 MiB / 16 MiB，失败按准确预算原因进入自监控，而不是全部折叠为 `IPC_HANDOFF_FAILURE`。
+Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采样、聚合和限流，同步到 SQLite durable hand-off；该入口把较低调用方 priority 自动提升为 CRITICAL，但不会在崩溃/ANR 线程执行阻塞网络请求。非上传进程同步完成 `.tmp` 写入与 `.ipc` 发布后才返回成功；主进程对 CRITICAL 事件再次走同步 SQLite hand-off，只有下游接受才删除 ready 文件，存储异常/拒绝/回调未就绪时保留整文件重试。重试可能重复投递同文件前面的事件，因此仍是依赖稳定 `eventId` 去重的 at-least-once，而不是 exactly-once。已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理；16 MiB ready-directory 预算继续限制磁盘占用。pending/event/file/directory 字节预算分别为 4 MiB / 256 KiB / 1 MiB / 16 MiB，失败按准确预算原因进入自监控，而不是全部折叠为 `IPC_HANDOFF_FAILURE`。
 
 每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避；`maxRetries` 表示首次尝试后的重试次数，达到 `maxRetries + 1` 次失败后立即清理，超过 7 天的行也会清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
@@ -492,7 +492,7 @@ python apm-benchmark/run_device_soak.py --profile smoke --serial <serial> --apk 
 python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-budgets.json --results apm-benchmark/build/device-soak/smoke.json --profile smoke
 ```
 
-2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 97 suites / 647 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 102 suites / 693 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。
+2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 98 suites / 654 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 103 suites / 700 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。关键链路故障注入覆盖 Crash hand-off 的 true/false/recoverable/fatal 与宿主委托、critical IPC 首次存储失败后保留/重试、字段与身份不变，以及真实 SQLite 关闭重开后的 CRITICAL 行恢复。
 
 同日与独立服务端分支 `codex/collector-v2-e2e`（验证 tip `2feb2f5`）完成真实 HTTP 联调：客户端两次发送相同的 2-event V2 Gzip batch，只有三项精确 ACK 匹配时才报告成功；SQLite 最终保持 2 个唯一 eventId，并核对 12 种标量、`NaN/Infinity` 的 JSON-safe typed text、固定 resource 和协议元数据。服务端自身为 57 tests / 0 failures；Docker 不可用，所以 PostgreSQL/Compose/SigNoz 仍是外部待验收项。
 

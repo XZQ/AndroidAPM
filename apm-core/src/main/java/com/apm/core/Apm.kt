@@ -291,7 +291,14 @@ object Apm {
                 maxDirectoryBytes = config.maxIpcDirectoryBytes
             )
             stagedCoordinator = coordinator
-            coordinator.onRemoteEvent = dispatcher::dispatch
+            coordinator.onRemoteEventResult = { event ->
+                if (event.priority == ApmPriority.CRITICAL) {
+                    dispatcher.dispatchCriticalSync(event)
+                } else {
+                    dispatcher.dispatch(event)
+                    true
+                }
+            }
             coordinator.onDrop = { priority, reason -> selfMonitor?.recordDrop(priority, reason) }
             coordinator.start()
             coordinator

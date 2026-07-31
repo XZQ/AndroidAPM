@@ -65,7 +65,7 @@ class ProcessEventCoordinator internal constructor(
     private val scanIntervalMs: Long = DEFAULT_SCAN_INTERVAL_MS,
     /** 单个 IPC 文件最大行数：缓冲达到该行数立即合批发布。 */
     private val maxLinesPerFile: Int = DEFAULT_MAX_LINES_PER_FILE,
-    /** IPC 文件最大保留时间（毫秒），过期清理。 */
+    /** Incomplete `.tmp` artifact retention before cleanup; published `.ipc` awaits consumption. */
     private val maxFileAgeMs: Long = DEFAULT_MAX_FILE_AGE_MS,
     /** Maximum retained bytes waiting for the single IPC writer. */
     maxPendingBytes: Long = DEFAULT_MAX_PENDING_BYTES,
@@ -83,7 +83,7 @@ class ProcessEventCoordinator internal constructor(
      * @param isUploaderProcess 当前进程是否为上传进程
      * @param scanIntervalMs IPC 文件扫描间隔（毫秒）
      * @param maxLinesPerFile 单个 IPC 文件最大行数（合批阈值）
-     * @param maxFileAgeMs IPC 文件最大保留时间（毫秒）
+     * @param maxFileAgeMs incomplete `.tmp` artifact retention before cleanup
      * @param maxPendingBytes pending-event retained-byte budget
      * @param maxEventPayloadBytes exact durable-codec limit for one event
      * @param maxFileBytes atomic ready-file byte limit
@@ -135,6 +135,14 @@ class ProcessEventCoordinator internal constructor(
 
     /** 上传进程消费事件时的回调。 */
     var onRemoteEvent: ((ApmEvent) -> Unit)? = null
+
+    /**
+     * Core-owned acknowledged consumer.
+     *
+     * Returning false retains the complete ready file for at-least-once retry. The public
+     * [onRemoteEvent] callback remains unchanged for source and binary compatibility.
+     */
+    internal var onRemoteEventResult: ((ApmEvent) -> Boolean)? = null
 
     /** Records one asynchronously rejected event with its exact priority and budget boundary. */
     internal var onDrop: ((ApmPriority, SdkDropReason) -> Unit)? = null
@@ -561,16 +569,9 @@ class ProcessEventCoordinator internal constructor(
                 file.name.endsWith(IPC_FILE_EXTENSION)
             } ?: return
 
-            val now = ApmClock.wallTimeMillis()
-            cleanupExpiredTempFiles(now)
+            cleanupExpiredTempFiles(ApmClock.wallTimeMillis())
             for (file in files) {
                 try {
-                    val fileAgeMs = now - file.lastModified()
-                    // 清理过期文件
-                    if (fileAgeMs > maxFileAgeMs) {
-                        file.delete()
-                        continue
-                    }
                     if (file.length() > effectiveMaxFileBytes) {
                         // Never allocate an unbounded read buffer for a corrupt or foreign file.
                         Apm.recordInternalError(
@@ -580,10 +581,12 @@ class ProcessEventCoordinator internal constructor(
                         file.delete()
                         continue
                     }
-                    // 读取并消费每行事件
-                    consumeFile(file)
-                    // 消费完成后删除文件
-                    file.delete()
+                    // Delete only after every decodable event reached the downstream hand-off.
+                    // A retry may redeliver earlier lines from the same file; stable eventId makes
+                    // that deliberate at-least-once behavior safe for the durable store.
+                    if (consumeFile(file)) {
+                        file.delete()
+                    }
                 } catch (e: Exception) {
                     // 单文件消费失败不影响后续文件，但记入自监控
                     Apm.recordInternalError(ERROR_TAG_IPC_CONSUME_FILE, e)
@@ -627,8 +630,9 @@ class ProcessEventCoordinator internal constructor(
      *
      * @param file IPC 文件
      */
-    private fun consumeFile(file: File) {
+    private fun consumeFile(file: File): Boolean {
         var observedLines = 0
+        var downstreamAccepted = true
         file.bufferedReader(Charsets.UTF_8).useLines { lines ->
             for (line in lines) {
                 if (line.isBlank()) {
@@ -642,16 +646,39 @@ class ProcessEventCoordinator internal constructor(
                     )
                     break
                 }
-                try {
+                val event = try {
                     // Decode the complete event so no fields are lost across processes.
-                    val event = parseLineProtocol(line)
-                    event?.let { onRemoteEvent?.invoke(it) }
+                    parseLineProtocol(line)
                 } catch (e: Exception) {
                     // 单行解析失败跳过该行，但记入自监控（可能是编码不兼容）
                     Apm.recordInternalError(ERROR_TAG_IPC_PARSE_LINE, e)
+                    null
+                }
+                if (event == null) {
+                    continue
+                }
+                try {
+                    val accepted = onRemoteEventResult?.invoke(event) ?: run {
+                        val legacyCallback = onRemoteEvent
+                        if (legacyCallback == null) {
+                            false
+                        } else {
+                            legacyCallback(event)
+                            true
+                        }
+                    }
+                    if (!accepted) {
+                        downstreamAccepted = false
+                        break
+                    }
+                } catch (e: Exception) {
+                    downstreamAccepted = false
+                    Apm.recordInternalError(ERROR_TAG_IPC_HANDOFF, e)
+                    break
                 }
             }
         }
+        return downstreamAccepted
     }
 
     /**
@@ -840,6 +867,9 @@ class ProcessEventCoordinator internal constructor(
         /** 自监控 tag：IPC 行解析失败。 */
         private const val ERROR_TAG_IPC_PARSE_LINE = "ipc_parse_line"
 
+        /** Stable tag for a recoverable downstream hand-off failure. */
+        private const val ERROR_TAG_IPC_HANDOFF = "ipc_handoff"
+
         /** IPC 目录名。 */
         private const val IPC_DIR_NAME = "apm-ipc"
         /** IPC 文件前缀。 */
@@ -860,7 +890,7 @@ class ProcessEventCoordinator internal constructor(
         private const val WRITE_FLUSH_DELAY_MS = 500L
         /** 单文件最大行数：100 条。 */
         private const val DEFAULT_MAX_LINES_PER_FILE = 100
-        /** 文件最大保留时间：5 分钟。 */
+        /** Incomplete `.tmp` artifact retention: 5 minutes. */
         private const val DEFAULT_MAX_FILE_AGE_MS = 300_000L
         /** Default pending-event retained-byte budget: 4 MiB. */
         private const val DEFAULT_MAX_PENDING_BYTES = 4L * 1024L * 1024L

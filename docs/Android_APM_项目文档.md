@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜103 个测试/benchmark 文件
+> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜104 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -20,7 +20,7 @@ monitor module
   -> integrator-owned collector
 ```
 
-Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定时服务端仍须按 `eventId` 去重。
+Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
 ## 二、事实源与接手顺序
 
@@ -54,7 +54,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 103 |
+| 测试/benchmark 文件 | 104 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -201,7 +201,8 @@ PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证
 - 先写 `.tmp`，在跨进程文件锁内检查 16 MiB ready-directory 预算后发布为 `.ipc`
 - critical 事件同步单文件发布，并把具体 file/directory budget reason 返回调用方
 - 主进程每 5 秒扫描 ready 文件
-- 文件 5 分钟过期
+- ready `.ipc` 仅在下游接受后删除，不按年龄先行删除；16 MiB directory budget 限制空间
+- 未完成 `.tmp` 5 分钟后清理
 
 主进程先按文件大小拒绝超预算 ready 文件，再用流式逐行读取代替无界 `readLines()`；行数、Base64 行长度和解码后 payload 都有独立边界。该通道是本机文件 hand-off，不是跨设备传输；rename 失败时存在 copy fallback，仍应将其视为尽力保持完整性的本地协调机制。
 
@@ -352,7 +353,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是 microbenchmark 与原预算 smoke 通过，长稳尚未验收。
 
-2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 97 suites / 647 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 102 suites / 693 tests，plugin 18 tests 独立报告；该结果取代同日较早的 642-test Android 刷新及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
+2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 654 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 103 suites / 700 tests，plugin 18 tests 独立报告；该结果取代同日较早的 647-test Android 刷新及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
+
+同一源码的 critical-handoff 故障注入定向验证在 JDK 17.0.14 下覆盖 core/crash/ANR/storage：`43` suites / `284` tests 全部通过且为 0 failures/errors/skips，对应 lint 与根 `apiCheck` 通过。Crash helper 覆盖成功、false、recoverable exception、fatal VM error，并断言原 uncaught handler 恰好委托一次；critical IPC E2E 覆盖 codec、原子文件发布、scanner、同步 dispatcher store，首次注入磁盘异常时保留 `.ipc`，第二次接受后才删除，且 `eventId`、CRITICAL priority、fields 不变。SQLite 真实测试还关闭并重开 store，验证 CRITICAL durable row 恢复。
 
 同一源码的宿主接入诊断定向验证在 JDK 17.0.14 下覆盖 core 与 Network/SQLite/IPC/WebView/ThreadPool/Battery/IO：`49` suites / `359` tests 全部通过，0 failures/errors/skips；对应 lint 与 `apm-core:apiCheck` 通过。新增确定性测试覆盖固定顺序空快照、模块/registration/observation 五态、stop 清零活跃 registration、re-init 清除旧证据、late callback 拒绝和并发精确计数。`python tools/verify_ci.py` 随后以同一源码通过 24 份 ABI、完整测试和 44 Markdown / 55 links 文档门禁。
 
@@ -362,7 +365,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-103 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak host gate 的通过、解析、聚合、时长、重启、功耗、超限和 emulator 完整性分支。
+104 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak host gate 的通过、解析、聚合、时长、重启、功耗、超限和 emulator 完整性分支。
 
 测试通过不能代替以下验证：
 

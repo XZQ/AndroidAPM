@@ -3,7 +3,7 @@
 > 原始评审材料：2026-07-21，由其他 AI 梳理｜源码闭环复核：2026-07-31
 > 评审性质：**代码与架构质量评审 + 客户端改进闭环复核**（不是生产验收证书，也不是业务 App 的运行时问题诊断）
 > 验证方式：交叉阅读架构文档与当前源码，并执行 root/model/storage/plugin/benchmark 定向验证；源码与文档冲突时以源码和可执行结果为准。
-> 当前基线：`develop` 分支，27 个构建单元，164 个主源码文件，102 个测试/benchmark 文件。2026-07-31 当前 tip 强制刷新通过根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 101 suites / 688 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过。最初两轮 smoke 的 CPU `28.425%`、`32.046%` 超过 `20%`；定位并修复 FPS 静态页面 VSync observer 后，在未修改预算的前提下连续两轮以 `12.928%`、`12.362%` 全项通过，24h/72h 仍未执行。
+> 当前基线：`develop` 分支，27 个构建单元，165 个主源码文件，104 个测试/benchmark 文件。2026-07-31 当前 tip 强制刷新通过根 Android 98 suites / 654 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，均为 0 failures/errors/skips；根 Android + model 为 103 suites / 700 tests，plugin 独立报告。2026-07-23 的物理 Redmi/Xiaomi `22041216UC` 上，AndroidX 三项 microbenchmark 预算通过。最初两轮 smoke 的 CPU `28.425%`、`32.046%` 超过 `20%`；定位并修复 FPS 静态页面 VSync observer 后，在未修改预算的前提下连续两轮以 `12.928%`、`12.362%` 全项通过，24h/72h 仍未执行。
 
 ## 0. 评审方法：拿什么尺子量
 
@@ -99,7 +99,7 @@ core 和监控模块通过 `ApmExecutors` 统一 daemon、`apm-` 前缀及后台
 legacy Line/standalone Protobuf 保持原字符串语义；独立 `PROTOBUF_ENVELOPE_V2` 用 field 15 显式区分 12 类标量，batch 携带 schema/SDK/fixed resource/retry-stable batchId，按实际编码字节拆批。2xx 只有 response schema、batchId、event count 精确匹配才允许 ACK/delete，partial ACK 明确不支持。
 
 **J. 关键事件与真实损失都进入可证明边界（`emitCriticalSync` / `SdkDropReason`）**
-Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off；较低调用 priority 自动提升为 CRITICAL，现场不做网络 IO。每次 drop 同时记录稳定 reason 和 priority；SQLite capacity eviction、retry/age prune 返回精确 priority，兼容 aggregate-only 结果进入 `UNATTRIBUTED`，不以 NORMAL 冒充未知。
+Crash/ANR 绕过 shared queue、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off；较低调用 priority 自动提升为 CRITICAL，现场不做网络 IO。上传进程对 CRITICAL IPC 继续同步落 store，只有下游接受后删除 ready 文件，false/recoverable failure/no consumer 会保留整文件按 at-least-once 重试；Crash 原 handler 在 `finally` 中恰好委托一次，fatal VM error 委托后仍传播。每次 drop 同时记录稳定 reason 和 priority；SQLite capacity eviction、retry/age prune 返回精确 priority，兼容 aggregate-only 结果进入 `UNATTRIBUTED`，不以 NORMAL 冒充未知。
 
 ---
 
@@ -212,8 +212,8 @@ codec 2 MiB 继续作为格式硬限；SQLite 默认单事件软限为 256 KiB�
 
 ## 6. 闭环验证与局限
 
-- **组合测试**：2026-07-31 在 JDK 17.0.14 下，根 `testDebugUnitTest :apm-model:test --rerun-tasks` 通过 Android 96 suites / 642 tests 与 model 5 suites / 46 tests；included `apm-plugin:test --rerun-tasks` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
-- **定向测试/构建**：device-soak CPU 归因、OEM reset 回退、profile-aware ADB transport 有界重试和 UID power checkin/严格增长更新后 30 个 host tests 通过；smoke/long 默认重连窗口分别为 30/300 秒，绝对上限 600 秒。JDK 17 benchmark Release/AndroidTest Kotlin 构建通过，历史 schema-v1 物理 smoke 工件继续保留原绝对 CPU 门禁。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。dispatcher 阶段证据更新后，core 27 suites / 197 tests 通过且 lint 为 `No issues found`，但尚未产生真机/24h 阶段分布。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network、wire V2 与 critical hand-off 证据仍分别保留在项目/交接文档。
+- **组合测试**：2026-07-31 在 JDK 17.0.14 下，根 `testDebugUnitTest :apm-model:test --rerun-tasks` 通过 Android 98 suites / 654 tests 与 model 5 suites / 46 tests；included `apm-plugin:test --rerun-tasks` 通过 1 suite / 18 tests，全部 0 failures/errors/skips。
+- **定向测试/构建**：critical-handoff 故障注入在 core/crash/ANR/storage 通过 43 suites / 284 tests、对应 lint 与根 API gate，覆盖 Crash true/false/recoverable/fatal 委托、critical IPC 存储失败保留/重试及真实 SQLite 重开恢复。device-soak CPU 归因、OEM reset 回退、profile-aware ADB transport 有界重试和 UID power checkin/严格增长更新后 30 个 host tests 通过；smoke/long 默认重连窗口分别为 30/300 秒，绝对上限 600 秒。JDK 17 benchmark Release/AndroidTest Kotlin 构建通过，历史 schema-v1 物理 smoke 工件继续保留原绝对 CPU 门禁。uploader 线程治理更新后，JDK 17 下 4 suites / 25 tests 通过且 lint 为 `No issues found`。dispatcher 阶段证据更新后，core 27 suites / 197 tests 通过且 lint 为 `No issues found`，但尚未产生真机/24h 阶段分布。此前 sample debug APK/Debug lint 与 benchmark Release/AndroidTest Kotlin 构建通过，sample lint 为 0 errors / 25 warnings；cross-layer byte-budget、time-semantics、R5、R11 publication/consumer、R12 network 与 wire V2 证据仍分别保留在项目/交接文档。
 - **物理设备**：Redmi/Xiaomi `22041216UC` 上 AndroidX 3/3 microbenchmark 与 JSON 预算通过；FPS observer 修复后两轮 smoke 以 CPU `12.928%`、`12.362%` 通过原 `20%` 上限。OnePlus `PLK110`（Android 16）历史 smoke 以 enabled CPU `6.161%` / `5.134%` 和 UID 功耗 `29.062` / `29.423 mAh/hour` 通过，但设备已不可用。当前 Redmi 的新电脑 smoke 以 CPU `12.201%` 通过；五分钟 10 events/second 诊断后 exact checkin UID `10217` computed power 仍为 `0`，因此不构成功耗接受。2026-07-25 的 Redmi 24h 重试被用户主动取消，runner/sample 已停止且无 JSON，所以既不是通过也不是门禁失败。长 profile 保留到预生产受控设备实验室执行；MIUI session install 与历史 OnePlus `pm clear` 权限问题均和 SDK 预算结果分开记录。
 - **文档验证**：`python docs/verify_docs.py` 通过 43 个 Markdown 文件与 49 个本地链接。
 - **仍需真机/外部系统**：预生产阶段在受控设备实验室执行 24h/72h、功耗/热/长稳、弱网/断电、Native/IPC/OEM 矩阵，以及生产 Collector/幂等/查询告警、外部 Maven 与云端 runner。它们不阻塞当前客户端迭代；host tests、模拟器、microbenchmark 或短 smoke 也不能替代正式长稳验收。

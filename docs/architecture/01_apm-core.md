@@ -90,7 +90,7 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 `ASYNC_CACHED` 用 `BizContextSnapshotSource` 在 `apm-biz-context` 单线程 executor 立即异步首刷并按配置周期刷新。provider 返回值复制后通过 `AtomicReference` 发布；失败只记录 `biz_context_provider` internal error，保留 last-known-good，不用空值覆盖。emit 只读取原子快照，不执行宿主代码；代价是首次成功前为空、正常最多滞后一个刷新周期。`bizContextRefreshIntervalMs` 运行时约束到 100 ms–24 h；`Apm.refreshBizContext()` 可在登录/退出/租户切换后请求即时后台刷新，`AtomicBoolean` 最多允许一个显式 pending 任务，避免请求风暴形成无界队列。stop 和 init rollback 都会关闭该 executor。
 
-`emitCriticalSync` 不走 lazy queue：调用方较低 priority 自动提升为 CRITICAL，立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。Crash/ANR 均使用该入口；它绕过 sampling/aggregation/rate limit 且不执行网络请求。非 uploader 进程同步 IPC 失败会把 `IPC_FILE_BYTE_BUDGET` / `IPC_DIRECTORY_BYTE_BUDGET` 等准确 reason 与 CRITICAL priority 计数一次；无法细分的发布失败才使用 `IPC_HANDOFF_FAILURE`。
+`emitCriticalSync` 不走 lazy queue：调用方较低 priority 自动提升为 CRITICAL，立即构建、脱敏、同步 append 或同步 IPC publish，返回是否到达本地 hand-off point。Crash/ANR 均使用该入口；它绕过 sampling/aggregation/rate limit 且不执行网络请求。非 uploader 进程同步 IPC 失败会把 `IPC_FILE_BYTE_BUDGET` / `IPC_DIRECTORY_BYTE_BUDGET` 等准确 reason 与 CRITICAL priority 计数一次；无法细分的发布失败才使用 `IPC_HANDOFF_FAILURE`。上传进程扫描 CRITICAL `.ipc` 后调用 `dispatchCriticalSync`，不重新进入普通队列；只有同步存储接受后才删除文件。false、recoverable 存储异常或回调未就绪会保留整文件，下次扫描按 at-least-once 重试；fatal VM error 不被吞掉。
 
 ## 5. Dispatcher
 
@@ -182,9 +182,10 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 - raw event：默认最大 256 KiB
 - publish：单 ready 文件默认最大 1 MiB；unique `.tmp` -> 在跨进程锁内检查 16 MiB ready-directory 预算 -> `.ipc`
 - scan：5 秒
-- age limit：5 分钟
+- published ready `.ipc`：下游接受后删除，不按年龄先行删除
+- incomplete `.tmp` age limit：5 分钟
 
-主进程先按 ready 文件实际大小拒绝超限文件，再流式逐行检查行数/行长/解码 payload，避免 `readLines()` 构造无界 List；decode 后添加 `extras["ipc_source"]="remote_process"` 再进入 dispatcher。容量拒绝分别记录 `IPC_PENDING_BYTE_BUDGET`、`IPC_FILE_BYTE_BUDGET` 或 `IPC_DIRECTORY_BYTE_BUDGET`。
+主进程先按 ready 文件实际大小拒绝超限文件，再流式逐行检查行数/行长/解码 payload，避免 `readLines()` 构造无界 List；decode 后添加 `extras["ipc_source"]="remote_process"`。CRITICAL 直接同步到 store，普通事件保持异步 dispatcher 兼容路径。完整文件只有在所有可解码事件都被下游接受后才删除；某一行失败会保留整文件，因此重试可能重复前序事件，SQLite 的唯一 `eventId` 和 Collector 幂等共同承担去重。容量拒绝分别记录 `IPC_PENDING_BYTE_BUDGET`、`IPC_FILE_BYTE_BUDGET` 或 `IPC_DIRECTORY_BYTE_BUDGET`。
 
 ## 9. 限流、灰度与动态配置
 

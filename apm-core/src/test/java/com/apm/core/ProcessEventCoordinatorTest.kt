@@ -2,7 +2,10 @@ package com.apm.core
 
 import com.apm.model.ApmEvent
 import com.apm.core.selfmonitor.SdkDropReason
+import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.model.ApmPriority
+import com.apm.storage.EventStore
+import com.apm.uploader.ApmUploader
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
@@ -199,6 +202,97 @@ class ProcessEventCoordinatorTest {
         }
     }
 
+    /** A ready file remains durable until a downstream consumer is actually available. */
+    @Test
+    fun `scanner retains old ipc file until downstream accepts it`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-retain-test").toFile()
+        try {
+            val writer = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            writer.start()
+            assertTrue(writer.writeEventSync(ApmEvent(module = "ipc", name = "retained")))
+            writer.stop()
+            val readyFile = dir.listFilesByExtension(READY_EXTENSION).single()
+            assertTrue(readyFile.setLastModified(1L))
+
+            val scanner = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = true,
+                scanIntervalMs = LONG_SCAN_INTERVAL_MS,
+                maxFileAgeMs = 1L
+            )
+            scanner.start()
+            scanner.scanAndConsumeNow()
+            assertEquals(1, dir.listFilesByExtension(READY_EXTENSION).size)
+
+            val received = mutableListOf<ApmEvent>()
+            scanner.onRemoteEvent = received::add
+            scanner.scanAndConsumeNow()
+
+            assertEquals(listOf("retained"), received.map(ApmEvent::name))
+            assertEquals(0, dir.listFilesByExtension(READY_EXTENSION).size)
+            scanner.stop()
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
+
+    /**
+     * Exercises the complete critical path across codec, atomic IPC publication, scan, and the
+     * synchronous dispatcher store boundary with one injected recoverable disk failure.
+     */
+    @Test
+    fun `critical ipc handoff retries until synchronous persistence succeeds`() {
+        val dir = createTempDirectory(prefix = "apm-ipc-critical-e2e").toFile()
+        val store = FailOnceStore()
+        val selfMonitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = AcceptingUploader,
+            logger = NoOpLogger
+        )
+        dispatcher.selfMonitor = selfMonitor
+        val event = ApmEvent(
+            module = "crash",
+            name = "java_crash",
+            priority = ApmPriority.CRITICAL,
+            fields = mapOf("exception" to "InjectedFailure")
+        )
+        try {
+            val writer = ProcessEventCoordinator(dir, isUploaderProcess = false)
+            writer.start()
+            assertTrue(writer.writeEventSync(event))
+            writer.stop()
+
+            val scanner = ProcessEventCoordinator(
+                ipcDir = dir,
+                isUploaderProcess = true,
+                scanIntervalMs = LONG_SCAN_INTERVAL_MS
+            )
+            scanner.onRemoteEventResult = dispatcher::dispatchCriticalSync
+            scanner.start()
+
+            scanner.scanAndConsumeNow()
+
+            assertTrue(store.events.isEmpty())
+            assertEquals(1, dir.listFilesByExtension(READY_EXTENSION).size)
+            assertEquals(1L, selfMonitor.getDropCount(SdkDropReason.STORAGE_FAILURE))
+            assertEquals(1L, selfMonitor.getDropCount(ApmPriority.CRITICAL))
+
+            scanner.scanAndConsumeNow()
+
+            val stored = store.events.single()
+            assertEquals(event.eventId, stored.eventId)
+            assertEquals(event.priority, stored.priority)
+            assertEquals(event.fields, stored.fields)
+            assertEquals("remote_process", stored.extras["ipc_source"])
+            assertEquals(0, dir.listFilesByExtension(READY_EXTENSION).size)
+            scanner.stop()
+        } finally {
+            dispatcher.shutdown()
+            dir.deleteRecursively()
+        }
+    }
+
     /** 异步写入应按 maxLinesPerFile 合批：10 条事件产生不超过 ceil(10/4)=3 个文件。 */
     @Test
     fun `async writes are batched into few ipc files`() {
@@ -267,6 +361,38 @@ class ProcessEventCoordinatorTest {
      */
     private fun File.listFilesByExtension(extension: String): Array<File> {
         return listFiles { file -> file.name.endsWith(extension) } ?: emptyArray()
+    }
+
+    /** Deterministic store that fails the first append, then records subsequent attempts. */
+    private class FailOnceStore : EventStore {
+        private var shouldFail = true
+        val events = mutableListOf<ApmEvent>()
+
+        override fun append(event: ApmEvent) {
+            if (shouldFail) {
+                shouldFail = false
+                throw IllegalStateException("disk unavailable")
+            }
+            events += event
+        }
+
+        override fun readRecent(limit: Int): List<String> = emptyList()
+
+        override fun clear() {
+            events.clear()
+        }
+    }
+
+    /** Accepts uploads if a future store implementation enables the persistent worker. */
+    private object AcceptingUploader : ApmUploader {
+        override fun upload(event: ApmEvent): Boolean = true
+    }
+
+    /** Silent logger for deterministic fault-injection tests. */
+    private object NoOpLogger : ApmLogger {
+        override fun d(message: String) = Unit
+        override fun w(message: String) = Unit
+        override fun e(message: String, throwable: Throwable?) = Unit
     }
 
     companion object {

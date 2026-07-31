@@ -80,8 +80,8 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "102", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
-        ("当前完整测试", "102 suites / 693 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("测试文件", "104", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
+        ("当前完整测试", "103 suites / 700 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -110,7 +110,7 @@ def add_capability_table(document: Document) -> None:
     rows = [
         ("生产安全入口", "Strict profile、显式 consent、撤回清理", "初始化前 fail closed；停止 delivery 后清理 queue/outbox/IPC"),
         ("Collector Wire V2", "Typed fields、standard resource、batch ID、size、exact ACK", "Legacy wire 不变；V2 独立 schema 与 endpoint"),
-        ("关键事件与损失证据", "Crash/ANR sync hand-off、drop reason/priority", "绕过共享队列且不做网络；未知 priority 显式 unattributed"),
+        ("关键事件与损失证据", "Crash/ANR sync hand-off、drop reason/priority", "CRITICAL IPC 仅在同步存储接受后删除；失败保留重试且宿主 crash handler 始终委托"),
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),

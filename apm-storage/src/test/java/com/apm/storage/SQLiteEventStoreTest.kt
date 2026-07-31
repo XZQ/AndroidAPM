@@ -304,6 +304,35 @@ class SQLiteEventStoreTest {
         assertEquals("event-db", claimed.event.eventId)
     }
 
+    /** A critical durable row survives closing and reopening the process-local database. */
+    @Test
+    fun `critical event survives store restart`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "critical-restart-${System.nanoTime()}.db"
+        val original = event("crash", priority = ApmPriority.CRITICAL)
+            .copy(eventId = "critical-restart", fields = mapOf("exception" to "InjectedFailure"))
+        val firstStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = TEST_MAX_EVENTS
+        )
+
+        firstStore.append(original)
+        firstStore.close()
+
+        val reopenedStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = TEST_MAX_EVENTS
+        )
+        try {
+            val restored = reopenedStore.readPending(1).single().event
+            assertEquals(original.eventId, restored.eventId)
+            assertEquals(original.priority, restored.priority)
+            assertEquals(original.fields, restored.fields)
+        } finally {
+            reopenedStore.close()
+        }
+    }
+
     /** Two store instances cannot claim the same durable row concurrently. */
     @Test
     fun `concurrent store instances receive disjoint claims`() {
