@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.IOException
 import java.math.BigDecimal
 import java.math.BigInteger
 
@@ -24,7 +25,7 @@ object ApmEventCodec {
      * @return versioned binary payload
      */
     fun encode(event: ApmEvent): ByteArray {
-        val buffer = ByteArrayOutputStream()
+        val buffer = BoundedByteArrayOutputStream()
         DataOutputStream(buffer).use { output ->
             output.writeInt(FORMAT_VERSION)
             output.writeLong(event.timestamp)
@@ -43,11 +44,7 @@ object ApmEventCodec {
             // Version 2+ appends identity so every version-1 field keeps its original order.
             output.writeString(event.eventId)
         }
-        return buffer.toByteArray().also { payload ->
-            require(payload.size <= MAX_PAYLOAD_BYTES) {
-                "APM event payload exceeds $MAX_PAYLOAD_BYTES bytes"
-            }
-        }
+        return buffer.toByteArray()
     }
 
     /**
@@ -61,33 +58,39 @@ object ApmEventCodec {
         require(payload.size <= MAX_PAYLOAD_BYTES) {
             "APM event payload exceeds $MAX_PAYLOAD_BYTES bytes"
         }
-        return DataInputStream(ByteArrayInputStream(payload)).use { input ->
-            val version = input.readInt()
-            require(version in LEGACY_FORMAT_VERSION..FORMAT_VERSION) {
-                "Unsupported APM event format version: $version"
+        try {
+            return DataInputStream(ByteArrayInputStream(payload)).use { input ->
+                val version = input.readInt()
+                require(version in LEGACY_FORMAT_VERSION..FORMAT_VERSION) {
+                    "Unsupported APM event format version: $version"
+                }
+                val event = ApmEvent(
+                    timestamp = input.readLong(),
+                    module = input.readString(),
+                    name = input.readString(),
+                    kind = enumValueOrDefault(input.readString(), ApmEventKind.METRIC),
+                    severity = enumValueOrDefault(input.readString(), ApmSeverity.INFO),
+                    priority = enumValueOrDefault(input.readString(), ApmPriority.NORMAL),
+                    processName = input.readString(),
+                    threadName = input.readString(),
+                    scene = input.readNullableString(),
+                    foreground = input.readNullableBoolean(),
+                    fields = if (version >= FORMAT_VERSION_WITH_TYPED_FIELDS) {
+                        input.readTypedMap()
+                    } else {
+                        // Version 1/2 stored every field value as a string.
+                        input.readStringMap()
+                    },
+                    globalContext = input.readStringMap(),
+                    extras = input.readStringMap(),
+                    // Legacy rows receive a deterministic ID from their SQLite row during schema migration.
+                    eventId = if (version >= FORMAT_VERSION_WITH_EVENT_ID) input.readString() else ""
+                )
+                require(input.available() == 0) { "Trailing bytes in APM event payload" }
+                event
             }
-            ApmEvent(
-                timestamp = input.readLong(),
-                module = input.readString(),
-                name = input.readString(),
-                kind = enumValueOrDefault(input.readString(), ApmEventKind.METRIC),
-                severity = enumValueOrDefault(input.readString(), ApmSeverity.INFO),
-                priority = enumValueOrDefault(input.readString(), ApmPriority.NORMAL),
-                processName = input.readString(),
-                threadName = input.readString(),
-                scene = input.readNullableString(),
-                foreground = input.readNullableBoolean(),
-                fields = if (version >= FORMAT_VERSION_WITH_TYPED_FIELDS) {
-                    input.readTypedMap()
-                } else {
-                    // Version 1/2 stored every field value as a string.
-                    input.readStringMap()
-                },
-                globalContext = input.readStringMap(),
-                extras = input.readStringMap(),
-                // Legacy rows receive a deterministic ID from their SQLite row during schema migration.
-                eventId = if (version >= FORMAT_VERSION_WITH_EVENT_ID) input.readString() else ""
-            )
+        } catch (error: IOException) {
+            throw IllegalArgumentException("Malformed APM event payload", error)
         }
     }
 
@@ -108,6 +111,9 @@ object ApmEventCodec {
      * @param value string to write
      */
     private fun DataOutputStream.writeString(value: String) {
+        require(value.length <= MAX_STRING_BYTES) {
+            "APM event string exceeds $MAX_STRING_BYTES characters"
+        }
         val bytes = value.toByteArray(Charsets.UTF_8)
         require(bytes.size <= MAX_STRING_BYTES) {
             "APM event string exceeds $MAX_STRING_BYTES bytes"
@@ -124,8 +130,10 @@ object ApmEventCodec {
     private fun DataInputStream.readString(): String {
         val size = readInt()
         require(size in 0..MAX_STRING_BYTES) { "Invalid APM event string length: $size" }
+        require(size <= available()) { "Truncated APM event string" }
         val bytes = ByteArray(size)
         readFully(bytes)
+        require(bytes.isValidUtf8()) { "Invalid UTF-8 in APM event string" }
         return bytes.toString(Charsets.UTF_8)
     }
 
@@ -203,6 +211,9 @@ object ApmEventCodec {
     private fun DataInputStream.readStringMap(): Map<String, String> {
         val size = readInt()
         require(size in 0..MAX_MAP_ENTRIES) { "Invalid APM event map size: $size" }
+        require(size <= available() / MIN_STRING_MAP_ENTRY_BYTES) {
+            "Truncated APM event string map"
+        }
         return buildMap(size) {
             repeat(size) {
                 put(readString(), readString())
@@ -235,6 +246,9 @@ object ApmEventCodec {
     private fun DataInputStream.readTypedMap(): Map<String, Any?> {
         val size = readInt()
         require(size in 0..MAX_MAP_ENTRIES) { "Invalid APM event map size: $size" }
+        require(size <= available() / MIN_TYPED_MAP_ENTRY_BYTES) {
+            "Truncated APM event typed map"
+        }
         return buildMap(size) {
             repeat(size) {
                 // Unknown tags fail the one corrupt event instead of shifting the remaining payload.
@@ -365,6 +379,101 @@ object ApmEventCodec {
         }
     }
 
+    /** Returns true only for shortest-form Unicode scalar UTF-8 without surrogate code points. */
+    private fun ByteArray.isValidUtf8(): Boolean {
+        var index = 0
+        while (index < size) {
+            val first = this[index].toInt() and BYTE_MASK
+            when {
+                first <= ASCII_MAX -> index += 1
+                first in UTF8_TWO_BYTE_MIN..UTF8_TWO_BYTE_MAX -> {
+                    if (!hasContinuation(index + 1)) return false
+                    index += 2
+                }
+                first == UTF8_THREE_BYTE_LOW_PREFIX -> {
+                    if (!hasByteIn(index + 1, UTF8_THREE_BYTE_LOW_SECOND_MIN, CONTINUATION_MAX) ||
+                        !hasContinuation(index + 2)
+                    ) {
+                        return false
+                    }
+                    index += 3
+                }
+                first in UTF8_THREE_BYTE_GENERAL_MIN..UTF8_THREE_BYTE_GENERAL_MAX ||
+                    first in UTF8_THREE_BYTE_GENERAL_HIGH_MIN..UTF8_THREE_BYTE_GENERAL_HIGH_MAX -> {
+                    if (!hasContinuation(index + 1) || !hasContinuation(index + 2)) return false
+                    index += 3
+                }
+                first == UTF8_THREE_BYTE_SURROGATE_PREFIX -> {
+                    if (!hasByteIn(index + 1, CONTINUATION_MIN, UTF8_SURROGATE_SECOND_MAX) ||
+                        !hasContinuation(index + 2)
+                    ) {
+                        return false
+                    }
+                    index += 3
+                }
+                first == UTF8_FOUR_BYTE_LOW_PREFIX -> {
+                    if (!hasByteIn(index + 1, UTF8_FOUR_BYTE_LOW_SECOND_MIN, CONTINUATION_MAX) ||
+                        !hasContinuation(index + 2) ||
+                        !hasContinuation(index + 3)
+                    ) {
+                        return false
+                    }
+                    index += 4
+                }
+                first in UTF8_FOUR_BYTE_GENERAL_MIN..UTF8_FOUR_BYTE_GENERAL_MAX -> {
+                    if (!hasContinuation(index + 1) ||
+                        !hasContinuation(index + 2) ||
+                        !hasContinuation(index + 3)
+                    ) {
+                        return false
+                    }
+                    index += 4
+                }
+                first == UTF8_FOUR_BYTE_HIGH_PREFIX -> {
+                    if (!hasByteIn(index + 1, CONTINUATION_MIN, UTF8_FOUR_BYTE_HIGH_SECOND_MAX) ||
+                        !hasContinuation(index + 2) ||
+                        !hasContinuation(index + 3)
+                    ) {
+                        return false
+                    }
+                    index += 4
+                }
+                else -> return false
+            }
+        }
+        return true
+    }
+
+    /** Returns whether [index] contains one UTF-8 continuation byte. */
+    private fun ByteArray.hasContinuation(index: Int): Boolean {
+        return hasByteIn(index, CONTINUATION_MIN, CONTINUATION_MAX)
+    }
+
+    /** Returns whether [index] exists and its unsigned byte is inside the requested range. */
+    private fun ByteArray.hasByteIn(index: Int, minimum: Int, maximum: Int): Boolean {
+        if (index >= size) return false
+        return (this[index].toInt() and BYTE_MASK) in minimum..maximum
+    }
+
+    /** Byte-array output that rejects oversized payloads before expanding its backing buffer. */
+    private class BoundedByteArrayOutputStream : ByteArrayOutputStream() {
+        /** Writes one byte only while the durable payload budget has capacity. */
+        override fun write(value: Int) {
+            require(count < MAX_PAYLOAD_BYTES) {
+                "APM event payload exceeds $MAX_PAYLOAD_BYTES bytes"
+            }
+            super.write(value)
+        }
+
+        /** Writes one range only when it fits completely inside the durable payload budget. */
+        override fun write(bytes: ByteArray, offset: Int, length: Int) {
+            require(length <= MAX_PAYLOAD_BYTES - count) {
+                "APM event payload exceeds $MAX_PAYLOAD_BYTES bytes"
+            }
+            super.write(bytes, offset, length)
+        }
+    }
+
     /** Current durable payload format version. */
     private const val FORMAT_VERSION = 3
 
@@ -388,6 +497,34 @@ object ApmEventCodec {
 
     /** Maximum entries accepted in each event map. */
     private const val MAX_MAP_ENTRIES = 4096
+
+    /** Minimum encoded bytes for one string-map key/value pair: two empty length prefixes. */
+    private const val MIN_STRING_MAP_ENTRY_BYTES = 8
+
+    /** Minimum encoded bytes for one typed-map entry: empty key prefix plus null tag. */
+    private const val MIN_TYPED_MAP_ENTRY_BYTES = 5
+
+    /** Unsigned-byte and strict UTF-8 validation constants. */
+    private const val BYTE_MASK = 0xFF
+    private const val ASCII_MAX = 0x7F
+    private const val CONTINUATION_MIN = 0x80
+    private const val CONTINUATION_MAX = 0xBF
+    private const val UTF8_TWO_BYTE_MIN = 0xC2
+    private const val UTF8_TWO_BYTE_MAX = 0xDF
+    private const val UTF8_THREE_BYTE_LOW_PREFIX = 0xE0
+    private const val UTF8_THREE_BYTE_LOW_SECOND_MIN = 0xA0
+    private const val UTF8_THREE_BYTE_GENERAL_MIN = 0xE1
+    private const val UTF8_THREE_BYTE_GENERAL_MAX = 0xEC
+    private const val UTF8_THREE_BYTE_SURROGATE_PREFIX = 0xED
+    private const val UTF8_SURROGATE_SECOND_MAX = 0x9F
+    private const val UTF8_THREE_BYTE_GENERAL_HIGH_MIN = 0xEE
+    private const val UTF8_THREE_BYTE_GENERAL_HIGH_MAX = 0xEF
+    private const val UTF8_FOUR_BYTE_LOW_PREFIX = 0xF0
+    private const val UTF8_FOUR_BYTE_LOW_SECOND_MIN = 0x90
+    private const val UTF8_FOUR_BYTE_GENERAL_MIN = 0xF1
+    private const val UTF8_FOUR_BYTE_GENERAL_MAX = 0xF3
+    private const val UTF8_FOUR_BYTE_HIGH_PREFIX = 0xF4
+    private const val UTF8_FOUR_BYTE_HIGH_SECOND_MAX = 0x8F
 
     /** Encoded state for a null boolean. */
     private const val BOOLEAN_NULL = 0

@@ -3,6 +3,10 @@ package com.apm.remoteconfig
 import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import com.google.gson.Strictness
+import com.google.gson.stream.JsonReader
+import com.google.gson.stream.JsonToken
+import java.io.StringReader
 import java.text.ParsePosition
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -18,7 +22,10 @@ internal object CanonicalRemoteConfigJson {
      * @return structurally validated document with canonical unsigned bytes
      */
     fun parse(rawJson: String): RemoteConfigDocument {
-        val root = JsonParser.parseString(rawJson).asJsonObject
+        validateBoundedJson(rawJson)
+        val parsed = JsonParser.parseString(rawJson)
+        require(parsed.isJsonObject) { "Remote config envelope must be an object" }
+        val root = parsed.asJsonObject
         require(root.keySet().containsAll(REQUIRED_ENVELOPE_KEYS)) {
             "Incomplete remote config envelope"
         }
@@ -26,8 +33,10 @@ internal object CanonicalRemoteConfigJson {
         val issuedAtMs = parseUtcTimestamp(root.requiredString(KEY_ISSUED_AT))
         val expiresAtMs = parseUtcTimestamp(root.requiredString(KEY_EXPIRES_AT))
         val rolloutBasisPoints = root.requiredInt(KEY_ROLLOUT_BASIS_POINTS)
-        val payload = root.getAsJsonObject(KEY_PAYLOAD)
+        val payloadElement = root.get(KEY_PAYLOAD)
             ?: throw IllegalArgumentException("Missing payload")
+        require(payloadElement.isJsonObject) { "Invalid payload" }
+        val payload = payloadElement.asJsonObject
         val keyId = root.requiredString(KEY_KEY_ID)
         val signatureBase64 = root.requiredString(KEY_SIGNATURE)
         require(revision > 0L) { "Revision must be positive" }
@@ -37,6 +46,16 @@ internal object CanonicalRemoteConfigJson {
         }
         require(keyId.isNotBlank()) { "Missing key id" }
         require(signatureBase64.isNotBlank()) { "Missing signature" }
+        require(keyId.toByteArray(Charsets.UTF_8).size <= MAX_KEY_ID_BYTES) {
+            "Remote config key id is too long"
+        }
+        require(keyId.none(Char::isISOControl)) { "Invalid remote config key id" }
+        require(signatureBase64.length <= MAX_SIGNATURE_BASE64_CHARACTERS) {
+            "Remote config signature is too long"
+        }
+        require(signatureBase64.none(Char::isWhitespace)) {
+            "Invalid remote config signature"
+        }
 
         // Future optional signed fields remain verifiable and ignorable by older clients.
         val unsigned = root.deepCopy().apply { remove(KEY_SIGNATURE) }
@@ -51,6 +70,73 @@ internal object CanonicalRemoteConfigJson {
             canonicalBytes = canonicalize(unsigned).toByteArray(Charsets.UTF_8),
             rawJson = rawJson
         )
+    }
+
+    /**
+     * Validates syntax, depth, node count, duplicate keys, and text budgets before recursive
+     * canonicalization. This protects both network responses and app-private cached documents.
+     */
+    private fun validateBoundedJson(rawJson: String) {
+        require(rawJson.length <= MAX_RAW_JSON_CHARACTERS) { "Remote config JSON is too large" }
+        require(rawJson.toByteArray(Charsets.UTF_8).size <= MAX_RAW_JSON_BYTES) {
+            "Remote config JSON is too large"
+        }
+        val state = JsonValidationState()
+        try {
+            JsonReader(StringReader(rawJson)).use { reader ->
+                reader.strictness = Strictness.STRICT
+                validateJsonValue(reader, depth = 1, state)
+                require(reader.peek() == JsonToken.END_DOCUMENT) {
+                    "Trailing content in remote config JSON"
+                }
+            }
+        } catch (error: IllegalArgumentException) {
+            throw error
+        } catch (error: Exception) {
+            throw IllegalArgumentException("Malformed remote config JSON", error)
+        }
+    }
+
+    /** Walks one strict JSON value while enforcing bounds before allocating the Gson tree. */
+    private fun validateJsonValue(
+        reader: JsonReader,
+        depth: Int,
+        state: JsonValidationState
+    ) {
+        require(depth <= MAX_JSON_DEPTH) { "Remote config JSON is too deeply nested" }
+        state.nodeCount += 1
+        require(state.nodeCount <= MAX_JSON_NODES) { "Remote config JSON has too many nodes" }
+        when (reader.peek()) {
+            JsonToken.BEGIN_OBJECT -> {
+                reader.beginObject()
+                val names = HashSet<String>()
+                while (reader.hasNext()) {
+                    val name = reader.nextName()
+                    require(name.toByteArray(Charsets.UTF_8).size <= MAX_JSON_KEY_BYTES) {
+                        "Remote config JSON key is too long"
+                    }
+                    require(names.add(name)) { "Duplicate remote config JSON key: $name" }
+                    validateJsonValue(reader, depth + 1, state)
+                }
+                reader.endObject()
+            }
+            JsonToken.BEGIN_ARRAY -> {
+                reader.beginArray()
+                while (reader.hasNext()) {
+                    validateJsonValue(reader, depth + 1, state)
+                }
+                reader.endArray()
+            }
+            JsonToken.STRING -> {
+                require(reader.nextString().toByteArray(Charsets.UTF_8).size <= MAX_JSON_STRING_BYTES) {
+                    "Remote config JSON string is too long"
+                }
+            }
+            JsonToken.NUMBER -> canonicalNumber(reader.nextString())
+            JsonToken.BOOLEAN -> reader.nextBoolean()
+            JsonToken.NULL -> reader.nextNull()
+            else -> throw IllegalArgumentException("Invalid remote config JSON token")
+        }
     }
 
     /** Returns deterministic JSON matching server sort-keys/no-whitespace/UTF-8 behavior. */
@@ -145,6 +231,12 @@ internal object CanonicalRemoteConfigJson {
         return parsed
     }
 
+    /** Mutable counters scoped to one bounded parse. */
+    private class JsonValidationState {
+        /** Total JSON values visited, including containers. */
+        var nodeCount: Int = 0
+    }
+
     /** Expected signed response fields including the detached signature. */
     private val REQUIRED_ENVELOPE_KEYS = setOf(
         "revision",
@@ -175,6 +267,16 @@ internal object CanonicalRemoteConfigJson {
     /** Valid rollout range. */
     private const val MIN_BASIS_POINTS = 0
     private const val MAX_BASIS_POINTS = 10_000
+
+    /** Absolute parser budgets also protecting cached documents that bypass HTTP transport limits. */
+    private const val MAX_RAW_JSON_BYTES = 2 * 1024 * 1024
+    private const val MAX_RAW_JSON_CHARACTERS = MAX_RAW_JSON_BYTES
+    private const val MAX_JSON_DEPTH = 32
+    private const val MAX_JSON_NODES = 65_536
+    private const val MAX_JSON_KEY_BYTES = 1_024
+    private const val MAX_JSON_STRING_BYTES = 1024 * 1024
+    private const val MAX_KEY_ID_BYTES = 128
+    private const val MAX_SIGNATURE_BASE64_CHARACTERS = 128
 
     /** Timestamp parser group indexes. */
     private const val GROUP_BASE_TIMESTAMP = 1

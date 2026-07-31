@@ -219,7 +219,7 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
 
 ## 11. 自监控与降级
 

@@ -6,6 +6,7 @@ import com.apm.model.ApmSeverity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Test
+import kotlin.random.Random
 
 /**
  * [PiiSanitizer] 单元测试。
@@ -164,6 +165,52 @@ class PiiSanitizerTest {
         assertEquals("13812345678", event.fields["phone"])
     }
 
+    /** Separator and case variants of exact auth fields remain protected without matching author. */
+    @Test
+    fun `fixed seed auth field variants are redacted without author false positive`() {
+        val random = Random(AUTH_FIELD_CORPUS_SEED)
+        repeat(AUTH_FIELD_CORPUS_SAMPLES) { index ->
+            val source = when (index % 3) {
+                0 -> "auth"
+                1 -> "authheader"
+                else -> "authentication"
+            }
+            val variant = buildString {
+                source.forEachIndexed { characterIndex, character ->
+                    append(if (random.nextBoolean()) character.uppercaseChar() else character)
+                    if (characterIndex < source.lastIndex && random.nextBoolean()) {
+                        append(AUTH_FIELD_SEPARATORS[random.nextInt(AUTH_FIELD_SEPARATORS.size)])
+                    }
+                }
+            }
+            val result = sanitizer.sanitize(
+                createEvent(fields = mapOf(variant to "Bearer raw-secret"))
+            )
+            assertEquals("***", result.fields[variant])
+        }
+
+        val author = sanitizer.sanitize(createEvent(fields = mapOf("author" to "Ada")))
+        assertEquals("Ada", author.fields["author"])
+    }
+
+    /** A fixed mixed-PII corpus proves redaction and source-event immutability together. */
+    @Test
+    fun `fixed seed mixed pii corpus never retains raw values`() {
+        val random = Random(MIXED_PII_CORPUS_SEED)
+        repeat(MIXED_PII_CORPUS_SAMPLES) { index ->
+            val token = "secret-${random.nextLong().toULong()}-$index"
+            val raw = "phone=13812345678 email=user$index@example.com token=$token"
+            val event = createEvent(fields = mapOf("message" to raw))
+
+            val sanitized = sanitizer.sanitize(event).fields["message"] as String
+
+            assertFalse(sanitized.contains("13812345678"))
+            assertFalse(sanitized.contains("user$index@example.com"))
+            assertFalse(sanitized.contains(token))
+            assertEquals(raw, event.fields["message"])
+        }
+    }
+
     // --- 辅助方法 ---
 
     /** 创建测试用 APM 事件。 */
@@ -181,5 +228,14 @@ class PiiSanitizerTest {
             extras = extras,
             globalContext = globalContext
         )
+    }
+
+    private companion object {
+        /** Deterministic privacy regression corpus parameters. */
+        private const val AUTH_FIELD_CORPUS_SEED = 0x50_49_49
+        private const val AUTH_FIELD_CORPUS_SAMPLES = 256
+        private const val MIXED_PII_CORPUS_SEED = 0x53_41_4E
+        private const val MIXED_PII_CORPUS_SAMPLES = 256
+        private val AUTH_FIELD_SEPARATORS = charArrayOf('_', '-', '.', ' ')
     }
 }

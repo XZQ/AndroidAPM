@@ -35,9 +35,9 @@ Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采
 
 每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避；`maxRetries` 表示首次尝试后的重试次数，达到 `maxRetries + 1` 次失败后立即清理，超过 7 天的行也会清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
-本地 durable codec 当前写 version 3，并继续读取 version 1/2。v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger 和 BigDecimal 写入显式类型标签，SQLite/IPC 重放后恢复原标量类型；任意其他对象保持历史 `toString()` 降级，不引入 Java 对象反序列化。legacy Line Protocol 与 standalone Protobuf 的 `fields` 继续是字符串 map；生产 Collector 使用显式 `PROTOBUF_ENVELOPE_V2` 获得 append-only field 15 typed values，不静默改写旧协议。
+本地 durable codec 当前写 version 3，并继续读取 version 1/2。v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger 和 BigDecimal 写入显式类型标签，SQLite/IPC 重放后恢复原标量类型；任意其他对象保持历史 `toString()` 降级，不引入 Java 对象反序列化。解码严格拒绝非法 UTF-8、截断内容、无法由剩余字节承载的 Map/string 和尾随字节；编码在扩展缓冲区前执行 2 MiB 总预算。legacy Line Protocol 与 standalone Protobuf 的 `fields` 继续是字符串 map；生产 Collector 使用显式 `PROTOBUF_ENVELOPE_V2` 获得 append-only field 15 typed values，不静默改写旧协议。
 
-生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。dispatcher 仍是单 worker 顺序执行聚合、限流、脱敏和 SQLite hand-off；模块高水位隔离解决的是共享入口的 noisy-neighbor 容量挤占，不虚称提升该 worker 的并行吞吐。开启自监控时，worker 会按固定 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize`、`storeHandoff` 阶段记录有界延迟证据，用于先定位 head-of-line blocking 再决定是否分区或并行；这些字段本身不会改变调度策略。单个 lazy event/聚合/脱敏异常不会杀死共享 worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。每次真实丢弃同时累计总数、稳定 `SdkDropReason` 和 LOW/NORMAL/HIGH/CRITICAL 优先级；旧存储实现若只能返回总数，会显式进入 `UNATTRIBUTED`，不会伪造优先级。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数/活跃 payload 淘汰及 retry/age prune 也进入上述分类。Retry-After 与本地退避合并后限制为 10 ms–60 s；自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
+生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。dispatcher 仍是单 worker 顺序执行聚合、限流、脱敏和 SQLite hand-off；模块高水位隔离解决的是共享入口的 noisy-neighbor 容量挤占，不虚称提升该 worker 的并行吞吐。开启自监控时，worker 会按固定 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize`、`storeHandoff` 阶段记录有界延迟证据，用于先定位 head-of-line blocking 再决定是否分区或并行；这些字段本身不会改变调度策略。单个 lazy event/聚合/脱敏异常不会杀死共享 worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。每次真实丢弃同时累计总数、稳定 `SdkDropReason` 和 LOW/NORMAL/HIGH/CRITICAL 优先级；旧存储实现若只能返回总数，会显式进入 `UNATTRIBUTED`，不会伪造优先级。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数/活跃 payload 淘汰及 retry/age prune 也进入上述分类。V2 ACK 的 schema/eventCount 只接受无符号十进制规范形式，batchId 必须逐字节等值；超大 `Retry-After` 秒数饱和到 `Long.MAX_VALUE`，再与本地退避合并并限制为 10 ms–60 s，不会整数溢出成热重试。自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
 
 ## 模块组成
 
@@ -267,7 +267,7 @@ Apm.init(
 )
 ```
 
-公钥值是标准 Base64 编码的 32 字节原始 Ed25519 公钥，应通过受审计的构建配置固定，不能随远程响应下发。配置客户端默认 15 分钟轮询，支持 ETag/304、256 KiB 响应上限、服务端时间锚点、过期回退、最高 revision 持久化和 204 主动停用；生产只接受 HTTPS。
+公钥值是规范标准 Base64 编码的 32 字节原始 Ed25519 公钥，应通过受审计的构建配置固定，不能随远程响应下发； detached signature 必须严格解码为 64 字节。配置客户端默认 15 分钟轮询，支持 ETag/304、256 KiB 默认响应上限、服务端时间锚点、过期回退、最高 revision 持久化和 204 主动停用；生产只接受 HTTPS。网络响应和 app-private 缓存共用 fail-closed parser：绝对限制 2 MiB、32 层和 65,536 个 JSON node，拒绝重复 key、过长 key/string/keyId/signature，再进入递归 canonicalization 与验签。
 
 运行时自动消费以下签名键：
 
@@ -495,7 +495,9 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-matrix.json --budgets apm-benchmark/device-soak-budgets.json
 ```
 
-2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 98 suites / 655 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 103 suites / 701 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。关键链路故障注入覆盖 Crash hand-off 的 true/false/recoverable/fatal 与宿主委托、critical IPC 首次存储失败后保留/重试、字段与身份不变，以及真实 SQLite 关闭重开后的 CRITICAL 行恢复。
+2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 98 suites / 663 tests、model 5 suites / 51 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 103 suites / 714 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。关键链路故障注入覆盖 Crash hand-off 的 true/false/recoverable/fatal 与宿主委托、critical IPC 首次存储失败后保留/重试、字段与身份不变，以及真实 SQLite 关闭重开后的 CRITICAL 行恢复。
+
+同一源码完成隐私、安全与协议边界加固：core 28 suites / 207 tests、remote-config 3 / 14、uploader 4 / 27、model 5 / 51 的定向结果均零失败，相关 Android lint 和全仓 `apiCheck` 通过。固定种子语料覆盖 durable 截断/位翻转/非法 UTF-8/尾随内容、远程配置语法变异/重复 key/深层和超大 JSON、PII 字段分隔符/大小写与混合敏感文本、V2 ACK 非规范整数，以及 `Retry-After` 乘法溢出。完整 `tools/verify_ci.py` 还通过依赖 checksum、41 个 benchmark/device-lab host tests、隔离 Maven 发布候选和 consumer 构建；这些确定性回归不是持续随机 fuzz 服务，也不替代生产 Collector、代理/TLS 或第三方渗透测试。
 
 同日与独立服务端分支 `codex/collector-v2-e2e`（验证 tip `2feb2f5`）完成真实 HTTP 联调：客户端两次发送相同的 2-event V2 Gzip batch，只有三项精确 ACK 匹配时才报告成功；SQLite 最终保持 2 个唯一 eventId，并核对 12 种标量、`NaN/Infinity` 的 JSON-safe typed text、固定 resource 和协议元数据。服务端自身为 57 tests / 0 failures；Docker 不可用，所以 PostgreSQL/Compose/SigNoz 仍是外部待验收项。
 

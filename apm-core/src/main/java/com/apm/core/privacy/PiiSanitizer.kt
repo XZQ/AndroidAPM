@@ -7,6 +7,13 @@ import java.util.Locale
 /** Replacement used when a field name itself identifies credential or direct-contact data. */
 private const val REDACTED_FIELD_VALUE = "***"
 
+/** Exact normalized names that are sensitive but unsafe to match as arbitrary fragments. */
+private val SENSITIVE_FIELD_NAMES = setOf(
+    "auth",
+    "authheader",
+    "authentication"
+)
+
 /** High-confidence fragments that remain sensitive even when surrounded by descriptive text. */
 private val SENSITIVE_FIELD_FRAGMENTS = setOf(
     "password",
@@ -133,7 +140,8 @@ class PiiSanitizer(
     /** Returns true for normalized field names that strongly imply direct PII or credentials. */
     private fun isSensitiveFieldName(key: String): Boolean {
         val normalized = key.lowercase(Locale.ROOT).filter(Char::isLetterOrDigit)
-        return SENSITIVE_FIELD_FRAGMENTS.any(normalized::contains) ||
+        return normalized in SENSITIVE_FIELD_NAMES ||
+            SENSITIVE_FIELD_FRAGMENTS.any(normalized::contains) ||
             SENSITIVE_FIELD_SUFFIXES.any(normalized::endsWith)
     }
 }

@@ -8,7 +8,7 @@
 
 端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、真实外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
-生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；共享入口同时受 2048 条和默认 8 MiB 估算字节预算约束，75% 高水位后单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响，并可淘汰足够数量的旧低优事件满足双预算。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。IPC 另有 4 MiB pending、256 KiB raw event、1 MiB file、16 MiB ready-directory 预算；outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
+生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；共享入口同时受 2048 条和默认 8 MiB 估算字节预算约束，75% 高水位后单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响，并可淘汰足够数量的旧低优事件满足双预算。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。IPC 另有 4 MiB pending、256 KiB raw event、1 MiB file、16 MiB ready-directory 预算；outbox stale 删除计数不降到 0 以下，Retry-After 秒数先饱和换算且最终等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
 ## 事实源
 
@@ -114,7 +114,7 @@ Apm.emit
 - durable payload：单事件软上限 256 KiB；活跃 payload 逻辑预算 64 MiB，超限按低优先级旧事件淘汰并计入自监控
 - dispatcher：2048 条 + 8 MiB 估算保留内存双预算；HIGH/CRITICAL 可淘汰足够数量的旧低优事件
 - multi-process IPC：lock-free pending + 单一 500 ms writer；4 MiB pending / 256 KiB raw event / 1 MiB ready file / 16 MiB ready directory
-- PII sanitization：开启；文本正则和高置信敏感字段名同时生效
+- PII sanitization：开启；预编译文本正则和高置信敏感字段名同时生效，含 auth/authentication/auth-header 变体
 - debug logging：关闭
 - aggregation：关闭
 - multi-process coordination：关闭
@@ -131,7 +131,7 @@ Apm.emit
 
 AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20% 且平均上传延迟 <= 3 秒才恢复。迟滞区间或再次退化会清零连续健康计数。SQLite 的 64 MiB 是活跃 payload 逻辑预算，不包含 page/WAL 物理开销；活动 upload lease 不为容量回收让路，因此可在租约释放或过期前临时超预算。
 
-生产接入必须明确 endpoint/短期鉴权、固定 Ed25519 公钥、匿名稳定 installationId、隐私规则、采样限流、进程策略和服务端幂等。`apm-remote-config` 验签成功并同步写入 app-private LKG 后才发布；过期/验签失败/rollback/equivocation 都回退可信旧值或本地默认值。
+生产接入必须明确 endpoint/短期鉴权、固定 Ed25519 公钥、匿名稳定 installationId、隐私规则、采样限流、进程策略和服务端幂等。`apm-remote-config` 在 2 MiB/32 层/65,536 nodes/text 预算内先拒绝重复 JSON key，严格验证 key/signature Base64 与 32/64-byte 解码长度；验签成功并同步写入 app-private LKG 后才发布。过期/验签失败/rollback/equivocation 都回退可信旧值或本地默认值。
 
 ## 验证
 
@@ -205,9 +205,9 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于历史三项 microbenchmark 和原预算 smoke；后来新增的两项 Dispatcher benchmark 尚无物理结果。
 
-2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 655 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 103 suites / 701 tests，plugin 18 tests 独立报告，取代同日较早的 654-test Android 刷新和 2026-07-22 的 682-test 组合基线。
+2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 663 tests 和 model 5 suites / 51 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 103 suites / 714 tests，plugin 18 tests 独立报告，取代同日 701-test Android + model 刷新和 2026-07-22 的 682-test 组合基线。
 
-同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 98 suites / 655 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 45 Markdown / 61 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与关键 hand-off 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 98 suites / 663 tests、model 5 suites / 51 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 45 Markdown / 61 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与关键安全文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
 
 同一源码的 critical-handoff 故障注入定向验证覆盖 core/crash/ANR/storage：JDK 17.0.14 下 `43` suites / `284` tests 全部通过，0 failures/errors/skips；对应 lint 与根 `apiCheck` 通过。测试证明 Crash true/false/recoverable/fatal 分支始终只委托原 handler 一次，fatal error 在委托后仍可见；critical IPC 首次同步存储故障会保留 ready 文件，第二次扫描成功后才删除，并保持 `eventId`、priority、fields。真实 SQLite 还验证关闭并重开 store 后 CRITICAL 行不丢失。
 
@@ -220,6 +220,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 同日发布与供应链门禁完成：四个 Gradle build root 提交严格 SHA-256 dependency verification metadata，策略检查覆盖 554 / 238 / 239 / 409 个 component；consumer 仅信任由候选校验器逐文件复核的内部坐标。独立候选仓库包含 25 坐标、22 AAR、26 JAR、25 POM，Bundle 精确暴露 22 个运行时制品，`com.apm.slow-method` marker 精确指向 `com.apm:apm-plugin`。校验器检查 POM/Gradle metadata/sources/固定版本/Java 17/ZIP 安全与签名完整性，生成 SHA-256 manifest 和 SPDX 2.3 SBOM；5 个 host tests 覆盖完整与篡改分支，隔离 consumer 从候选仓库解析 Bundle/插件并完成 ASM transformation 与 Debug 构建。外部 URL 强制 HTTPS，缺凭据或 PGP key 在上传前失败；仓库没有真实外部 staging/promotion 证据。
 
 同日 Dispatcher 性能证据与源码热点完成补强：满队列高优先级替换不再对最多 2,048 个候选执行 `filter + sortedBy`，而是固定 LOW→NORMAL→HIGH、同优先级 FIFO 扫描，只保留最终足够的 victim list；默认关闭聚合时直接处理标量事件，非 durable 成功批次不再创建空 rejected-ID set。混合优先级单测锁定 LOW-first/oldest-first；core 定向结果为 28 suites / 205 tests、零失败，lint `No Issues Found`。AndroidX contract 从历史三项扩为五项，新增 32 accepted emits 与满 2,048 队列 HIGH admission；Release/AndroidTest Kotlin 编译和 41 个 host tests 通过。当前无 ADB 设备，因此新增两项没有真机 JSON，历史三项结果不能冒充当前五项 gate 通过。
+
+同日隐私、安全与协议输入完成 fail-closed 加固：durable codec 在分配前验证剩余字节并拒绝非法 UTF-8/截断/尾随内容，encode 写入时执行 2 MiB 总预算；remote-config 在 canonicalization 前限制 bytes/depth/nodes/text、拒绝重复 key，Ed25519 key/signature 使用规范 Base64 和精确 32/64-byte 长度；PII 覆盖 auth 变体且不误伤 `author`；V2 ACK 只接受规范正十进制，`Retry-After` 乘法饱和。固定种子语料覆盖截断/位翻转、JSON 语法变异、混合 PII 和 ACK 歧义。定向结果为 core 28 suites / 207 tests、remote-config 3 / 14、uploader 4 / 27、model 5 / 51，相关 lint/API 全绿；完整 `tools/verify_ci.py` 通过 41 个 host tests、依赖 checksum、发布候选和隔离 consumer。该结果不替代持续随机 fuzz、生产 TLS/代理故障或第三方渗透测试。
 
 ## 新电脑接手
 

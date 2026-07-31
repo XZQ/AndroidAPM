@@ -130,6 +130,8 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 - v3 对 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger、BigDecimal 写显式类型标签并恢复原类型
 - BigInteger/BigDecimal 的 decimal text 最多 4096 字符，避免损坏行制造过量大数解析开销
 - v1/v2 `fields` 保持历史字符串语义；v3 遇到其他任意对象时仍安全降级为有界字符串，未知 tag 拒绝该损坏事件
+- 非法/overlong UTF-8、surrogate、越界 code point、截断和尾随字节全部 fail closed
+- string/map count 必须能由剩余字节承载后才分配，encode 在 2 MiB 总预算处停止扩容
 
 传输保留 Line Protocol 和零外部 runtime 依赖的 legacy standalone Protobuf；两者的 `fields` 继续按字符串输出，不因本地 codec v3 静默改变。显式 `PROTOBUF_ENVELOPE_V2` 使用 append-only event field 15 的 `ApmTypedValue`，batch 携带 schema/SDK/resource/稳定 batchId，并要求精确 whole-batch ACK；完整规范见 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md)。`eventId` 在所有 wire、durable codec、SQLite 与多进程交接中保持稳定，服务端最终仍必须以该值实现幂等。
 
@@ -182,13 +184,13 @@ worker 单轮 drain 最多 32 条：
 
 可靠性优先级是宿主安全、telemetry durability、diagnostic completeness。dispatcher 当前仍以单 worker 顺序执行聚合、限流、脱敏和存储 hand-off；高水位模块隔离缓解入口 noisy-neighbor，8 MiB 估算预算限制 retained-memory 爆炸半径，两者都不等于多 worker 吞吐扩展。dispatcher 对单个 lazy factory/聚合/限流/脱敏的 recoverable `Exception` 单独降级，后续事件继续；fatal VM error 不转换成 drop。SQLite 的进程本地缓存计数在跨 store 删除后下限为 0，避免负缓存绕过容量淘汰。自定义同步 uploader 必须自行配置有界 IO，SDK 不尝试强杀任意宿主代码。
 
-PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证号和 URL 凭据；字段名保护会直接遮蔽 `authorization`、access/refresh token、password、API key、cookie、phone/email 等高置信字段，即使其值是数值或不符合文本正则。普通数值指标保持原类型；接入方仍需为自身业务字段补充自定义规则，不能把默认规则等同于完整合规证明。
+PII sanitization 默认开启。文本规则覆盖手机号、邮箱、身份证号和 URL 凭据；字段名保护会直接遮蔽 `authorization`、auth/authentication/auth-header、access/refresh token、password、API key、cookie、phone/email 等高置信字段，即使其值是数值或不符合文本正则。字段名大小写/分隔符变体统一处理，`author` 不误伤；内置 Regex 预编译。普通数值指标保持原类型；接入方仍需为自身业务字段补充自定义规则，不能把默认规则等同于完整合规证明。
 
 `StorageType.FILE` 是 500 行 ring buffer 兼容路径，不提供成功确认、重启重放等 durable 语义，初始化会输出降级警告。
 
-默认 HTTP uploader 支持静态协议身份 Header 和逐请求 `HttpHeaderProvider`。动态 provider 用于短期 Token，每次网络请求重新取值；provider 异常、Header 控制字符或覆盖 Content-Type/Content-Length/Host/`X-Apm-*` transport Header 时请求失败，durable 行保留。`enableDynamicHttpEndpoint=true` 后才读取签名键 `apm.upload.endpoint`，且远程值只接受无 user-info 的 HTTPS URL；非法值或 provider 异常回退 APK 内置 endpoint。compatibility 模式未配置或使用未知 scheme 时采用 payload-safe discard uploader：事件被确认丢弃以避免 outbox 无界增长，只输出一次不含 payload 的配置警告；开发期 Logcat 输出必须显式配置 `logcat://...`。strict built-in HTTP 在 factory 之前要求 HTTPS、`PROTOBUF_ENVELOPE_V2`、完整 fixed resource 和 batch headroom；V2 按实际 gzip 前 protobuf 字节拆分请求，2xx 只有 echo schema/batchId/eventCount 的整批 ACK 完全匹配才成功。显式非 Logcat custom uploader 自行承担等价协议。
+默认 HTTP uploader 支持静态协议身份 Header 和逐请求 `HttpHeaderProvider`。动态 provider 用于短期 Token，每次网络请求重新取值；provider 异常、Header 控制字符或覆盖 Content-Type/Content-Length/Host/`X-Apm-*` transport Header 时请求失败，durable 行保留。`enableDynamicHttpEndpoint=true` 后才读取签名键 `apm.upload.endpoint`，且远程值只接受无 user-info 的 HTTPS URL；非法值或 provider 异常回退 APK 内置 endpoint。compatibility 模式未配置或使用未知 scheme 时采用 payload-safe discard uploader：事件被确认丢弃以避免 outbox 无界增长，只输出一次不含 payload 的配置警告；开发期 Logcat 输出必须显式配置 `logcat://...`。strict built-in HTTP 在 factory 之前要求 HTTPS、`PROTOBUF_ENVELOPE_V2`、完整 fixed resource 和 batch headroom；V2 按实际 gzip 前 protobuf 字节拆分请求，2xx 只有 echo schema/batchId/eventCount 的整批 ACK 完全匹配才成功。schema/eventCount 只接受无前导零/正号的规范正十进制，batchId 精确匹配；`Retry-After` 超大秒数做饱和乘法后再受 60 秒 worker 上限约束。显式非 Logcat custom uploader 自行承担等价协议。
 
-`apm-remote-config` 通过认证 GET `/v1/config` 拉取配置，发送 app/environment/installation 身份与 ETag。响应按服务端 canonical JSON 规则重建签名字节，并用 APK 固定的 32 字节原始 Ed25519 公钥通过 Tink 验签。只有验签、revision 单调、同 revision 签名一致且 app-private 缓存同步提交成功后才发布；204 主动停用，304 更新可信时间锚点，网络失败沿用未过期 LKG。最高 revision 即使配置过期或停用也不会回退。Android 平台原生 Ed25519 保证从 API 33 才开始，因此 minSdk 24 使用官方支持 Android 24+ 的 Tink 实现。
+`apm-remote-config` 通过认证 GET `/v1/config` 拉取配置，发送 app/environment/installation 身份与 ETag。响应和 app-private LKG 共用 strict parser：绝对限制 2 MiB UTF-8、32 层、65,536 nodes、1,024-byte key/1 MiB string，拒绝重复 key 后才按服务端 canonical JSON 规则重建签名字节。APK 最多固定 16 把规范 Base64 的 32 字节原始 Ed25519 公钥；keyId 限 128 UTF-8 bytes，detached signature 必须无空白并严格解码为 64 bytes，再由 Tink 验签。只有验签、revision 单调、同 revision 签名一致且 app-private 缓存同步提交成功后才发布；204 主动停用，304 更新可信时间锚点，网络失败沿用未过期 LKG。最高 revision 即使配置过期或停用也不会回退。Android 平台原生 Ed25519 保证从 API 33 才开始，因此 minSdk 24 使用官方支持 Android 24+ 的 Tink 实现。
 
 ## 八、多进程
 
@@ -353,7 +355,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是历史三项 microbenchmark 与原预算 smoke 通过；新增 Dispatcher 两项和长稳尚未验收。
 
-2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 655 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 103 suites / 701 tests，plugin 18 tests 独立报告；该结果取代同日较早的 654-test Android 刷新及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的五项 microbenchmark、24h/72h 结论。
+2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 663 tests 与 model 5 suites / 51 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 103 suites / 714 tests，plugin 18 tests 独立报告；该结果取代同日 701-test Android + model 基线及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的五项 microbenchmark、24h/72h 结论。
 
 同一源码的 critical-handoff 故障注入定向验证在 JDK 17.0.14 下覆盖 core/crash/ANR/storage：`43` suites / `284` tests 全部通过且为 0 failures/errors/skips，对应 lint 与根 `apiCheck` 通过。Crash helper 覆盖成功、false、recoverable exception、fatal VM error，并断言原 uncaught handler 恰好委托一次；critical IPC E2E 覆盖 codec、原子文件发布、scanner、同步 dispatcher store，首次注入磁盘异常时保留 `.ipc`，第二次接受后才删除，且 `eventId`、CRITICAL priority、fields 不变。SQLite 真实测试还关闭并重开 store，验证 CRITICAL durable row 恢复。
 
@@ -368,6 +370,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 仓库没有真实外部 Maven 凭据、Maven Central/private staging 或 promotion 结果；通过本地候选、未签名 CI 或 `publishToMavenLocal` 都不代表外部仓库已发布。真正上传前必须在 clean commit 上运行 `--require-signatures`，再按目标仓库流程 staging、重新消费和 promotion。
 
 同日 Dispatcher 性能热点按源码证据完成优化并补上专用物理门禁。满 2,048 条队列插入 HIGH/CRITICAL 时不再复制、排序所有较低优先级候选，而是固定 LOW→NORMAL→HIGH 做最多三次 FIFO 扫描，只分配最终足够的 victim list；默认聚合关闭时不再为每条 resolved event 创建单元素 List，非 durable 存储无拒绝项时也不再创建空 rejected-ID HashSet。混合优先级回归测试证明 LOW-first 与同级 oldest-first 不变；JDK 17.0.14 下 core 28 suites / 205 tests、lint 与 benchmark Release/AndroidTest Kotlin 编译通过，41 个 host tests 全绿。`benchmark-budgets.json` 当前要求 codec/SQLite 历史三项以及 32 accepted emit、满队列 HIGH admission 共五项；本机无连接设备，后两项尚无物理数值，不能把历史三项结果外推为当前五项 gate 通过。
+
+同日隐私、安全与协议模糊边界完成加固。durable codec 在分配前验证剩余字节，严格拒绝非法 UTF-8、截断和尾随内容，并在写入时执行 2 MiB 总预算；远程配置在 canonicalization/验签前限制 bytes/depth/nodes/text、拒绝重复 key，并严格校验 Ed25519 key/signature Base64 与解码长度；PII 新增 auth/authentication/auth-header 变体且保留 `author`；V2 ACK 数字只接受规范正十进制，`Retry-After` 乘法饱和。固定种子回归覆盖截断/位翻转、JSON 语法变异、混合 PII 和 ACK 歧义。定向结果为 core 28 suites / 207 tests、remote-config 3 / 14、uploader 4 / 27、model 5 / 51，零失败；相关 lint 与全仓 API 门禁通过。完整 `tools/verify_ci.py` 还通过 41 个 host tests、依赖 checksum、隔离发布候选与 consumer 构建。该确定性语料是回归 fuzz，不冒充持续随机 fuzz、生产代理/TLS 或第三方渗透测试。
 
 ## 十二、测试策略
 

@@ -54,9 +54,9 @@ revision / issuedAt / expiresAt / rolloutBasisPoints
 payload / keyId / signature
 ```
 
-客户端移除 `signature` 后，对其余所有 root 字段递归执行确定性 canonical JSON：对象 key 排序、无额外空白、UTF-8 Unicode 原样输出、数组保序、拒绝非有限数字。这样未来增加签名字段时客户端不会错误忽略未验证内容。
+客户端先以 strict streaming reader 检查完整文档，再移除 `signature`，对其余所有 root 字段递归执行确定性 canonical JSON：对象 key 排序、无额外空白、UTF-8 Unicode 原样输出、数组保序、拒绝非有限数字。parser 绝对限制 2 MiB UTF-8、32 层、65,536 个 node、1,024-byte key 与 1 MiB string，并在构造 Gson tree 前拒绝重复 key；该入口同时保护网络响应和 SharedPreferences LKG，避免深层未签名输入先触发递归栈或解析分歧。这样未来增加签名字段时客户端不会错误忽略未验证内容。
 
-`keyId` 只选择 APK 内置公钥；响应不能新增信任根。公钥输入是标准 Base64 编码的 32 字节原始 Ed25519 key，Tink keyset 使用 RAW 前缀验证服务端 64 字节 detached signature。未知 key、非法 Base64、签名变更或正文变更均拒绝。
+`keyId` 只选择 APK 内置公钥；响应不能新增信任根。公钥输入是规范标准 Base64 编码的 32 字节原始 Ed25519 key，Tink keyset 使用 RAW 前缀验证服务端严格 64 字节 detached signature。最多固定 16 把 key，keyId 限 128 UTF-8 bytes；Base64 不接受空白、URL-safe 替代或错误 padding。未知 key、非法/过长 Base64、签名变更或正文变更均拒绝。
 
 ## 4. 可信状态机
 
@@ -119,8 +119,9 @@ expiry / 204 / invalid response
 
 ## 8. 测试
 
-- canonical JSON 精确字节、Unicode 与数值边界
+- canonical JSON 精确字节、Unicode、重复 key、深度/node/文本预算与数值边界
 - JDK Ed25519 生成签名，Tink Android verifier 验证 raw key/signature
+- 固定种子 JSON 语法变异，以及签名空白、错误长度和超长输入
 - HTTP identity/auth/ETag、304、响应上限
 - verified 200、204、network LKG、可信 expiry
 - rollback、同 revision equivocation、cache re-verification

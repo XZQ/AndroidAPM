@@ -87,6 +87,31 @@ class HttpApmUploaderTest {
         }
     }
 
+    /** Non-canonical numeric ACKs and decorated batch identities are rejected fail-closed. */
+    @Test
+    fun `versioned ack rejects ambiguous fixed corpus`() {
+        val events = listOf(event("versioned-ambiguous"))
+        val expected = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
+        val valid = mapOf(
+            ApmWireProtocol.HEADER_SCHEMA_VERSION to
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+            ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
+            ApmWireProtocol.HEADER_EVENT_COUNT to "1"
+        )
+        val responses = AMBIGUOUS_ACK_VALUES.map { (header, value) ->
+            RawResponse(HTTP_OK, valid + (header to value))
+        }
+        withRawHttpServer(
+            responses = responses,
+            createUploader = { endpoint -> versionedUploader(endpoint) }
+        ) { uploader, requestCount ->
+            repeat(responses.size) {
+                assertFalse(uploader.uploadBatch(events))
+            }
+            assertEquals(responses.size, requestCount.get())
+        }
+    }
+
     /** Encoded-size budget creates separately ACKed physical requests without changing event order. */
     @Test
     fun `versioned batch splits by encoded byte budget`() {
@@ -206,6 +231,17 @@ class HttpApmUploaderTest {
             assertFalse(uploader.uploadBatch(listOf(event("failed"))))
             assertEquals(1, requestCount.get())
             assertNull(uploader.retryAfterHintMs())
+        }
+    }
+
+    /** Huge Retry-After seconds saturate instead of overflowing into an immediate retry. */
+    @Test
+    fun `retry after seconds overflow saturates`() {
+        withRawHttpServer(
+            listOf(RawResponse(HTTP_RATE_LIMITED, mapOf("Retry-After" to Long.MAX_VALUE.toString())))
+        ) { uploader, _ ->
+            assertFalse(uploader.uploadBatch(listOf(event("limited-overflow"))))
+            assertEquals(Long.MAX_VALUE, uploader.retryAfterHintMs())
         }
     }
 
@@ -460,6 +496,16 @@ class HttpApmUploaderTest {
             serviceVersion = "1.0.0",
             deploymentEnvironment = "test",
             installationId = "install-http-test"
+        )
+
+        /** Header/value pairs that are numerically similar but not canonical protocol fields. */
+        private val AMBIGUOUS_ACK_VALUES = listOf(
+            ApmWireProtocol.HEADER_SCHEMA_VERSION to "02",
+            ApmWireProtocol.HEADER_SCHEMA_VERSION to "+2",
+            ApmWireProtocol.HEADER_EVENT_COUNT to "01",
+            ApmWireProtocol.HEADER_EVENT_COUNT to "+1",
+            ApmWireProtocol.HEADER_EVENT_COUNT to "2147483648",
+            ApmWireProtocol.HEADER_BATCH_ID to "invalid-${'$'}{RESOURCE.serviceName}"
         )
     }
 }

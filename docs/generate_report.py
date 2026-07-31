@@ -81,7 +81,7 @@ def add_summary_table(document: Document) -> None:
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
         ("测试文件", "107", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
-        ("当前完整测试", "103 suites / 701 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("当前完整测试", "103 suites / 714 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -119,6 +119,7 @@ def add_capability_table(document: Document) -> None:
         ("运行时接入自检", "hostIntegrationSnapshot 模块/注册/调用证据", "只存枚举、计数、时间戳；无流量不能被误判为静态接入失败"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
+        ("安全输入边界", "Strict JSON/Ed25519、durable UTF-8、canonical ACK、PII fixed corpus", "固定种子回归覆盖截断/位翻转/深层与重复 key/字段名变体；不冒充持续 fuzz 或渗透测试"),
         ("扩展", "Trace、OTel exporter", "Trace 为进程内 span；OTel exporter 仅做事件映射"),
         ("不支持的全局 Hook", "Binder hidden Hook、WebView 全局接管、通用线程泄漏、GPU overdraw", "兼容字段已 deprecated/false；不伪装成自动能力"),
     ]
@@ -206,6 +207,8 @@ def build_status_report() -> Document:
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
             "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
+            "安全边界在分配、递归和验签前生效：durable 拒绝非法 UTF-8、截断和尾随字节，remote-config 限制 bytes/depth/nodes 并拒绝重复 key，V2 ACK 仅接受规范正十进制；"
+            "固定种子语料覆盖协议与 PII 变体，但不替代生产渗透测试。",
             "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",
             "Dispatcher 在 self-monitor 开启时以固定无逐样本分配直方图输出六阶段 count、平均、P95 上界和最大延迟；满队列高优先级替换按固定优先级 FIFO 扫描而不再复制排序全队列，AndroidX gate 新增常态与满队列准入；"
             "关闭时跳过计时，阶段证据不自动触发并行化。",

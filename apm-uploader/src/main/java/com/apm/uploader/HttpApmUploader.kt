@@ -290,12 +290,23 @@ class HttpApmUploader(
 
     /** Returns true only when the collector echoes the exact schema, batch identity, and event count. */
     private fun hasMatchingAck(connection: HttpURLConnection, expectation: AckExpectation): Boolean {
-        val schema = connection.getHeaderField(ApmWireProtocol.HEADER_SCHEMA_VERSION)?.toIntOrNull()
+        val schema = parseCanonicalPositiveInt(
+            connection.getHeaderField(ApmWireProtocol.HEADER_SCHEMA_VERSION)
+        )
         val batchId = connection.getHeaderField(ApmWireProtocol.HEADER_BATCH_ID)
-        val eventCount = connection.getHeaderField(ApmWireProtocol.HEADER_EVENT_COUNT)?.toIntOrNull()
+        val eventCount = parseCanonicalPositiveInt(
+            connection.getHeaderField(ApmWireProtocol.HEADER_EVENT_COUNT)
+        )
         return schema == ApmWireProtocol.ENVELOPE_SCHEMA_VERSION &&
             batchId == expectation.batchId &&
             eventCount == expectation.eventCount
+    }
+
+    /** Parses an ACK integer only from its canonical unsigned decimal representation. */
+    private fun parseCanonicalPositiveInt(value: String?): Int? {
+        if (value.isNullOrEmpty() || value.any { it !in '0'..'9' }) return null
+        if (value.length > 1 && value.first() == '0') return null
+        return value.toIntOrNull()?.takeIf { it > 0 }
     }
 
     /**
@@ -404,7 +415,12 @@ class HttpApmUploader(
         val headerValue = connection.getHeaderField(HEADER_RETRY_AFTER) ?: return null
         // 优先按秒数解析
         headerValue.trim().toLongOrNull()?.let { seconds ->
-            return (seconds * MILLIS_PER_SECOND).coerceAtLeast(0L)
+            if (seconds <= 0L) return 0L
+            return if (seconds > Long.MAX_VALUE / MILLIS_PER_SECOND) {
+                Long.MAX_VALUE
+            } else {
+                seconds * MILLIS_PER_SECOND
+            }
         }
         // 回退按 HTTP-date 解析为绝对时间
         val dateMs = connection.getHeaderFieldDate(HEADER_RETRY_AFTER, 0L)

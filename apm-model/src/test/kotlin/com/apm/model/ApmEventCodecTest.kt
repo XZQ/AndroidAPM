@@ -6,7 +6,9 @@ import java.math.BigDecimal
 import java.math.BigInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
+import kotlin.random.Random
 
 /**
  * Verifies the durable event payload contract.
@@ -91,6 +93,18 @@ class ApmEventCodecTest {
         assertEquals("event-42", decoded.eventId)
     }
 
+    /** Strict UTF-8 validation continues to accept valid multilingual and supplementary text. */
+    @Test
+    fun `valid unicode string round trip is preserved`() {
+        val source = ApmEvent(
+            module = "model",
+            name = "unicode",
+            fields = mapOf("text" to "测试🙂\u0000")
+        )
+
+        assertEquals(source, ApmEventCodec.decode(ApmEventCodec.encode(source)))
+    }
+
     /** Version 1 payloads remain readable and expose an empty identity for storage migration. */
     @Test
     fun `version one payload remains readable`() {
@@ -127,6 +141,78 @@ class ApmEventCodecTest {
                 fields = mapOf("value" to BigInteger("9".repeat(OVERSIZED_BIG_NUMBER_DIGITS)))
             )
         )
+    }
+
+    /** Trailing bytes cannot be interpreted differently by another durable payload consumer. */
+    @Test
+    fun `trailing bytes are rejected`() {
+        val encoded = ApmEventCodec.encode(ApmEvent(module = "model", name = "trailing"))
+
+        assertMalformed(encoded + byteArrayOf(0))
+    }
+
+    /** Malformed UTF-8 is rejected instead of being normalized to the replacement character. */
+    @Test
+    fun `malformed utf8 is rejected`() {
+        for (sequence in MALFORMED_UTF8_SEQUENCES) {
+            val encoded = ApmEventCodec.encode(ApmEvent(module = "model", name = "utf8"))
+            encoded.writeMalformedFirstString(sequence)
+            assertMalformed(encoded)
+        }
+    }
+
+    /** The encoder stops at its hard budget instead of growing an unbounded backing buffer. */
+    @Test
+    fun `oversized aggregate payload is rejected while writing`() {
+        val largeValue = "a".repeat(MAX_TEST_STRING_CHARACTERS)
+
+        try {
+            ApmEventCodec.encode(
+                ApmEvent(
+                    module = "model",
+                    name = "aggregate-budget",
+                    fields = mapOf("first" to largeValue, "second" to largeValue)
+                )
+            )
+            fail("Expected oversized payload rejection")
+        } catch (_: IllegalArgumentException) {
+            // Expected fail-closed resource bound.
+        }
+    }
+
+    /**
+     * Fixed-seed truncation and byte-mutation corpus must either decode safely or fail with the
+     * documented malformed-payload exception, never leak a parser-specific exception.
+     */
+    @Test
+    fun `fixed seed malformed corpus remains bounded and deterministic`() {
+        val source = ApmEvent(
+            module = "model",
+            name = "fuzz-seed",
+            fields = mapOf("count" to 7, "text" to "value"),
+            globalContext = mapOf("environment" to "test"),
+            extras = mapOf("traceId" to "trace-1")
+        )
+        val encoded = ApmEventCodec.encode(source)
+        for (length in 0 until encoded.size) {
+            assertMalformed(encoded.copyOf(length))
+        }
+
+        val random = Random(MALFORMED_CORPUS_SEED)
+        repeat(MALFORMED_CORPUS_MUTATIONS) {
+            val candidate = encoded.copyOf()
+            repeat(1 + random.nextInt(MAX_MUTATIONS_PER_SAMPLE)) {
+                val index = random.nextInt(candidate.size)
+                candidate[index] = (candidate[index].toInt() xor (1 shl random.nextInt(Byte.SIZE_BITS)))
+                    .toByte()
+            }
+            try {
+                val decoded = ApmEventCodec.decode(candidate)
+                assertEquals(decoded, ApmEventCodec.decode(ApmEventCodec.encode(decoded)))
+            } catch (_: IllegalArgumentException) {
+                // Rejection is an expected fuzz outcome.
+            }
+        }
     }
 
     /** Builds the exact durable format written before event identity was appended. */
@@ -198,6 +284,25 @@ class ApmEventCodecTest {
         write(bytes)
     }
 
+    /** Asserts the stable malformed-payload exception without accepting unrelated failures. */
+    private fun assertMalformed(payload: ByteArray) {
+        try {
+            ApmEventCodec.decode(payload)
+            fail("Expected malformed payload rejection")
+        } catch (_: IllegalArgumentException) {
+            // Expected.
+        }
+    }
+
+    /** Replaces the first encoded string with one fixed-length malformed UTF-8 sequence. */
+    private fun ByteArray.writeMalformedFirstString(sequence: ByteArray) {
+        check(sequence.size <= FIRST_STRING_BYTE_LENGTH)
+        System.arraycopy(sequence, 0, this, FIRST_STRING_VALUE_OFFSET, sequence.size)
+        for (index in sequence.size until FIRST_STRING_BYTE_LENGTH) {
+            this[FIRST_STRING_VALUE_OFFSET + index] = ASCII_PADDING_BYTE
+        }
+    }
+
     /** Stable unsupported value used to verify the safe string fallback. */
     private class StableTextValue(
         /** Text returned by [toString]. */
@@ -211,5 +316,34 @@ class ApmEventCodecTest {
     private companion object {
         /** One digit above the production arbitrary-precision parsing budget. */
         private const val OVERSIZED_BIG_NUMBER_DIGITS = 4_097
+
+        /** Version + timestamp + first string length prefix. */
+        private const val FIRST_STRING_VALUE_OFFSET = 4 + 8 + 4
+
+        /** The seeded module text has five bytes available for malformed sequence substitution. */
+        private const val FIRST_STRING_BYTE_LENGTH = 5
+
+        /** Valid ASCII used after a shorter malformed prefix. */
+        private const val ASCII_PADDING_BYTE: Byte = 0x61
+
+        /** Overlong, surrogate, out-of-range, truncated, and stray-continuation UTF-8 corpus. */
+        private val MALFORMED_UTF8_SEQUENCES = listOf(
+            byteArrayOf(0x80.toByte()),
+            byteArrayOf(0xC0.toByte(), 0x80.toByte()),
+            byteArrayOf(0xE0.toByte(), 0x80.toByte(), 0x80.toByte()),
+            byteArrayOf(0xED.toByte(), 0xA0.toByte(), 0x80.toByte()),
+            byteArrayOf(0xF0.toByte(), 0x80.toByte(), 0x80.toByte(), 0x80.toByte()),
+            byteArrayOf(0xF4.toByte(), 0x90.toByte(), 0x80.toByte(), 0x80.toByte()),
+            byteArrayOf(0xF5.toByte(), 0x80.toByte(), 0x80.toByte(), 0x80.toByte()),
+            byteArrayOf(0xE2.toByte(), 0x82.toByte())
+        )
+
+        /** One individually valid string; two copies exceed the complete payload hard limit. */
+        private const val MAX_TEST_STRING_CHARACTERS = 1024 * 1024
+
+        /** Stable mutation corpus parameters. */
+        private const val MALFORMED_CORPUS_SEED = 0x41_50_4D
+        private const val MALFORMED_CORPUS_MUTATIONS = 512
+        private const val MAX_MUTATIONS_PER_SAMPLE = 3
     }
 }

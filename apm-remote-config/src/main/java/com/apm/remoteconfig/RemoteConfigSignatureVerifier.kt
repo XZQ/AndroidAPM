@@ -39,6 +39,9 @@ class TinkEd25519SignatureVerifier(publicKeysBase64: Map<String, String>) :
 
     init {
         SignatureConfig.register()
+        require(publicKeysBase64.size <= MAX_PINNED_KEYS) {
+            "Too many pinned Ed25519 public keys"
+        }
         verifiers = publicKeysBase64.mapValues { (keyId, publicKeyBase64) ->
             createVerifier(keyId, publicKeyBase64)
         }
@@ -48,7 +51,11 @@ class TinkEd25519SignatureVerifier(publicKeysBase64: Map<String, String>) :
     override fun verify(keyId: String, message: ByteArray, signatureBase64: String): Boolean {
         val verifier = verifiers[keyId] ?: return false
         return try {
-            val signature = Base64.decode(signatureBase64, Base64.DEFAULT)
+            val signature = decodeStandardBase64(
+                value = signatureBase64,
+                maximumCharacters = MAX_SIGNATURE_BASE64_CHARACTERS,
+                expectedBytes = ED25519_SIGNATURE_BYTES
+            )
             verifier.verify(signature, message)
             true
         } catch (_: GeneralSecurityException) {
@@ -60,10 +67,15 @@ class TinkEd25519SignatureVerifier(publicKeysBase64: Map<String, String>) :
 
     /** Converts one raw Ed25519 key into a public-only Tink RAW keyset. */
     private fun createVerifier(keyId: String, publicKeyBase64: String): PublicKeyVerify {
-        val rawKey = Base64.decode(publicKeyBase64, Base64.DEFAULT)
-        require(rawKey.size == ED25519_PUBLIC_KEY_BYTES) {
-            "Pinned Ed25519 public key must contain 32 bytes: $keyId"
+        require(keyId.isNotBlank() && keyId.toByteArray(Charsets.UTF_8).size <= MAX_KEY_ID_BYTES) {
+            "Invalid pinned Ed25519 key id"
         }
+        require(keyId.none(Char::isISOControl)) { "Invalid pinned Ed25519 key id" }
+        val rawKey = decodeStandardBase64(
+            value = publicKeyBase64,
+            maximumCharacters = MAX_PUBLIC_KEY_BASE64_CHARACTERS,
+            expectedBytes = ED25519_PUBLIC_KEY_BYTES
+        )
         // Ed25519PublicKey protobuf: field 2 (key_value), length 32; version 0 is omitted.
         val serializedPublicKey = byteArrayOf(PROTO_KEY_VALUE_TAG, ED25519_PUBLIC_KEY_BYTES.toByte()) + rawKey
         val keysetJson = buildString {
@@ -85,9 +97,39 @@ class TinkEd25519SignatureVerifier(publicKeysBase64: Map<String, String>) :
         return handle.getPrimitive(RegistryConfiguration.get(), PublicKeyVerify::class.java)
     }
 
+    /** Strictly decodes canonical standard Base64 without ignored whitespace or excess input. */
+    private fun decodeStandardBase64(
+        value: String,
+        maximumCharacters: Int,
+        expectedBytes: Int
+    ): ByteArray {
+        require(value.length <= maximumCharacters && STANDARD_BASE64_PATTERN.matches(value)) {
+            "Invalid standard Base64"
+        }
+        val decoded = Base64.decode(value, Base64.NO_WRAP)
+        require(decoded.size == expectedBytes) { "Invalid decoded byte length" }
+        require(Base64.encodeToString(decoded, Base64.NO_WRAP) == value) {
+            "Non-canonical standard Base64"
+        }
+        return decoded
+    }
+
     companion object {
         /** Raw Ed25519 public key size defined by RFC 8032. */
         private const val ED25519_PUBLIC_KEY_BYTES = 32
+
+        /** Raw Ed25519 detached signature size defined by RFC 8032. */
+        private const val ED25519_SIGNATURE_BYTES = 64
+
+        /** Input budgets keep host keysets and untrusted detached signatures bounded. */
+        private const val MAX_PINNED_KEYS = 16
+        private const val MAX_KEY_ID_BYTES = 128
+        private const val MAX_PUBLIC_KEY_BASE64_CHARACTERS = 64
+        private const val MAX_SIGNATURE_BASE64_CHARACTERS = 128
+
+        /** Canonical padded standard Base64, excluding whitespace and URL-safe substitutions. */
+        private val STANDARD_BASE64_PATTERN =
+            Regex("^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$")
 
         /** Protobuf tag for bytes field number 2. */
         private const val PROTO_KEY_VALUE_TAG: Byte = 0x12

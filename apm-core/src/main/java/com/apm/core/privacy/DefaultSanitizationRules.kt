@@ -34,7 +34,7 @@ object DefaultSanitizationRules {
      * 示例：13812345678 → 138****5678
      */
     fun phoneRule(): SanitizationRule = SanitizationRule { input ->
-        PHONE_PATTERN.toRegex().replace(input) { match ->
+        PHONE_REGEX.replace(input) { match ->
             val phone = match.value
             "${phone.substring(0, 3)}****${phone.substring(7)}"
         }
@@ -49,7 +49,7 @@ object DefaultSanitizationRules {
      * 示例：user@example.com → u***@example.com
      */
     fun emailRule(): SanitizationRule = SanitizationRule { input ->
-        EMAIL_PATTERN.toRegex().replace(input) { match ->
+        EMAIL_REGEX.replace(input) { match ->
             val email = match.value
             val atIndex = email.indexOf('@')
             if (atIndex > 1) {
@@ -69,7 +69,7 @@ object DefaultSanitizationRules {
      * 示例：330102199001011234 → 3301************1234
      */
     fun idCardRule(): SanitizationRule = SanitizationRule { input ->
-        ID_CARD_PATTERN.toRegex().replace(input) { match ->
+        ID_CARD_REGEX.replace(input) { match ->
             val id = match.value
             "${id.substring(0, 4)}**********${id.substring(14)}"
         }
@@ -84,7 +84,7 @@ object DefaultSanitizationRules {
      * 示例：?token=abc123&user=test → ?token=***&user=test
      */
     fun urlTokenRule(): SanitizationRule = SanitizationRule { input ->
-        URL_TOKEN_PATTERN.toRegex().replace(input) { match ->
+        URL_TOKEN_REGEX.replace(input) { match ->
             // 保留参数名，替换值
             val group = match.value
             val eqIndex = group.indexOf('=')
@@ -105,7 +105,7 @@ object DefaultSanitizationRules {
      * 示例：?password=secret123 → ?password=***
      */
     fun urlPasswordRule(): SanitizationRule = SanitizationRule { input ->
-        URL_PASSWORD_PATTERN.toRegex().replace(input) { match ->
+        URL_PASSWORD_REGEX.replace(input) { match ->
             val group = match.value
             val eqIndex = group.indexOf('=')
             if (eqIndex >= 0) {
@@ -132,4 +132,11 @@ object DefaultSanitizationRules {
 
     /** URL 密码参数名模式。 */
     private const val URL_PASSWORD_PATTERN = """(?i)(?:password|passwd|pwd)=[^&\s#]+"""
+
+    /** Precompiled immutable regexes avoid reparsing attacker-influenced text on every event. */
+    private val PHONE_REGEX = Regex(PHONE_PATTERN)
+    private val EMAIL_REGEX = Regex(EMAIL_PATTERN)
+    private val ID_CARD_REGEX = Regex(ID_CARD_PATTERN)
+    private val URL_TOKEN_REGEX = Regex(URL_TOKEN_PATTERN)
+    private val URL_PASSWORD_REGEX = Regex(URL_PASSWORD_PATTERN)
 }
