@@ -20,6 +20,47 @@ plugins {
 group = "com.apm"
 version = "0.1.0"
 
+val releaseRepositoryPath = providers.gradleProperty("apmReleaseRepository")
+    .orElse(
+        layout.buildDirectory.dir("release-candidate/repository")
+            .map { it.asFile.absolutePath },
+    )
+val requireReleaseSigning = providers.gradleProperty("apmRequireSigning")
+    .map(String::toBoolean)
+    .orElse(false)
+val hasSigningKey = providers.gradleProperty("signing.keyId").isPresent ||
+    !System.getenv("SIGNING_KEY").isNullOrBlank()
+val externalReleaseRepositoryUrl = providers.gradleProperty("apmExternalRepositoryUrl")
+    .orElse(providers.environmentVariable("APM_RELEASE_REPOSITORY_URL"))
+    .orNull
+val externalReleaseRepositoryUsername = providers.gradleProperty("apmExternalRepositoryUsername")
+    .orElse(providers.environmentVariable("APM_RELEASE_REPOSITORY_USERNAME"))
+    .orNull
+val externalReleaseRepositoryPassword = providers.environmentVariable(
+    "APM_RELEASE_REPOSITORY_PASSWORD",
+).orNull
+
+if (requireReleaseSigning.get() && !hasSigningKey) {
+    throw GradleException(
+        "apmRequireSigning=true requires signing.keyId Gradle properties or " +
+            "SIGNING_KEY/SIGNING_PASSWORD environment variables.",
+    )
+}
+if (externalReleaseRepositoryUrl != null) {
+    require(externalReleaseRepositoryUrl.startsWith("https://")) {
+        "External release repository URLs must use HTTPS."
+    }
+    require(
+        !externalReleaseRepositoryUsername.isNullOrBlank() &&
+            !externalReleaseRepositoryPassword.isNullOrBlank(),
+    ) {
+        "External release publishing requires repository username and password."
+    }
+    require(hasSigningKey) {
+        "External release publishing requires PGP signing configuration."
+    }
+}
+
 apiValidation {
     ignoredProjects.addAll(listOf("apm-benchmark", "apm-sample-app"))
 }
@@ -70,12 +111,26 @@ subprojects {
                 // 每个发布产物都带上完整 POM 元数据，满足 Maven Central 校验
                 configureApmPom(this@subprojects.name)
             }
+            repositories {
+                maven {
+                    name = "releaseCandidate"
+                    url = uri(releaseRepositoryPath.get())
+                }
+                if (externalReleaseRepositoryUrl != null) {
+                    maven {
+                        name = "externalRelease"
+                        url = uri(externalReleaseRepositoryUrl)
+                        credentials {
+                            username = externalReleaseRepositoryUsername
+                            password = externalReleaseRepositoryPassword
+                        }
+                    }
+                }
+            }
         }
 
         // 仅当存在签名配置（gradle 属性或环境变量）时才启用签名，
         // 本地开发与无密钥 CI 的 publishToMavenLocal 不受影响
-        val hasSigningKey = providers.gradleProperty("signing.keyId").isPresent ||
-            System.getenv("SIGNING_KEY") != null
         if (hasSigningKey) {
             pluginManager.apply("signing")
             extensions.configure<SigningExtension>("signing") {

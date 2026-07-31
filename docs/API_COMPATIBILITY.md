@@ -58,4 +58,4 @@ ABI 门禁能捕获类、方法、字段及 JVM 签名的删除或不兼容变�
 - 外部 Maven 元数据、依赖解析或真实宿主运行兼容；
 - wire、持久化数据和服务端 Collector 兼容。
 
-因此完整客户端门禁仍同时运行单元测试、独立 Gradle plugin 测试、基线完整性和文档校验；发布变更还必须运行 Maven Local 独立 consumer 与发布链验证。
+因此完整客户端门禁仍同时运行单元测试、独立 Gradle plugin 测试、基线完整性和文档校验；发布变更还必须运行 [发布与供应链门禁](RELEASE_PROCESS.md)，由独立候选仓库同时验证 Maven 元数据、Bundle/插件解析、依赖 checksum、制品哈希和 SBOM。

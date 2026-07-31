@@ -80,7 +80,7 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "105", "JVM、Robolectric、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
+        ("测试文件", "106", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
         ("当前完整测试", "103 suites / 700 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
@@ -215,6 +215,8 @@ def build_status_report() -> Document:
             "累计值必须严格增长，平坦零值、回退、坏值和错误 UID 继续 fail closed。",
             "Device-soak schema v3 绑定 APK、clean source、matrix/budget/runner 哈希、lane 与完整设备身份；"
             "aggregate gate 要求同一 APK/source、全部 lane/profile 以及 OEM/设备/reset 多样性。",
+            "发布候选门禁校验 25 个 Maven 坐标、Bundle/Gradle 插件依赖图、Java 17 字节码与 ZIP 安全，"
+            "生成逐文件 SHA-256 manifest 和 SPDX SBOM；真实外部 staging/promotion 仍需平台凭据。",
         ],
     )
     add_diagram(document, "android-apm-event-pipeline.png", "图 1：事件从采集到确认删除的真实管线")
@@ -225,7 +227,7 @@ def build_status_report() -> Document:
         ("P0", "验收并发 eventId 幂等、commit uncertainty、ACK 丢失、重放与死信"),
         ("发布前", "在受控设备实验室按原预算执行 24h/72h、长稳功耗、热与磁盘验收"),
         ("P1", "按已固化的真机/OEM/API 矩阵执行 native、ANR、多进程和长期离线实测"),
-        ("P1", "建设 Native 符号上传/后台符号化与外部制品发布"),
+        ("P1", "建设 Native 符号上传/后台符号化；用平台凭据完成外部 Maven staging/promotion"),
         ("P2", "建设查询、聚合、告警、版本对比与 SDK 自身健康观测"),
     ]
     table = document.add_table(rows=1, cols=2)
@@ -283,6 +285,8 @@ def build_architecture_report() -> Document:
             "device-soak schema v3 绑定 exact APK/source/matrix/budget/runner/lane/device provenance；"
             "三 lane/六工件 aggregate gate 检查完整性、OEM/设备/reset 多样性和单 APK/source 一致性，"
             "plan-only 校验不产生真机结论。",
+            "四个 Gradle build root 以 SHA-256 verification metadata 固定外部构建依赖；"
+            "发布候选同时覆盖 23 个根制品、apm-plugin 和插件 marker，并输出 manifest/SPDX SBOM。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")
@@ -307,6 +311,8 @@ def build_architecture_report() -> Document:
         "./gradlew apiCheck",
         "./gradlew -p apm-plugin apiCheck",
         "python tools/verify_api_baselines.py",
+        "python tools/verify_supply_chain_metadata.py",
+        "python tools/verify_release_candidate.py",
         "./gradlew assembleDebug",
         "./gradlew testDebugUnitTest",
         "./gradlew -p apm-plugin test",
@@ -316,8 +322,6 @@ def build_architecture_report() -> Document:
         "./gradlew :apm-benchmark:verifyDeviceSoakFromResults -PapmDeviceSoakResults=<json> -PapmDeviceSoakProfile=<profile>",
         "./gradlew lintDebug",
         "./gradlew assembleRelease",
-        "./gradlew publishToMavenLocal",
-        "./gradlew -p smoke-tests/maven-consumer clean assembleDebug",
     ):
         paragraph = document.add_paragraph()
         run = paragraph.add_run(command)
@@ -332,6 +336,7 @@ def build_architecture_report() -> Document:
             "便携交接入口：docs/PROJECT_HANDOFF.md。",
             "架构细节：docs/architecture/00_整体架构.md 与对应模块文档。",
             "版本与公开面规则：docs/API_COMPATIBILITY.md；CI 只检查已提交 ABI，不自动覆盖基线。",
+            "发布、签名、依赖 checksum、SBOM 与外部仓库边界：docs/RELEASE_PROCESS.md。",
             "云端、发布和真机设备实验室清单由独立 AndroidAPM-Server 仓库的 docs/云端待建设清单.md 维护。",
             "DOCX、SVG 和 PNG 是派生产物；出现冲突时以源码和 Markdown 为准。",
             "历史原始附件已移除，不再作为文档交付或当前事实来源。",

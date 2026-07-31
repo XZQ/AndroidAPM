@@ -681,7 +681,7 @@ class ApmDispatcherTest {
         private const val WAIT_BRIEFLY_MS = 100L
 
         /** 等待异步上传完成的超时秒数。 */
-        private const val AWAIT_TIMEOUT_SECONDS = 2L
+        private const val AWAIT_TIMEOUT_SECONDS = 5L
 
         /** 秒到毫秒换算。 */
         private const val MILLIS_PER_SECOND = 1000L

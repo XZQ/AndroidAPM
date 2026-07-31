@@ -1,5 +1,20 @@
+val apmRepositoryPath = providers.gradleProperty("apmRepositoryPath").orNull
+
 pluginManagement {
+    val apmPluginRepositoryPath = providers.gradleProperty("apmRepositoryPath").orNull
     repositories {
+        if (apmPluginRepositoryPath != null) {
+            maven {
+                name = "androidApmReleaseCandidate"
+                url = uri(file(apmPluginRepositoryPath))
+                content {
+                    includeGroup("com.apm.slow-method")
+                    includeGroup("com.apm")
+                }
+            }
+        } else {
+            mavenLocal()
+        }
         google()
         mavenCentral()
         gradlePluginPortal()
@@ -9,7 +24,21 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
-        mavenLocal()
+        if (apmRepositoryPath != null) {
+            exclusiveContent {
+                forRepository {
+                    maven {
+                        name = "androidApmReleaseCandidate"
+                        url = uri(file(apmRepositoryPath))
+                    }
+                }
+                filter {
+                    includeGroup("com.apm")
+                }
+            }
+        } else {
+            mavenLocal()
+        }
         google()
         mavenCentral()
     }

@@ -113,7 +113,7 @@ dependencies {
 }
 ```
 
-当前仓库只验证过 `publishToMavenLocal` 和独立 Maven consumer；尚未发布 Maven Central 或外部私有制品库。
+仓库现在会构建独立 Maven 发布候选，校验 25 个坐标、Bundle/Gradle 插件依赖图、POM、Java 17 字节码、逐文件 SHA-256 与 SPDX SBOM，并让隔离 consumer 只从该仓库解析 Bundle 和慢方法插件。该证据仍是本地候选；尚未发布 Maven Central 或外部私有制品库。完整流程见 [发布与供应链门禁](docs/RELEASE_PROCESS.md)。
 
 ### 选择一种初始化方式
 
@@ -461,7 +461,7 @@ ApmDiagnostics.clearAllProcesses()
 
 仓库根目录的 `.java-version` 固定推荐 JDK 17；Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17。`settings.gradle.kts` 会在项目配置前拒绝低于 17 的 Gradle runtime，并给出 `JAVA_HOME` 修复提示。
 
-任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，验证 24 个发布制品的已提交 ABI 基线，强制重跑根 Android/model、included plugin，并验证文档：
+任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，验证 24 个发布制品的已提交 ABI 基线、四个 Gradle build root 的依赖 checksum 元数据和发布候选，强制重跑根 Android/model、included plugin，并验证文档：
 
 ```powershell
 python tools/verify_ci.py
@@ -484,6 +484,8 @@ python tools/verify_collector_e2e.py `
 ./gradlew.bat apiCheck
 ./gradlew.bat -p apm-plugin apiCheck
 python tools/verify_api_baselines.py
+python tools/verify_supply_chain_metadata.py
+python tools/verify_release_candidate.py --allow-dirty
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
@@ -514,9 +516,10 @@ python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-m
 发布链验证：
 
 ```powershell
-./gradlew.bat lintDebug assembleRelease publishToMavenLocal
-./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug
+python tools/verify_release_candidate.py
 ```
+
+该命令要求 clean worktree。真正外部上传前还必须注入 PGP 私钥运行 `--require-signatures`，再使用目标仓库的 HTTPS 凭据执行 staging/promotion；仓库不包含这些凭据或外部发布完成证据。
 
 以 [AGENTS.md](AGENTS.md) 和 [项目文档](docs/Android_APM_项目文档.md) 中标注的日期判断哪些命令是当前 tip 的现场验证，不能把较早结果自动外推到新提交。
 
@@ -524,7 +527,7 @@ python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-m
 
 仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、dispatcher 固定阶段的有界尾延迟证据、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断、固定 microbenchmark 预算，以及 fail-closed 的物理设备 A/B/离线/重启 smoke、24h、72h campaign 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：参考 Collector 的本地 V2/认证/幂等闭环已经联调，但生产 PostgreSQL/TLS 部署、并发与 ACK 丢失故障注入、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线仍待完成；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：参考 Collector 的本地 V2/认证/幂等闭环和外部 Maven 的签名候选/凭据边界已经固化，但生产 PostgreSQL/TLS 部署、并发与 ACK 丢失故障注入、查询/聚合/告警/Dashboard、Native 后台符号化、真实外部仓库 staging/promotion、云端 runner 接线仍待完成；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 

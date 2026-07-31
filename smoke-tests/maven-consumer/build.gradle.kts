@@ -2,6 +2,7 @@ plugins {
     // 插件版本统一取自主仓库的 version catalog，避免与主构建漂移
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    id("com.apm.slow-method") version "0.1.0"
 }
 
 java {

@@ -6,7 +6,7 @@
 
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、外部 Maven 发布、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、真实外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；共享入口同时受 2048 条和默认 8 MiB 估算字节预算约束，75% 高水位后单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响，并可淘汰足够数量的旧低优事件满足双预算。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。IPC 另有 4 MiB pending、256 KiB raw event、1 MiB file、16 MiB ready-directory 预算；outbox stale 删除计数不降到 0 以下，Retry-After 等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 105 |
+| 测试/benchmark 文件 | 106 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -217,6 +217,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件；smoke/24h/72h 分别要求 3/2/1 台设备，smoke/24h 分别要求 3/2 个厂商，smoke 还必须覆盖 `pm-clear` 与 `uninstall-reinstall`。result schema v3 绑定 exact APK、clean source revision、matrix/budget/runner hash、lane/UTC/device identity；aggregate verifier 逐工件执行原预算后再检查完整性、多样性和单 APK/source。40 个 host tests、Python 编译、plan gate 和 504 个 benchmark/sample Gradle 动作通过；plan 输出明确没有评估真机证据。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证通过 44 Markdown / 55 links，两份 DOCX 通过 OOXML 结构和关键文本检查；本机仍缺 LibreOffice/`soffice`，不声明页面渲染验收。当前没有 schema-v3 的 24h/72h 工件。
 
+同日发布与供应链门禁完成：四个 Gradle build root 提交严格 SHA-256 dependency verification metadata，策略检查覆盖 554 / 238 / 239 / 409 个 component；consumer 仅信任由候选校验器逐文件复核的内部坐标。独立候选仓库包含 25 坐标、22 AAR、26 JAR、25 POM，Bundle 精确暴露 22 个运行时制品，`com.apm.slow-method` marker 精确指向 `com.apm:apm-plugin`。校验器检查 POM/Gradle metadata/sources/固定版本/Java 17/ZIP 安全与签名完整性，生成 SHA-256 manifest 和 SPDX 2.3 SBOM；5 个 host tests 覆盖完整与篡改分支，隔离 consumer 从候选仓库解析 Bundle/插件并完成 ASM transformation 与 Debug 构建。外部 URL 强制 HTTPS，缺凭据或 PGP key 在上传前失败；仓库没有真实外部 staging/promotion 证据。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
@@ -233,6 +235,8 @@ git log --oneline -n 10
 ./gradlew.bat apiCheck
 ./gradlew.bat -p apm-plugin apiCheck
 python tools/verify_api_baselines.py
+python tools/verify_supply_chain_metadata.py
+python tools/verify_release_candidate.py --allow-dirty
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
@@ -244,8 +248,7 @@ python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-m
 6. 发布相关变更再执行：
 
 ```powershell
-./gradlew.bat lintDebug assembleRelease publishToMavenLocal
-./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug
+python tools/verify_release_candidate.py
 ```
 
 ## 后续优先级

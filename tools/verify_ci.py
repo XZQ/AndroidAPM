@@ -104,6 +104,23 @@ def main() -> int:
             [sys.executable, "tools/verify_api_baselines.py"],
         )
         run_step(
+            "dependency verification metadata",
+            [sys.executable, "tools/verify_supply_chain_metadata.py"],
+        )
+        run_step(
+            "release-candidate verifier tests",
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "tools",
+                "-p",
+                "test_verify_release_candidate.py",
+            ],
+        )
+        run_step(
             "device-lab matrix policy",
             [
                 sys.executable,
@@ -146,6 +163,14 @@ def main() -> int:
                 "test",
                 "--rerun-tasks",
                 "--no-daemon",
+            ],
+        )
+        run_step(
+            "isolated Maven release candidate",
+            [
+                sys.executable,
+                "tools/verify_release_candidate.py",
+                "--allow-dirty",
             ],
         )
         run_step(
