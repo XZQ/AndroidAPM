@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-31｜27 个构建单元｜164 个主源码文件（159 Kotlin + 4 C + 1 proto）｜102 个测试/benchmark 文件
+> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜103 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -53,8 +53,8 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 164：159 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 102 |
+| 主源码 | 165：160 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 103 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -215,6 +215,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 `ApmDiagnostics.status/snapshot/exportTo/clear` 及 `snapshotAsync/exportToAsync/clearAllProcesses` 支持现场状态、最近记录、聚合 ZIP 导出和明确范围的清理。每个 Android 进程拥有独立 journal 目录；内存环和写队列默认各有 4 MiB 字节预算，并保留原有条数预算。`status` 使用缓存资源计数，snapshot/导出读取文件时推荐异步 API。冷却期 writer 不提前出队，读/写故障独立计数；文件异常只更新本地状态并降级到内存 + 原始 Logcat，不重新进入 logger，避免递归。显式导出失败返回 `DiagnosticExportResult(success=false)`，自定义 store 的异常也不会逃逸。导出最多读取最近 16 个进程目录，合并结果受 10,000 条 / 16 MiB 双上限约束；目标不能覆盖活动 segment，manifest 带 SDK/process/session 与截断元数据。
 
+`ApmDiagnostics.hostIntegrationSnapshot()` 另行提供不访问文件的显式宿主接线证据，覆盖 Network、SQLite、IPC、WebView、线程池、Battery 和 IO。每项分别报告模块是否运行、当前显式安装/注册数、当前 init/stop 会话内观察到的信号数和最后观察时间；`NO_RUNTIME_EVIDENCE` 只表示对应宿主操作尚未在本会话发生，不能被当成静态接入失败。WebView/线程池/可用 Native IO 可报告当前 registration，其余入口在实际 callback/helper/wrapper 执行后报告 `OBSERVED`。停止模块清零活跃 registration，重新 init 清除旧会话证据。注册表只保留固定枚举、计数和时间戳，不保留 URL、SQL、路径、WebView、executor 或其他宿主数据，也不依赖 diagnostics journal 开关。
+
 结构化记录包含时间、级别、组件、错误码、进程、线程、异常类型、有限堆栈与栈指纹。消息最大 4 KiB，异常栈最大 16 KiB/64 帧，并脱敏常见 token/password/Authorization。事件 payload、业务上下文、请求正文、SQL 不进入诊断 journal。SDK 不自动上传诊断包。
 
 ## 十、配置默认值
@@ -350,7 +352,9 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是 microbenchmark 与原预算 smoke 通过，长稳尚未验收。
 
-2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 96 suites / 642 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 101 suites / 688 tests，plugin 18 tests 独立报告；该结果取代 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
+2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 97 suites / 647 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 102 suites / 693 tests，plugin 18 tests 独立报告；该结果取代同日较早的 642-test Android 刷新及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
+
+同一源码的宿主接入诊断定向验证在 JDK 17.0.14 下覆盖 core 与 Network/SQLite/IPC/WebView/ThreadPool/Battery/IO：`49` suites / `359` tests 全部通过，0 failures/errors/skips；对应 lint 与 `apm-core:apiCheck` 通过。新增确定性测试覆盖固定顺序空快照、模块/registration/observation 五态、stop 清零活跃 registration、re-init 清除旧证据、late callback 拒绝和并发精确计数。`python tools/verify_ci.py` 随后以同一源码通过 24 份 ABI、完整测试和 44 Markdown / 55 links 文档门禁。
 
 同日 Collector V2 不再只有双方各自的 mock/单元证据。独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）实现并验证 V2 envelope、typed scalar、resource/header 一致性、提交后 exact ACK 和 `(tenant_id,event_id)` 去重；服务端门禁为 57 tests、ruff/mypy/docs 全绿。客户端新增 `tools/verify_collector_e2e.py`，以真实 `HttpApmUploader` 经 Gzip HTTP 重放相同 batch，并从 test-only SQLite 核对 2 个唯一事件、12 种标量、非有限浮点安全文本、resource 和协议元数据。该结果证明跨语言 wire 兼容，不替代 PostgreSQL/TLS/代理故障/SigNoz/生产部署。
 
@@ -358,7 +362,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-102 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak host gate 的通过、解析、聚合、时长、重启、功耗、超限和 emulator 完整性分支。
+103 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion/ANR 同步 hand-off/IPC failure 分类、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、IPC 文件、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak host gate 的通过、解析、聚合、时长、重启、功耗、超限和 emulator 完整性分支。
 
 测试通过不能代替以下验证：
 

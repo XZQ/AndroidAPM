@@ -3,6 +3,7 @@ package com.apm.network
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
@@ -79,11 +80,13 @@ class NetworkModule internal constructor(
 
     override fun onStart() {
         started = config.enableNetworkMonitor
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.NETWORK, started)
         apmContext?.logger?.d("Network module started")
     }
 
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.NETWORK, false)
     }
 
     /**
@@ -177,6 +180,7 @@ class NetworkModule internal constructor(
         if (!started) {
             return
         }
+        recordIntegrationObservation()
 
         // 更新聚合统计
         totalRequests.incrementAndGet()
@@ -258,6 +262,7 @@ class NetworkModule internal constructor(
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         // 只上报慢请求的分阶段数据，避免数据量过大
         if (stats.totalMs < config.slowThresholdMs && stats.error == null) {
             return
@@ -297,6 +302,13 @@ class NetworkModule internal constructor(
             avgDurationMs = avg,
             maxDurationMs = maxDurationMs.get()
         )
+    }
+
+    /** Records value-free evidence that an installed HTTP integration observed a request. */
+    internal fun recordIntegrationObservation() {
+        if (started) {
+            apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.NETWORK)
+        }
     }
 
     /** Reads the configured URL without allowing custom connection metadata failures to escape. */

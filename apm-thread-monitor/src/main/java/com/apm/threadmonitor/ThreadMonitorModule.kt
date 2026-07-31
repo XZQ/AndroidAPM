@@ -4,6 +4,7 @@ import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
 import com.apm.core.ApmExecutors
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -60,11 +61,20 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
                 TimeUnit.MILLISECONDS
             )
         }
+        apmContext?.setHostIntegrationModuleActive(
+            HostIntegrationPoint.THREAD_POOL,
+            config.enableThreadPoolMonitor
+        )
+        apmContext?.setHostIntegrationActiveRegistrations(
+            HostIntegrationPoint.THREAD_POOL,
+            if (config.enableThreadPoolMonitor) threadPools.size() else 0
+        )
         apmContext?.logger?.d("ThreadMonitor module started")
     }
 
     override fun onStop() {
         monitoring = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.THREAD_POOL, false)
         scheduler?.shutdownNow()
         scheduler = null
         threadPools.clear()
@@ -79,6 +89,12 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
      */
     fun registerThreadPool(name: String, executor: ThreadPoolExecutor) {
         threadPools.register(name, executor)
+        if (monitoring && config.enableThreadPoolMonitor) {
+            apmContext?.setHostIntegrationActiveRegistrations(
+                HostIntegrationPoint.THREAD_POOL,
+                threadPools.size()
+            )
+        }
     }
 
     /**
@@ -87,7 +103,16 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
      * @param name registration name
      * @return true when a registration was removed
      */
-    fun unregisterThreadPool(name: String): Boolean = threadPools.unregister(name)
+    fun unregisterThreadPool(name: String): Boolean {
+        val removed = threadPools.unregister(name)
+        if (removed && monitoring && config.enableThreadPoolMonitor) {
+            apmContext?.setHostIntegrationActiveRegistrations(
+                HostIntegrationPoint.THREAD_POOL,
+                threadPools.size()
+            )
+        }
+        return removed
+    }
 
     /**
      * 执行线程快照检测。
@@ -125,7 +150,11 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
     /** Reports real queue backlog for explicitly registered executors. */
     private fun inspectRegisteredThreadPools() {
-        for (snapshot in threadPools.snapshots()) {
+        val snapshots = threadPools.snapshots()
+        if (snapshots.isNotEmpty()) {
+            apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.THREAD_POOL)
+        }
+        for (snapshot in snapshots) {
             if (snapshot.queuedTasks >= config.queueBacklogThreshold) {
                 Apm.emit(
                     module = MODULE_NAME,

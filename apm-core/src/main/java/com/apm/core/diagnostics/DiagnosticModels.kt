@@ -98,3 +98,65 @@ data class DiagnosticExportResult(
     /** Sanitized failure description, or null on success. */
     val errorMessage: String?
 )
+
+/**
+ * Explicit host integration surfaces whose runtime wiring cannot be inferred from module registration alone.
+ *
+ * Each point deliberately identifies a capability rather than a particular third-party library. For example,
+ * [NETWORK] can be observed through the OkHttp interceptor/listener, the HttpURLConnection helper, or the
+ * manual completion callback.
+ */
+enum class HostIntegrationPoint {
+    /** Host HTTP client instrumentation. */
+    NETWORK,
+    /** Host SQLite wrapper or execution callbacks. */
+    SQLITE,
+    /** Host Binder/AIDL tracing or completion callbacks. */
+    IPC,
+    /** Per-instance WebView installation, delegate wrappers, or callbacks. */
+    WEBVIEW,
+    /** Explicit host ThreadPoolExecutor registration. */
+    THREAD_POOL,
+    /** Host WakeLock, GPS, or Alarm callbacks. */
+    BATTERY,
+    /** Explicit stream wrappers, native hook, or manual IO callbacks. */
+    IO
+}
+
+/** Derived readiness state for one explicit host integration point. */
+enum class HostIntegrationState {
+    /** The owning monitor is not running in the current process. */
+    MODULE_INACTIVE,
+    /** The monitor is running, but no installation or operation has been observed in this session. */
+    NO_RUNTIME_EVIDENCE,
+    /** At least one current installation or registration exists, but no operation has been observed yet. */
+    REGISTRATION_ACTIVE,
+    /** One or more operations were observed, with no current installation count available. */
+    OBSERVED,
+    /** A current installation or registration exists and operations have also been observed. */
+    REGISTRATION_ACTIVE_AND_OBSERVED
+}
+
+/** Runtime-only, value-free evidence for one explicit host integration point. */
+data class HostIntegrationStatus(
+    /** Stable integration capability. */
+    val point: HostIntegrationPoint,
+    /** Whether the owning monitoring module is running in this process. */
+    val moduleActive: Boolean,
+    /** Current explicit installations or registrations known to the SDK. */
+    val activeRegistrations: Int,
+    /** Number of accepted integration signals observed in the current SDK session. */
+    val observedSignals: Long,
+    /** Epoch millisecond time of the latest signal, or null when none was observed. */
+    val lastObservedAtMs: Long?,
+    /** State derived from module, registration, and observation evidence. */
+    val state: HostIntegrationState
+)
+
+/** Immutable point-in-time view of explicit host integration evidence. */
+data class HostIntegrationSnapshot(
+    /** Epoch millisecond time at which the snapshot was captured. */
+    val capturedAtMs: Long,
+    /** Stable enum-order status for every supported integration point. */
+    val integrations: List<HostIntegrationStatus>
+)

@@ -8,8 +8,8 @@
 
 - 同步日期：2026-07-31
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 164 个主源码文件：159 Kotlin + 4 C + 1 proto
-- 102 个测试/benchmark 文件
+- 165 个主源码文件：160 Kotlin + 4 C + 1 proto
+- 103 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -437,6 +437,11 @@ APM 自身的初始化、模块、dispatcher、存储和 uploader 日志会同�
 
 ```kotlin
 val status = ApmDiagnostics.status()
+val hostIntegrations = ApmDiagnostics.hostIntegrationSnapshot()
+// NO_RUNTIME_EVIDENCE 表示当前会话尚无调用证据，不等同于静态判定接入失败。
+hostIntegrations.integrations.forEach { integration ->
+    log("${integration.point}: ${integration.state}")
+}
 // snapshot/export 会解析文件，推荐使用调用方提供的工作线程。
 ApmDiagnostics.snapshotAsync(executor, limit = 100) { recent -> /* render */ }
 ApmDiagnostics.exportToAsync(
@@ -447,6 +452,8 @@ ApmDiagnostics.clear()
 // 多进程宿主需要显式清理所有进程证据时使用：
 ApmDiagnostics.clearAllProcesses()
 ```
+
+`hostIntegrationSnapshot()` 不读取文件，也不依赖 diagnostics journal 是否启用。它按固定顺序返回 Network、SQLite、IPC、WebView、线程池、Battery 和 IO 的运行时证据，分别保留模块运行状态、当前显式安装/注册数、当前 SDK init/stop 会话内的信号计数与最后观察时间。WebView `install`、线程池 `registerThreadPool` 和成功安装的 IO Native hook 可形成当前 registration 证据；其他入口必须实际执行一次才会从 `NO_RUNTIME_EVIDENCE` 进入 `OBSERVED`。快照只保存枚举、计数和时间戳，不保存 URL、SQL、文件路径、WebView、executor 或其他宿主值；停止模块会清零活跃注册，重新 init 会清除旧会话证据。
 
 导出会聚合最近的最多 16 个进程目录，合并结果受 10,000 条 / 16 MiB 双上限约束，并拒绝覆盖任一活动 journal。ZIP manifest 包含格式/SDK 版本、进程名、诊断 session、健康计数以及是否发生截断；正文仅包含受控 SDK 字段和已脱敏、截断的异常信息，不复制事件 payload、业务上下文、请求正文或 SQL。SDK 默认不自动上传诊断包，分享与客服工单流程由接入方显式控制。
 
@@ -485,7 +492,7 @@ python apm-benchmark/run_device_soak.py --profile smoke --serial <serial> --apk 
 python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-budgets.json --results apm-benchmark/build/device-soak/smoke.json --profile smoke
 ```
 
-2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 101 suites / 688 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。
+2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 97 suites / 647 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 102 suites / 693 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。
 
 同日与独立服务端分支 `codex/collector-v2-e2e`（验证 tip `2feb2f5`）完成真实 HTTP 联调：客户端两次发送相同的 2-event V2 Gzip batch，只有三项精确 ACK 匹配时才报告成功；SQLite 最终保持 2 个唯一 eventId，并核对 12 种标量、`NaN/Infinity` 的 JSON-safe typed text、固定 resource 和协议元数据。服务端自身为 57 tests / 0 failures；Docker 不可用，所以 PostgreSQL/Compose/SigNoz 仍是外部待验收项。
 

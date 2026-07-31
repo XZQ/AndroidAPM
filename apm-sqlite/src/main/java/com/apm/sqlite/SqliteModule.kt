@@ -5,6 +5,7 @@ import android.database.sqlite.SQLiteDatabase
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -45,11 +46,13 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
 
     override fun onStart() {
         started = config.enableSqliteMonitor
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.SQLITE, started)
         apmContext?.logger?.d("SQLite module started, slowQueryThreshold=${config.slowQueryThresholdMs}ms")
     }
 
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.SQLITE, false)
     }
 
     /**
@@ -88,6 +91,7 @@ class SqliteModule(private val config: SqliteConfig = SqliteConfig()) : ApmModul
         if (!started) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.SQLITE)
 
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
         val isSlowQuery = durationMs >= config.slowQueryThresholdMs

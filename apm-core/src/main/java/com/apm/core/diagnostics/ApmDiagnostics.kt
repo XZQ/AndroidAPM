@@ -20,6 +20,14 @@ object ApmDiagnostics {
     fun status(): DiagnosticStatus = runtime.get()?.recorder?.status() ?: DiagnosticStatus.INACTIVE
 
     /**
+     * Returns value-free runtime evidence for host-owned integration surfaces.
+     *
+     * A running module with [HostIntegrationState.NO_RUNTIME_EVIDENCE] is not automatically a failed
+     * integration: the corresponding host operation may simply not have occurred in this SDK session.
+     */
+    fun hostIntegrationSnapshot(): HostIntegrationSnapshot = HostIntegrationRegistry.snapshot()
+
+    /**
      * Returns newest-first local diagnostic entries. Call from a worker thread because persisted journals are parsed.
      *
      * @param limit requested maximum entries

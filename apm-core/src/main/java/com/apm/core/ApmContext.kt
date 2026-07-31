@@ -1,6 +1,8 @@
 package com.apm.core
 
 import android.app.Application
+import com.apm.core.diagnostics.HostIntegrationPoint
+import com.apm.core.diagnostics.HostIntegrationRegistry
 import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
 import com.apm.core.selfmonitor.SdkDropReason
@@ -88,6 +90,29 @@ class ApmContext internal constructor(
         } else {
             dispatcher.dispatchCriticalSync(event)
         }
+    }
+
+    /**
+     * Cross-artifact SDK bridge for reporting whether an explicit host integration monitor is running.
+     *
+     * This synthetic method is intentionally hidden from Java host call sites; feature artifacts use it
+     * because Kotlin `internal` visibility cannot cross independently published Gradle modules.
+     */
+    @JvmSynthetic
+    fun setHostIntegrationModuleActive(point: HostIntegrationPoint, active: Boolean) {
+        HostIntegrationRegistry.setModuleActive(point, active)
+    }
+
+    /** Cross-artifact SDK bridge for reconciling current host registrations without retaining host objects. */
+    @JvmSynthetic
+    fun setHostIntegrationActiveRegistrations(point: HostIntegrationPoint, count: Int) {
+        HostIntegrationRegistry.setActiveRegistrations(point, count)
+    }
+
+    /** Cross-artifact SDK bridge for one value-free integration entry-point signal. */
+    @JvmSynthetic
+    fun recordHostIntegrationObservation(point: HostIntegrationPoint) {
+        HostIntegrationRegistry.recordObservation(point)
     }
 
     /** Creates a module-specific view while sharing all runtime infrastructure. */

@@ -9,6 +9,7 @@ import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -79,11 +80,19 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (started) {
             visibilityScheduler = ApmExecutors.newSingleThreadScheduledExecutor(VISIBILITY_THREAD_NAME)
         }
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.WEBVIEW, started)
+        if (started) {
+            apmContext?.setHostIntegrationActiveRegistrations(
+                HostIntegrationPoint.WEBVIEW,
+                synchronized(installations) { installations.size }
+            )
+        }
         apmContext?.logger?.d("WebView module started")
     }
 
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.WEBVIEW, false)
         pageLoadStartMap.clear()
         visibilityChecks.values.forEach { check -> check.future?.cancel(false) }
         visibilityChecks.clear()
@@ -126,6 +135,12 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         }
         webView.webViewClient = monitoringClient
         webView.webChromeClient = monitoringChrome
+        if (started) {
+            apmContext?.setHostIntegrationActiveRegistrations(
+                HostIntegrationPoint.WEBVIEW,
+                synchronized(installations) { installations.size }
+            )
+        }
     }
 
     /**
@@ -143,6 +158,12 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webChromeClient === installation.monitoringChrome) {
             webView.webChromeClient = installation.hostChrome
+        }
+        if (started) {
+            apmContext?.setHostIntegrationActiveRegistrations(
+                HostIntegrationPoint.WEBVIEW,
+                synchronized(installations) { installations.size }
+            )
         }
         return true
     }
@@ -163,6 +184,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         // 记录页面加载起始时间
         pageLoadStartMap[url] = ApmClock.monotonicTimeMillis()
         // 通知瀑布图追踪器当前活跃页面
@@ -179,6 +201,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         val startTime = pageLoadStartMap.remove(url)
         cancelVisibilityTimeout(url)
         if (startTime != null) {
@@ -209,6 +232,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         cancelVisibilityTimeout(url)
     }
 
@@ -241,6 +265,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         // 未达阈值时不报
         if (durationMs < config.jsExecutionThresholdMs) {
             return
@@ -267,6 +292,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         Apm.emit(
             module = MODULE_NAME,
             name = EVENT_WHITE_SCREEN,
@@ -295,6 +321,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         // 未启用 JS Bridge 监控时跳过
         if (!config.enableJsBridgeMonitor) {
             return
@@ -333,6 +360,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (!started) {
             return
         }
+        recordIntegrationObservation()
         // 未启用 JS Console 监控时跳过
         if (!config.enableJsConsoleMonitor) {
             return
@@ -361,13 +389,24 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         )
     }
 
+    /** Records value-free evidence that a WebView integration callback executed. */
+    private fun recordIntegrationObservation() {
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.WEBVIEW)
+    }
+
     /**
      * 获取资源加载瀑布图追踪器实例。
      * 用于在 WebViewClient.shouldInterceptRequest 中调用 onResourceStart/onResourceEnd。
      *
      * @return 瀑布图追踪器，未启用时返回 null
      */
-    fun getResourceWaterfall(): ResourceWaterfall? = resourceWaterfall
+    fun getResourceWaterfall(): ResourceWaterfall? {
+        val waterfall = resourceWaterfall ?: return null
+        if (started) {
+            recordIntegrationObservation()
+        }
+        return waterfall
+    }
 
     /** Schedules one suspected-white-screen timeout for a started page. */
     private fun scheduleVisibilityTimeout(url: String) {

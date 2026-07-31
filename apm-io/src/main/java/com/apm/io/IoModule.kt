@@ -4,6 +4,7 @@ import android.os.Looper
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -57,11 +58,17 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
             }
             nativeIoHook = NativeIoHook(config).also { it.init() }
         }
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IO, started)
+        apmContext?.setHostIntegrationActiveRegistrations(
+            HostIntegrationPoint.IO,
+            if (nativeIoHook?.isNativePltHookInstalled() == true) 1 else 0
+        )
         apmContext?.logger?.d("IO module started, mainThreadThreshold=${config.mainThreadIoThresholdMs}ms")
     }
 
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IO, false)
         nativeIoHook?.destroy()
         nativeIoHook = null
     }
@@ -71,7 +78,9 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
      * 未启动时返回原始流。
      */
     fun wrapInputStream(source: InputStream, path: String): InputStream {
-        return nativeIoHook?.wrapInputStream(source, path) ?: source
+        val wrapped = nativeIoHook?.wrapInputStream(source, path) ?: return source
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+        return wrapped
     }
 
     /**
@@ -79,7 +88,9 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
      * 未启动时返回原始流。
      */
     fun wrapOutputStream(source: OutputStream, path: String): OutputStream {
-        return nativeIoHook?.wrapOutputStream(source, path) ?: source
+        val wrapped = nativeIoHook?.wrapOutputStream(source, path) ?: return source
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+        return wrapped
     }
 
     /**
@@ -87,7 +98,9 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
      * 用于小 buffer、重复读和吞吐量统计。
      */
     fun onRead(path: String, bytesRead: Int, bufferUsed: Int) {
-        nativeIoHook?.onRead(path, bytesRead, bufferUsed)
+        val hook = nativeIoHook ?: return
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+        hook.onRead(path, bytesRead, bufferUsed)
     }
 
     /**
@@ -95,7 +108,9 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
      * 用于主线程 IO、FD 释放和 closeable 泄漏分析。
      */
     fun onClose(source: Any, totalBytes: Long) {
-        nativeIoHook?.onClose(source, totalBytes)
+        val hook = nativeIoHook ?: return
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+        hook.onClose(source, totalBytes)
     }
 
     /**
@@ -103,7 +118,9 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
      * 零拷贝检测开启时用于识别优化机会。
      */
     fun onBufferCopy(fromPath: String, toPath: String, bytes: Long, bufferCount: Int) {
-        nativeIoHook?.onBufferCopy(fromPath, toPath, bytes, bufferCount)
+        val hook = nativeIoHook ?: return
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+        hook.onBufferCopy(fromPath, toPath, bytes, bufferCount)
     }
 
     /**
@@ -119,6 +136,7 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
         if (!started) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
 
         // 判断是否在主线程
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()

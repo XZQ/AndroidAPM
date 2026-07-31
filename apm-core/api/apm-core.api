@@ -146,6 +146,9 @@ public final class com/apm/core/ApmContext {
 	public final fun getLogger ()Lcom/apm/core/ApmLogger;
 	public final fun getProcessName ()Ljava/lang/String;
 	public final fun getSelfMonitor ()Lcom/apm/core/selfmonitor/SdkSelfMonitor;
+	public final synthetic fun recordHostIntegrationObservation (Lcom/apm/core/diagnostics/HostIntegrationPoint;)V
+	public final synthetic fun setHostIntegrationActiveRegistrations (Lcom/apm/core/diagnostics/HostIntegrationPoint;I)V
+	public final synthetic fun setHostIntegrationModuleActive (Lcom/apm/core/diagnostics/HostIntegrationPoint;Z)V
 	public final fun setSelfMonitor (Lcom/apm/core/selfmonitor/SdkSelfMonitor;)V
 }
 
@@ -406,6 +409,7 @@ public final class com/apm/core/diagnostics/ApmDiagnostics {
 	public final fun clearAllProcesses ()Z
 	public final fun exportTo (Ljava/io/File;)Lcom/apm/core/diagnostics/DiagnosticExportResult;
 	public final fun exportToAsync (Ljava/util/concurrent/Executor;Ljava/io/File;Lkotlin/jvm/functions/Function1;)V
+	public final fun hostIntegrationSnapshot ()Lcom/apm/core/diagnostics/HostIntegrationSnapshot;
 	public final fun snapshot (I)Ljava/util/List;
 	public static synthetic fun snapshot$default (Lcom/apm/core/diagnostics/ApmDiagnostics;IILjava/lang/Object;)Ljava/util/List;
 	public final fun snapshotAsync (Ljava/util/concurrent/Executor;ILkotlin/jvm/functions/Function1;)V
@@ -535,6 +539,64 @@ public final class com/apm/core/diagnostics/DiagnosticsConfig {
 	public final fun getRetainedFileCount ()I
 	public final fun getWriterQueueByteLimit ()J
 	public final fun getWriterQueueCapacity ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/core/diagnostics/HostIntegrationPoint : java/lang/Enum {
+	public static final field BATTERY Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field IO Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field IPC Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field NETWORK Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field SQLITE Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field THREAD_POOL Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static final field WEBVIEW Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public static fun values ()[Lcom/apm/core/diagnostics/HostIntegrationPoint;
+}
+
+public final class com/apm/core/diagnostics/HostIntegrationSnapshot {
+	public fun <init> (JLjava/util/List;)V
+	public final fun component1 ()J
+	public final fun component2 ()Ljava/util/List;
+	public final fun copy (JLjava/util/List;)Lcom/apm/core/diagnostics/HostIntegrationSnapshot;
+	public static synthetic fun copy$default (Lcom/apm/core/diagnostics/HostIntegrationSnapshot;JLjava/util/List;ILjava/lang/Object;)Lcom/apm/core/diagnostics/HostIntegrationSnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCapturedAtMs ()J
+	public final fun getIntegrations ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/core/diagnostics/HostIntegrationState : java/lang/Enum {
+	public static final field MODULE_INACTIVE Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static final field NO_RUNTIME_EVIDENCE Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static final field OBSERVED Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static final field REGISTRATION_ACTIVE Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static final field REGISTRATION_ACTIVE_AND_OBSERVED Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/core/diagnostics/HostIntegrationState;
+	public static fun values ()[Lcom/apm/core/diagnostics/HostIntegrationState;
+}
+
+public final class com/apm/core/diagnostics/HostIntegrationStatus {
+	public fun <init> (Lcom/apm/core/diagnostics/HostIntegrationPoint;ZIJLjava/lang/Long;Lcom/apm/core/diagnostics/HostIntegrationState;)V
+	public final fun component1 ()Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public final fun component2 ()Z
+	public final fun component3 ()I
+	public final fun component4 ()J
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun component6 ()Lcom/apm/core/diagnostics/HostIntegrationState;
+	public final fun copy (Lcom/apm/core/diagnostics/HostIntegrationPoint;ZIJLjava/lang/Long;Lcom/apm/core/diagnostics/HostIntegrationState;)Lcom/apm/core/diagnostics/HostIntegrationStatus;
+	public static synthetic fun copy$default (Lcom/apm/core/diagnostics/HostIntegrationStatus;Lcom/apm/core/diagnostics/HostIntegrationPoint;ZIJLjava/lang/Long;Lcom/apm/core/diagnostics/HostIntegrationState;ILjava/lang/Object;)Lcom/apm/core/diagnostics/HostIntegrationStatus;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getActiveRegistrations ()I
+	public final fun getLastObservedAtMs ()Ljava/lang/Long;
+	public final fun getModuleActive ()Z
+	public final fun getObservedSignals ()J
+	public final fun getPoint ()Lcom/apm/core/diagnostics/HostIntegrationPoint;
+	public final fun getState ()Lcom/apm/core/diagnostics/HostIntegrationState;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

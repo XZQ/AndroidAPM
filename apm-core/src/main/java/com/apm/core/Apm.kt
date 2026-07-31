@@ -20,6 +20,7 @@ import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.core.selfmonitor.publishSdkHealthReport
 import com.apm.core.diagnostics.ApmDiagnostics
 import com.apm.core.diagnostics.DiagnosticLevel
+import com.apm.core.diagnostics.HostIntegrationRegistry
 import com.apm.uploader.ApmUploader
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CopyOnWriteArraySet
@@ -176,12 +177,14 @@ object Apm {
             MESSAGE_INIT_STARTED,
             null
         )
+        HostIntegrationRegistry.beginSession()
 
         // 根据进程策略决定是否跳过非主进程
         if (config.processStrategy == ProcessStrategy.MAIN_PROCESS_ONLY &&
             !application.isMainProcessCompat()
         ) {
             logger.d("Skip init in non-main process: $processName")
+            HostIntegrationRegistry.endSession()
             ApmDiagnostics.shutdown()
             return
         }
@@ -345,6 +348,7 @@ object Apm {
                 uploader = stagedUploader,
                 store = stagedStore
             )
+            HostIntegrationRegistry.endSession()
             throw error
         }
     }
@@ -392,6 +396,7 @@ object Apm {
             cleanupSafely("$ERROR_TAG_STOP_MODULE_PREFIX${module.name}") { module.onStop() }
         }
         currentState.startedModules.clear()
+        HostIntegrationRegistry.endSession()
         cleanupSafely(ERROR_TAG_STOP_DISPATCHER) { currentState.dispatcher.shutdown() }
         try {
             ApmDiagnostics.record(

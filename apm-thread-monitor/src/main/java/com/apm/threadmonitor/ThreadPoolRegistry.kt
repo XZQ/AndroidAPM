@@ -45,6 +45,9 @@ internal class ThreadPoolRegistry {
         )
     }
 
+    /** Returns the exact current registration count. */
+    fun size(): Int = executors.size
+
     /** Releases strong references to every registered executor. */
     fun clear() {
         executors.clear()

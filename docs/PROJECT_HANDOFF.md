@@ -32,8 +32,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 164：159 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 102 |
+| 主源码 | 165：160 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 103 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -74,6 +74,7 @@ Apm.emit
 - FileEventStore 是非 durable 兼容路径。
 - Crash/ANR 使用 `Apm.emitCriticalSync` 绕过共享 queue/sampling/aggregation/rate limit，较低 priority 自动提升为 CRITICAL；成功表示完整事件同步到 SQLite 或 critical IPC 文件，不在现场线程执行网络 IO。IPC 同步拒绝返回准确的 event/file/directory budget reason。
 - SDK 自诊断使用条数 + 字节双预算内存环/队列和按进程隔离的 app-private 滚动文件，不经过 dispatcher/outbox/uploader；每个 `sdk_health` 先写独立数值摘要，再以 HIGH 优先级尝试事件通道。每个 loss 同时记录稳定 reason 与 priority，兼容聚合结果显式进入 `UNATTRIBUTED`；SQLite capacity/prune 保留精确 priority counts。`dispatcherModuleIsolationDropCount` 单列模块隔离丢弃且同时计入总 drop，`queueBytes` 与 `queueSize` 同时暴露入口压力；支持全进程聚合导出和 executor 异步读取。
+- `ApmDiagnostics.hostIntegrationSnapshot()` 以不访问文件、与 journal 开关无关的方式报告 Network/SQLite/IPC/WebView/线程池/Battery/IO 显式接线的模块状态、活跃 registration、会话内信号数和最后时间。它只保留固定枚举/计数/时间戳；`NO_RUNTIME_EVIDENCE` 是“本会话尚未发生”，不是静态失败结论。停止清零活跃 registration，重新 init 清除旧证据。
 
 ## 接入现实
 
@@ -92,6 +93,8 @@ Apm.emit
 - Slow Method：宿主应用 Gradle ASM 插件
 
 不宣称无法由公共 API 支撑的能力：通用 Binder hidden hook、进程级 WebView 自动接管、通用线程 leak 判断和 GPU overdraw 计数。对应旧字段已弃用并默认关闭，真实能力使用显式 API；FrameMetrics 和注册线程池 backlog 已实现。
+
+接入自检应在代表性 Network/SQLite/IPC/WebView/Battery/IO 流程实际执行后读取 `ApmDiagnostics.hostIntegrationSnapshot()`；WebView 与线程池可先凭当前 registration 证明安装，其他 `NO_RUNTIME_EVIDENCE` 项需要结合“该流程本次是否发生”判断，不能单靠一次冷启动快照作为发布门禁。
 
 初始化方式也必须明确二选一：手动 `Apm.init` 的宿主从合并 manifest 移除 `ApmInitProvider`；自动模式保留 Provider 并配置 `com.apm.config_class`。Sample 使用手动模式，并为 IO wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册及 Battery 回调提供可运行入口。
 
@@ -202,9 +205,11 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于三项 microbenchmark 和原预算 smoke。
 
-2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 96 suites / 642 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 101 suites / 688 tests，plugin 18 tests 独立报告，取代 2026-07-22 的 682-test 组合基线。
+2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 97 suites / 647 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 102 suites / 693 tests，plugin 18 tests 独立报告，取代同日较早的 642-test Android 刷新和 2026-07-22 的 682-test 组合基线。
 
-同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告仍为 Android 96 suites / 642 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与新增 ABI 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 97 suites / 647 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与新增 API 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+
+同一源码的宿主接入诊断定向验证覆盖 core 与 Network/SQLite/IPC/WebView/ThreadPool/Battery/IO 七个模块：JDK 17.0.14 下 `49` suites / `359` tests 全部通过，0 failures/errors/skips；对应 lint 与 `apm-core:apiCheck` 通过。固定大小 registry 的并发、init/stop 会话重置、late-callback 拒绝、模块/registration/observation 五态转换都有确定性测试。该证据证明运行时只读诊断的线程安全和生命周期语义，不把未发生流量的 `NO_RUNTIME_EVIDENCE` 提升为静态接入失败结论。
 
 同日 Collector V2 跨仓闭环完成：独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）通过 57 tests、ruff、mypy 和文档校验。客户端 `tools/verify_collector_e2e.py` 以 JDK 17 构建真实 `HttpApmUploader`，启动实际 FastAPI/uvicorn Gateway，经 Gzip HTTP 两次发送相同 2-event V2 batch；两次均取得精确 schema/batch/count ACK，测试用 SQLite inbox 最终仅有 2 个 eventId，12 种 typed scalar、`NaN/Infinity` 的 JSON-safe typed text、resource 和协议元数据均经数据库复核。该脚本不输出一次性 ingest key。Docker 本机不可用，因此不能把这一 SQLite 兼容闭环外推为 PostgreSQL、TLS、Compose、SigNoz 或生产 durability 验收。
 

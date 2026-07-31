@@ -11,6 +11,7 @@ import com.apm.core.Apm
 import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -120,12 +121,17 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
                 start()
             }
         }
+        apmContext?.setHostIntegrationModuleActive(
+            HostIntegrationPoint.BATTERY,
+            config.enableWakeLockHook || config.enableGpsMonitor || config.enableAlarmMonitor
+        )
         apmContext?.logger?.d("Battery module started")
     }
 
     /** 注销广播和定时检测。 */
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.BATTERY, false)
         mainHandler.removeCallbacks(checkTask)
         cpuJiffiesSampler?.stop()
         cpuJiffiesSampler = null
@@ -150,6 +156,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableWakeLockHook) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.BATTERY)
         activeWakeLocks[tag] = ApmClock.monotonicTimeMillis()
     }
 
@@ -161,6 +168,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableWakeLockHook) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.BATTERY)
         val acquireTime = activeWakeLocks.remove(tag) ?: return
         val duration = ApmClock.elapsedMillisSince(acquireTime)
         if (duration >= config.wakeLockThresholdMs) {
@@ -187,6 +195,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableGpsMonitor) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.BATTERY)
         activeGpsSessions[tag] = ApmClock.monotonicTimeMillis()
     }
 
@@ -199,6 +208,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableGpsMonitor) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.BATTERY)
         val startedAt = activeGpsSessions.remove(tag) ?: return
         val duration = ApmClock.elapsedMillisSince(startedAt)
         if (duration >= config.gpsThresholdMs) {
@@ -216,6 +226,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         if (!started || !config.enableAlarmMonitor || config.alarmFloodThreshold <= 0) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.BATTERY)
         val now = ApmClock.monotonicTimeMillis()
         alarmTimestamps += now
         removeExpiredAlarms(now)

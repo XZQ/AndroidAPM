@@ -682,6 +682,9 @@ class NativeIoHook(private val config: IoConfig) {
         nativeHookInstalled = nativeHookInstaller.install()
     }
 
+    /** Reports whether the optional process-wide Native PLT hook is currently installed. */
+    internal fun isNativePltHookInstalled(): Boolean = nativeHookInstalled
+
     /**
      * 处理 Native 层上报的 IO 事件。
      * 由伴生对象的静态 JNI 桥接方法 [onNativeIoEvent] 转发到当前活跃实例。

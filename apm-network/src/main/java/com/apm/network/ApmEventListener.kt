@@ -71,6 +71,7 @@ class ApmEventListener(
     )
 
     override fun callStart(call: Call) {
+        networkModule.recordIntegrationObservation()
         // 容量保护：若 callEnd/callFailed 因异常路径未触发，防止 map 无限增长泄漏
         if (callTimings.size >= MAX_TRACKED_CALLS) {
             evictOldestTiming()

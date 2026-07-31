@@ -20,6 +20,7 @@ class ApmNetworkInterceptor(private val networkModule: NetworkModule) : Intercep
 
     @Throws(IOException::class)
     override fun intercept(chain: Interceptor.Chain): Response {
+        networkModule.recordIntegrationObservation()
         val request = chain.request()
         val startTimeMs = ApmClock.monotonicTimeMillis()
 

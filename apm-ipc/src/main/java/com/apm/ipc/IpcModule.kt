@@ -5,6 +5,7 @@ import com.apm.core.Apm
 import com.apm.core.ApmClock
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
@@ -52,6 +53,7 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
     override fun onStart() {
         started = config.enableIpcMonitor
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IPC, started)
         @Suppress("DEPRECATION")
         if (config.enableBinderHook) {
             apmContext?.logger?.w("enableBinderHook is deprecated and ignored; use traceBinderCall")
@@ -61,6 +63,7 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
 
     override fun onStop() {
         started = false
+        apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IPC, false)
         aggregator?.reset()
     }
 
@@ -97,6 +100,7 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
         if (!started) {
             return
         }
+        apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IPC)
 
         val isMainThread = Looper.myLooper() == Looper.getMainLooper()
         val threshold = if (isMainThread) config.mainThreadBinderThresholdMs else config.binderThresholdMs

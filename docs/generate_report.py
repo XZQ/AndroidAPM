@@ -79,9 +79,9 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "164", "159 Kotlin + 4 C + 1 proto"),
+        ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
         ("测试文件", "102", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
-        ("当前完整测试", "101 suites / 688 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("当前完整测试", "102 suites / 693 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -116,6 +116,7 @@ def add_capability_table(document: Document) -> None:
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
         ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；24h/72h 门禁保留，延期到预生产受控设备实验室"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
+        ("运行时接入自检", "hostIntegrationSnapshot 模块/注册/调用证据", "只存枚举、计数、时间戳；无流量不能被误判为静态接入失败"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
         ("扩展", "Trace、OTel exporter", "Trace 为进程内 span；OTel exporter 仅做事件映射"),
@@ -207,6 +208,8 @@ def build_status_report() -> Document:
             "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",
             "Dispatcher 在 self-monitor 开启时以固定无逐样本分配直方图输出六阶段 count、平均、P95 上界和最大延迟；"
             "关闭时跳过计时，阶段证据不自动触发并行化。",
+            "ApmDiagnostics 以固定大小、无宿主值的 hostIntegrationSnapshot 区分模块运行、当前 registration 与会话内调用证据；"
+            "NO_RUNTIME_EVIDENCE 只表示本会话尚未发生相应流程。",
             "Device-soak UID 功耗优先读取 package-scoped 值，OEM 隐藏时精确读取 current checkin pwi；"
             "累计值必须严格增长，平坦零值、回退、坏值和错误 UID 继续 fail closed。",
         ],
@@ -267,6 +270,8 @@ def build_architecture_report() -> Document:
             "sample app 是接入示例和冒烟入口，不是生产 collector。",
             "单 dispatcher worker 保留顺序语义；sdk_health 的六阶段 count/平均/P95 上界/最大延迟字段"
             "用于先归因再决定是否分区或并行。",
+            "显式宿主接入状态由 7 个固定枚举槽记录 module/registration/observation/time；"
+            "不保留 URL、SQL、路径、WebView 或 executor，init/stop 定义证据会话边界。",
             "apm-benchmark 不进入 Maven publication；microbenchmark 固定 time/allocation，device-soak 固定 A/B/资源/时长/重启证据，并区分 enabled 绝对 CPU 门禁与 control/delta 归因；OEM 禁止 pm clear 时只对所选 sample APK 卸载重装并记录 provenance。",
             "device-soak 仅对只读证据命令做三类 ADB transport 瞬断的有界重试；smoke/long 默认窗口为 30/300 秒、绝对上限 600 秒，副作用命令不自动重放，工件保留 window/retry count。",
             "device-soak UID 功耗可从精确 current-checkin pwi 回退采集，但累计值必须严格增长；"

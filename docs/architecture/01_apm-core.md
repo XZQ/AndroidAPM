@@ -237,6 +237,8 @@ PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身
 
 进程名安全前缀 + SHA-256 前缀形成稳定独立目录，避免子进程与主进程轮转同一文件。`exportTo` 聚合最近最多 16 个进程 journal、合并当前内存证据，并以 10,000 条 / 16 MiB 双上限约束未压缩 JSONL；目标不能覆盖任一源 segment，manifest 包含格式/SDK/session/process 及截断元数据。自定义 diagnostic store 导出异常也转换为 `DiagnosticExportResult(success=false)`，不逃逸到宿主。`snapshot/exportTo` 同步兼容接口要求工作线程，宿主应优先使用 `snapshotAsync/exportToAsync`；`clear` 仅清当前进程，`clearAllProcesses` 为显式跨进程清理。
 
+`HostIntegrationRegistry` 是独立于 journal 的固定大小进程内状态：7 个枚举槽分别使用原子 module/registration/observation/time 字段，不保留宿主对象或业务值。监控模块通过 `ApmContext` 的 synthetic 跨制品 SPI 更新状态，宿主只从 `ApmDiagnostics.hostIntegrationSnapshot()` 读取不可变结果。状态机明确区分 `MODULE_INACTIVE`、运行但尚无证据、当前 registration、已观察调用，以及 registration + 调用同时存在；因此低流量场景不会被伪判为接入失败。`Apm.init` 在通过配置校验后开始新会话并清除旧证据，初始化回滚/跳过进程/`stop` 停止后续更新并清零活跃 registration；已停止会话的观察计数仅用于本地支持查看，下一次 init 才清除。
+
 初始化资源先保存在局部 staged 状态，全部成功后才发布；失败时按 scheduler → coordinator → dispatcher（或 uploader/store）逆序回滚。停止阶段隔离各模块与基础设施异常，独立诊断最后关闭。`ApmLogger.withComponent` 为 uploader、dispatcher、aggregation、privacy 和具体监控模块保留真实归属。`sdk_health` 中诊断 drop/write failure 使用区间增量而非累计值。
 
 ## 12. ApmExecutors
