@@ -345,21 +345,12 @@ internal class ApmDispatcher(
             } else {
                 0L
             }
-            val evictionCandidates = queue
-                .filter { existing -> existing.priority.value < queued.priority.value }
-                .sortedBy(QueuedEvent::priority)
-            val selectedVictims = ArrayList<QueuedEvent>()
-            var selectedBytes = 0L
-            // Byte pressure may require multiple lower-priority victims, unlike count pressure.
-            for (candidate in evictionCandidates) {
-                selectedVictims += candidate
-                selectedBytes += candidate.estimatedBytes
-                if ((!needsQueueSlot || selectedVictims.isNotEmpty()) && selectedBytes >= bytesToFree) {
-                    break
-                }
-            }
-            val canReplace = (!needsQueueSlot || selectedVictims.isNotEmpty()) && selectedBytes >= bytesToFree
-            if (canReplace) {
+            val selectedVictims = selectEvictionVictims(
+                incomingPriority = queued.priority,
+                bytesToFree = bytesToFree,
+                needsQueueSlot = needsQueueSlot
+            )
+            if (selectedVictims != null) {
                 for (victim in selectedVictims) {
                     if (removeTracked(victim)) {
                         logger.d(
@@ -387,6 +378,59 @@ internal class ApmDispatcher(
         } finally {
             admissionLock.unlock()
         }
+    }
+
+    /**
+     * Selects the oldest lowest-priority victims without materializing and sorting the full queue.
+     *
+     * One allocation-free pass first proves enough lower-priority count/bytes exist. There are only
+     * four fixed priorities, so at most three following FIFO passes preserve the existing
+     * LOW-before-NORMAL-before-HIGH and oldest-first policy. The only allocation is the final
+     * victim list after sufficiency is proven.
+     *
+     * @return sufficient victims in removal order, or null when replacement cannot fit
+     */
+    private fun selectEvictionVictims(
+        incomingPriority: ApmPriority,
+        bytesToFree: Long,
+        needsQueueSlot: Boolean
+    ): List<QueuedEvent>? {
+        var eligibleCount = 0
+        var eligibleBytes = 0L
+        for (candidate in queue) {
+            if (candidate.priority.value >= incomingPriority.value) {
+                continue
+            }
+            eligibleCount += 1
+            eligibleBytes += candidate.estimatedBytes
+            if ((!needsQueueSlot || eligibleCount > 0) && eligibleBytes >= bytesToFree) {
+                break
+            }
+        }
+        if ((needsQueueSlot && eligibleCount == 0) || eligibleBytes < bytesToFree) {
+            return null
+        }
+
+        val selectedVictims = ArrayList<QueuedEvent>()
+        var selectedBytes = 0L
+        for (priority in EVICTION_PRIORITY_ORDER) {
+            if (priority.value >= incomingPriority.value) {
+                break
+            }
+            for (candidate in queue) {
+                if (candidate.priority != priority) {
+                    continue
+                }
+                selectedVictims += candidate
+                selectedBytes += candidate.estimatedBytes
+                if ((!needsQueueSlot || selectedVictims.isNotEmpty()) &&
+                    selectedBytes >= bytesToFree
+                ) {
+                    return selectedVictims
+                }
+            }
+        }
+        return null
     }
 
     /** Returns true when a NORMAL/LOW source has consumed its pressure-time queue share. */
@@ -547,30 +591,17 @@ internal class ApmDispatcher(
                 if (!passesSampling) {
                     continue
                 }
-                // 聚合检查 — 可能吞入事件（返回空）或输出聚合结果
-                val expanded = if (aggregator != null && !queued.preAggregated) {
-                    measureDispatcherStage(DispatcherStage.AGGREGATE) {
+                if (aggregator != null && !queued.preAggregated) {
+                    // Aggregation may swallow or expand an event. This is the only path that
+                    // requires a collection; the default aggregation-disabled path stays scalar.
+                    val expanded = measureDispatcherStage(DispatcherStage.AGGREGATE) {
                         aggregator.process(resolved)
                     }
+                    for (event in expanded) {
+                        processResolvedEvent(event, toPersist)
+                    }
                 } else {
-                    listOf(resolved)
-                }
-                for (event in expanded) {
-                    // 限流检查（ERROR/FATAL 跳过限流，保证关键事件不丢失）
-                    val passesRateLimit = measureDispatcherStage(DispatcherStage.RATE_LIMIT) {
-                        passesRateLimit(event)
-                    }
-                    if (!passesRateLimit) {
-                        continue
-                    }
-                    // PII 脱敏：在存储和上传前对文本字段执行脱敏
-                    toPersist += if (piiSanitizer != null) {
-                        measureDispatcherStage(DispatcherStage.SANITIZE) {
-                            piiSanitizer.sanitize(event)
-                        }
-                    } else {
-                        event
-                    }
+                    processResolvedEvent(resolved, toPersist)
                 }
             } catch (error: Exception) {
                 // One malformed or failing monitor event must not terminate the shared worker.
@@ -602,9 +633,11 @@ internal class ApmDispatcher(
                 persistentUploadWorker.signal()
             } else {
                 // 内存路径逐条交给 uploader（其内部自带队列/批量）
-                val rejectedEventIds = appendResult.rejectedEvents.mapTo(hashSetOf(), ApmEvent::eventId)
+                val rejectedEventIds = appendResult.rejectedEvents
+                    .takeIf { rejected -> rejected.isNotEmpty() }
+                    ?.mapTo(hashSetOf(), ApmEvent::eventId)
                 for (event in toPersist) {
-                    if (event.eventId in rejectedEventIds) {
+                    if (rejectedEventIds != null && event.eventId in rejectedEventIds) {
                         continue
                     }
                     if (!uploader.upload(event)) {
@@ -790,6 +823,25 @@ internal class ApmDispatcher(
         }
     }
 
+    /** Applies rate limiting and optional sanitization to one scalar pipeline event. */
+    private fun processResolvedEvent(event: ApmEvent, toPersist: MutableList<ApmEvent>) {
+        // ERROR/FATAL bypass rate limiting so critical signals remain deliverable.
+        val passesRateLimit = measureDispatcherStage(DispatcherStage.RATE_LIMIT) {
+            passesRateLimit(event)
+        }
+        if (!passesRateLimit) {
+            return
+        }
+        // PII sanitization always precedes storage and upload.
+        toPersist += if (piiSanitizer != null) {
+            measureDispatcherStage(DispatcherStage.SANITIZE) {
+                piiSanitizer.sanitize(event)
+            }
+        } else {
+            event
+        }
+    }
+
     /**
      * Measures one fixed dispatcher stage only when SDK self-monitoring is active.
      *
@@ -905,6 +957,13 @@ internal class ApmDispatcher(
 
         /** Stable bucket for a missing or blank source module. */
         private const val UNKNOWN_SOURCE_MODULE = "unknown"
+
+        /** Fixed low-to-high eviction passes; queue iteration preserves FIFO within each pass. */
+        private val EVICTION_PRIORITY_ORDER = arrayOf(
+            ApmPriority.LOW,
+            ApmPriority.NORMAL,
+            ApmPriority.HIGH
+        )
 
         /** Internal-error tag for one failed queued event transformation. */
         private const val ERROR_PROCESS_EVENT = "dispatcher_process_event"

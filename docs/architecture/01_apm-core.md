@@ -111,6 +111,8 @@ event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context 
 
 公共配置为 `maxDispatcherQueueBytes=8388608`、`enableDispatcherModuleIsolation=true`、`dispatcherIsolationHighWatermarkPercent=75`、`dispatcherMaxModuleQueueSharePercent=50`；两个百分比运行时约束到 1–100，单模块占比不会高于高水位。关闭模块隔离时不维护模块占用 map，但条数/字节总预算仍生效。该门禁只隔离共享入口容量，worker 仍单线程顺序执行以下 pipeline；它不构成多 worker 或按模块并行化声明。
 
+满队列或字节压力下的高优先级替换先用一次无分配扫描证明低优先级条数/字节足够，再按固定 LOW→NORMAL→HIGH 优先级做最多三次 FIFO 扫描，同优先级保持 oldest-first。选择阶段只分配最终 victim list，确认条数/字节都能满足后才原子 remove + offer；不再把最多 2,048 个低优先级候选复制后排序。`apm-benchmark` 通过 32 次常态准入与满队列 HIGH 准入两个公共 API AndroidX 方法保护这条 producer path；当前源码已编译，新增两项仍待物理设备生成完整 time/allocation JSON。
+
 ### 批处理顺序
 
 ```text
@@ -126,6 +128,8 @@ resolve lazy event
 ```
 
 单个 queued event 的 lazy factory、聚合、限流或脱敏出现 recoverable `Exception` 时只丢弃该事件并记录 internal error，后续事件继续；批量存储的 recoverable 异常会把整批计入 drop，但不会让 worker 退出。`VirtualMachineError` 等 fatal VM error 不转换为 drop。
+
+默认关闭聚合或处理 pre-aggregated 事件时，worker 直接把单个 resolved event 送入限流/脱敏，不再为每条事件创建 `listOf(event)`；非 durable store 在存储没有拒绝项时也不再创建空的 rejected-id `HashSet`。只有真实聚合扩展或真实拒绝集合才承担对应 collection 分配。
 
 启用 self-monitor 时，worker 用单调纳秒测量 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize` 和 `storeHandoff`。每阶段维护固定 22 桶直方图及 count/sum/max，记录路径无逐样本对象分配；周期 snapshot 通过短同步区间取得一致 count、向上取整平均微秒、保守 P95 桶上界和最大微秒后清零。`storeHandoff` 是 batch append，因此其 count 与按 event/expanded-event 运行的其他阶段不应直接比较；聚合/脱敏禁用或 pre-aggregated bypass 时相应阶段可以为零。关闭 self-monitor 时计时 helper 直接执行原 block，不读取单调时钟。这些字段不改变 worker 顺序、采样、限流或 AutoThrottle 决策。
 

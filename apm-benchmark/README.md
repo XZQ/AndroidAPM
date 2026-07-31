@@ -3,7 +3,7 @@
 `apm-benchmark` is a non-published verification module with two measurement
 layers and one aggregate device-lab acceptance contract:
 
-1. AndroidX Microbenchmark measures durable codec and the 32-event SQLite transaction.
+1. AndroidX Microbenchmark measures durable codec, the 32-event SQLite transaction, 32 accepted dispatcher emissions, and HIGH-priority admission into a full 2,048-event queue.
 2. The host-driven sample-App campaign measures cold start, SDK init, main-thread emit, CPU, PSS, app-private disk, app UID power attribution, thermal status, collector outage, and process restart recovery.
 3. `device-lab-matrix.json` requires non-overlapping legacy, mainstream, and
    modern API lanes plus profile-level device, manufacturer, and reset-strategy
@@ -15,7 +15,7 @@ Build-only or host-unit-test success does not produce physical-device performanc
 
 The `2026-07-23` run on a physical Redmi/Xiaomi `22041216UC` (Android 13) produced two distinct results:
 
-- the declared `AndroidBenchmarkRunner` completed all three microbenchmarks without suppressed AndroidX errors, and the checked-in verifier accepted encode at `4,640.93 ns / 22.00 allocations`, decode at `4,841.81 ns / 46.00 allocations`, and the 32-event SQLite transaction at `1,258,990.52 ns / 1,400.21 allocations`;
+- the declared `AndroidBenchmarkRunner` completed the three methods that existed at that revision without suppressed AndroidX errors, and the checked-in verifier accepted encode at `4,640.93 ns / 22.00 allocations`, decode at `4,841.81 ns / 46.00 allocations`, and the 32-event SQLite transaction at `1,258,990.52 ns / 1,400.21 allocations`;
 - the first two complete `smoke` acquisitions failed only `maxCpuAveragePercent`: `28.425%` and `32.046%` against the `20%` ceiling. Thread-level attribution identified perpetual FPS Choreographer callbacks on a static Activity as the dominant observer load;
 - after API 24+ FPS collection switched to event-driven FrameMetrics with Choreographer only as registration/disable fallback, two complete runs of the same APK SHA-256 passed every unchanged smoke budget at `12.928%` and `12.362%` CPU. No 24-hour, 72-hour, or long-profile power result exists.
 
@@ -32,19 +32,23 @@ Use a physical, unlocked Android device on stable power and temperature:
 ./gradlew.bat :apm-benchmark:verifyReleasePerformanceBudgets --no-daemon
 ```
 
-`benchmark-budgets.json` requires all three methods and fails closed on missing/malformed metrics, emulator evidence, or an exceeded median time/allocation ceiling.
+`benchmark-budgets.json` now requires all five methods and fails closed on missing/malformed metrics, emulator evidence, or an exceeded median time/allocation ceiling. The two Dispatcher methods compile on the current source but have no accepted physical-device result yet; the historical three-method JSON therefore cannot pass the current five-method gate.
 
 | Hot path | Median time ceiling | Median allocation ceiling | Operation count |
 |---|---:|---:|---:|
 | durable encode | 30 µs | 48 | 1 event |
 | durable decode | 60 µs | 72 | 1 event |
 | SQLite append batch | 8 ms total / 250 µs per event | 2,048 total / 64 per event | 32 events |
+| accepted dispatcher admission | 32 ms total / 1 ms per emit | 2,048 total / 64 per emit | 32 emits |
+| HIGH admission into full queue | 8 ms | 256 | 1 emit + 1 LOW eviction |
 
-For parser wiring only, existing emulator JSON can be checked explicitly without producing release evidence:
+For parser wiring, use the deterministic host tests. `--allow-emulator` remains an explicit parser-only option, but an emulator result must contain all five current methods:
 
 ```powershell
-python apm-benchmark/verify_benchmark_budgets.py --budgets apm-benchmark/benchmark-budgets.json --results apm-benchmark/build/outputs/connected_android_test_additional_output/releaseAndroidTest/connected --allow-emulator
+python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 ```
+
+`DispatcherAdmissionBenchmark` initializes the public SDK path with a worker parked in an interruptible test uploader. Setup and consent-revocation cleanup run with measurement disabled, so the accepted benchmark measures 32 caller-side emissions and the pressure benchmark measures only the emergency HIGH emission into an already full queue. The production eviction path performs fixed LOW→NORMAL→HIGH FIFO passes and allocates only the proven victim list; it no longer materializes and sorts every lower-priority candidate. The default aggregation-disabled worker path also processes a scalar event directly instead of allocating `listOf(event)` per item. The new ceilings are regression guards, not accepted performance claims, until a managed physical runner produces complete five-method JSON.
 
 ## End-to-end physical-device campaign
 
@@ -179,7 +183,7 @@ Run all deterministic host tests with:
 python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 ```
 
-The current host suite contains 40 deterministic tests. An accepted result must
+The current host suite contains 41 deterministic tests. An accepted result must
 retain the runner JSON, exact APK SHA-256, clean source revision, matrix/budget/
 runner hashes, lane, device serial/manufacturer/model/codename/fingerprint/API/
 ABI, raw process samples, profile, acquisition command, external meter evidence

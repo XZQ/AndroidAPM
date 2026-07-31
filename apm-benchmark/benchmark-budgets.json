@@ -15,6 +15,16 @@
       "operationCount": 32,
       "maxMedianTimeNs": 8000000,
       "maxMedianAllocationCount": 2048
+    },
+    "com.apm.benchmark.DispatcherAdmissionBenchmark.emitAcceptedBatch": {
+      "operationCount": 32,
+      "maxMedianTimeNs": 32000000,
+      "maxMedianAllocationCount": 2048
+    },
+    "com.apm.benchmark.DispatcherAdmissionBenchmark.emitHighPriorityIntoFullQueue": {
+      "operationCount": 1,
+      "maxMedianTimeNs": 8000000,
+      "maxMedianAllocationCount": 256
     }
   }
 }

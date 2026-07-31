@@ -4,13 +4,15 @@
 
 ## 1. 边界
 
-`apm-benchmark` 是不发布到 Maven 的双层性能门：AndroidX Microbenchmark 测量 SDK 持久化热路径；host-driven sample-App campaign 测量端到端启动、主线程、CPU、PSS、磁盘、功耗、热、断网积压和进程重启。两层都只接受完整证据，host 单测或 build-only 不能替代物理设备结果。
+`apm-benchmark` 是不发布到 Maven 的双层性能门：AndroidX Microbenchmark 测量 SDK 持久化与 Dispatcher 准入热路径；host-driven sample-App campaign 测量端到端启动、主线程、CPU、PSS、磁盘、功耗、热、断网积压和进程重启。两层都只接受完整证据，host 单测或 build-only 不能替代物理设备结果。
 
 当前覆盖：
 
 - `ApmEventCodec.encode`：一个代表性 event 的 durable 编码；
 - `ApmEventCodec.decode`：同一 payload 的 durable 解码；
-- `SQLiteEventStore.appendBatch`：dispatcher 最大 drain 大小对应的 32 事件事务。
+- `SQLiteEventStore.appendBatch`：dispatcher 最大 drain 大小对应的 32 事件事务；
+- `DispatcherAdmissionBenchmark.emitAcceptedBatch`：真实公共 `Apm.emit` 的 32 次常态准入；
+- `DispatcherAdmissionBenchmark.emitHighPriorityIntoFullQueue`：2,048 条满队列下 HIGH 准入与最旧 LOW 淘汰。
 
 端到端 campaign 由 `run_device_soak.py` 驱动 `apm-sample-app`：
 
@@ -29,7 +31,9 @@
 - `maxMedianTimeNs`：整次 measured block 的 median 时间硬上限；
 - `maxMedianAllocationCount`：整次 measured block 的 median allocation 硬上限。
 
-当前发布预算：encode 30 µs / 48 allocations，decode 60 µs / 72 allocations，32-event SQLite batch 8 ms / 2,048 allocations。SQLite 预算归一化后是 250 µs/event 与 64 allocations/event；gate 比较的仍是 AndroidX 原始整批 median，避免四舍五入改变判定。
+当前发布预算：encode 30 µs / 48 allocations，decode 60 µs / 72 allocations，32-event SQLite batch 8 ms / 2,048 allocations，32 次 accepted emit 32 ms / 2,048 allocations，满队列 HIGH emit 8 ms / 256 allocations。SQLite 预算归一化后是 250 µs/event 与 64 allocations/event，accepted emit 归一化后是 1 ms/emit 与 64 allocations/emit；gate 比较的仍是 AndroidX 原始 measured block median，避免四舍五入改变判定。
+
+Dispatcher benchmark 用公开 `Apm.init` / `Apm.emit` 路径，在 test uploader 中停驻 worker；初始化、填满队列和 consent-revocation 清理都由 `runWithMeasurementDisabled` 排除。常态方法只测 32 次 producer admission，压力方法只测已满 2,048 条队列上的一次 HIGH admission。压力实现按固定 LOW→NORMAL→HIGH 优先级对 `ArrayBlockingQueue` 做 FIFO 扫描，只分配最终已证明足够的 victim list，不再 `filter + sortedBy` 复制和排序全量候选；默认聚合关闭的 worker 路径也直接处理标量，不再每事件创建单元素 List。混合优先级单测锁定 LOW-first 和同优先级 oldest-first 语义。
 
 预算是回归上限，不是所有设备的性能承诺。修改预算必须和热路径变更一起评审，不能因一次失败直接放宽。
 
@@ -56,7 +60,7 @@ Release gate 同时检查 build metadata 与 AndroidX benchmark 名称，拒绝 
 
 ## 5. 测试
 
-`apm-benchmark/tests/test_verify_benchmark_budgets.py` 使用临时 JSON 确定性覆盖：正常物理结果、时间/分配超限、缺失 benchmark、默认拒绝 emulator，以及显式 parser-only override。Android 源编译继续由 Release/AndroidTest Kotlin 任务验证，真实预算只有专用物理设备运行才可验收。
+`apm-benchmark/tests/test_verify_benchmark_budgets.py` 使用临时 JSON 确定性覆盖：正常物理结果、时间/分配超限、缺失 benchmark、默认拒绝 emulator、显式 parser-only override，以及 checked-in 契约必须保留常态/压力两条 Dispatcher 方法。Android 源编译继续由 Release/AndroidTest Kotlin 任务验证，真实预算只有专用物理设备运行才可验收。
 
 ## 6. 端到端预算与失败语义
 
@@ -100,14 +104,14 @@ exact provenance、lane 完整性、设备/OEM/reset 多样性及单 APK/单源�
 `test_verify_device_matrix.py`、`test_verify_device_soak.py` 和
 `test_run_device_soak.py` 共同覆盖矩阵冲突、lane/物理机匹配、完整与缺失
 汇总、stale provenance、mixed APK、schema-v3 必填来源、dirty source
-预变更拒绝以及既有采集/预算边界。当前 benchmark host suite 共 40 tests；
+预变更拒绝以及既有采集/预算边界。当前 benchmark host suite 共 41 tests；
 这些测试与 plan gate 仍不产生物理性能结论。
 
 ## 8. 当前物理设备证据
 
 2026-07-23 在物理 Redmi/Xiaomi `22041216UC`（Android 13）上执行同一源码构建：
 
-- 正式 `AndroidBenchmarkRunner` 完成 3/3 测试，JSON verifier 通过 encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`；
+- 正式 `AndroidBenchmarkRunner` 完成当时存在的 3/3 测试，JSON verifier 通过 encode `4,640.93 ns / 22.00 allocations`、decode `4,841.81 ns / 46.00 allocations`、32-event SQLite `1,258,990.52 ns / 1,400.21 allocations`；当前新增的两项 Dispatcher benchmark 尚无真机结果，历史 JSON 不能通过现行五项 gate；
 - 初始两轮完整 `smoke` 都只违反平均 CPU 上限，分别为 `28.425%`、`32.046%`，超过 `20%`；线程级归因定位到 FPS Choreographer 在静态页面持续唤醒主线程；
 - FPS 改为 API 24+ event-driven FrameMetrics 主源、失败时才回退 Choreographer 后，保持同一 `20%` 上限不变，两轮完整 smoke 分别以 `12.928%`、`12.362%` CPU 全项通过；APK SHA-256 均为 `e22185f6b09182e5705cea27d80f74f3ac4f05d89ac2223638c02bc4e8f55c1d`；
 - OnePlus `PLK110`（Android 16）拒绝 ADB shell `pm clear`，限定包卸载重装回退后，schema-v2 smoke 在原预算下以 enabled CPU `6.161%`、control CPU `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour` 通过；工件记录 `appDataResetStrategy=uninstall-reinstall`，这证明该设备具备长稳功耗采集前置能力；
@@ -119,4 +123,4 @@ exact provenance、lane 完整性、设备/OEM/reset 多样性及单 APK/单源�
 - `24h`、`72h` 和长稳功耗未执行，因此不存在对应接受结论；
 - MIUI 拒绝 Gradle/UTP 的 session-based 测试 APK 安装，但直接安装同一构建 APK 后正式 runner 可运行；该 OEM 安装器失败必须与 benchmark 预算结果分别记录，不能把手工 runner 通过写成 Gradle aggregate task 通过。
 
-当前判定是：microbenchmark 与两种 OEM 上的 device-soak smoke 物理门禁均通过，OnePlus 还产出了可解析的 app-UID 功耗增量；smoke 使用原 checked-in `20%` 上限，没有预算覆盖或放宽。`24h` / `72h` 与长稳功耗是预生产准入条件，不是当前客户端实现的阻塞项；后续应在受控设备实验室执行，短 smoke 仍不能替代这些长 profile。
+当前判定是：历史三项 microbenchmark 与两种 OEM 上的 device-soak smoke 物理门禁通过，OnePlus 还产出了可解析的 app-UID 功耗增量；当前五项 microbenchmark gate 因新增 Dispatcher 方法尚无完整真机 JSON，不能声明通过。smoke 使用原 checked-in `20%` 上限，没有预算覆盖或放宽。五项 microbenchmark、`24h` / `72h` 与长稳功耗都应在预生产受控设备实验室执行，短 smoke 仍不能替代这些门禁。

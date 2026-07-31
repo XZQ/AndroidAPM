@@ -9,7 +9,7 @@
 - 同步日期：2026-07-31
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 165 个主源码文件：160 Kotlin + 4 C + 1 proto
-- 104 个测试/benchmark 文件
+- 107 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -81,7 +81,7 @@ Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采
 | `apm-plugin` | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
 | `apm-sample-app` | 15 个监控模块的本地演示；包含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，并显式配置 `logcat://sample` 输出 |
-| `apm-benchmark` | 非发布双层门禁：AndroidX codec/SQLite 固定预算，以及启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 离线重启的物理设备 campaign |
+| `apm-benchmark` | 非发布双层门禁：AndroidX codec/SQLite/Dispatcher 固定预算，以及启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 离线重启的物理设备 campaign |
 
 ## 快速接入
 
@@ -495,15 +495,15 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-matrix.json --budgets apm-benchmark/device-soak-budgets.json
 ```
 
-2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 98 suites / 654 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 103 suites / 700 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。关键链路故障注入覆盖 Crash hand-off 的 true/false/recoverable/fatal 与宿主委托、critical IPC 首次存储失败后保留/重试、字段与身份不变，以及真实 SQLite 关闭重开后的 CRITICAL 行恢复。
+2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 98 suites / 655 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 103 suites / 701 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。关键链路故障注入覆盖 Crash hand-off 的 true/false/recoverable/fatal 与宿主委托、critical IPC 首次存储失败后保留/重试、字段与身份不变，以及真实 SQLite 关闭重开后的 CRITICAL 行恢复。
 
 同日与独立服务端分支 `codex/collector-v2-e2e`（验证 tip `2feb2f5`）完成真实 HTTP 联调：客户端两次发送相同的 2-event V2 Gzip batch，只有三项精确 ACK 匹配时才报告成功；SQLite 最终保持 2 个唯一 eventId，并核对 12 种标量、`NaN/Infinity` 的 JSON-safe typed text、固定 resource 和协议元数据。服务端自身为 57 tests / 0 failures；Docker 不可用，所以 PostgreSQL/Compose/SigNoz 仍是外部待验收项。
 
-`verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件。UID 功耗优先读取 package-scoped 人类可读值；OEM 隐藏该 UID 时回退到 Android current checkin 中精确 UID 的 `pwi,uid` 项，并且累计值只有严格增长才构成功耗证据，平坦零值/回退/坏值继续按缺失处理。只读采样命令仅对三种明确 transport 瞬断做一秒间隔重试：smoke 默认 30 秒，24h/72h 默认 300 秒，CLI 绝对上限 600 秒；安装/卸载/清理/Activity 启停绝不自动重放。工件记录 `transientAdbRetryCount` 与 `adbReconnectTimeoutSeconds`，持续离线仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 引入 control CPU、enabled 绝对 CPU 和带符号 delta；当前 schema v3 继续保留这些字段，并绑定精确 APK、clean source revision、matrix/budget/runner 哈希、lane 及完整设备身份。runner 在任何 ADB 设备操作前拒绝 dirty worktree；旧 schema v1/v2 仍可单工件读取，但只有 schema v3 能进入矩阵汇总。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
+`verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。当前五项契约除 codec 与 SQLite 外，还覆盖 32 次常态 `Apm.emit` 准入和 2,048 满队列下 HIGH 插入/LOW 淘汰；满队列选择使用固定优先级 FIFO 扫描，不再构造并排序完整候选列表，默认关闭聚合的 worker 路径也不再为每条事件创建单元素列表。新两项已完成 AndroidTest 编译，但当前没有连接的物理设备，因此历史三项真机结果不能外推成当前五项门禁通过。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件。UID 功耗优先读取 package-scoped 人类可读值；OEM 隐藏该 UID 时回退到 Android current checkin 中精确 UID 的 `pwi,uid` 项，并且累计值只有严格增长才构成功耗证据，平坦零值/回退/坏值继续按缺失处理。只读采样命令仅对三种明确 transport 瞬断做一秒间隔重试：smoke 默认 30 秒，24h/72h 默认 300 秒，CLI 绝对上限 600 秒；安装/卸载/清理/Activity 启停绝不自动重放。工件记录 `transientAdbRetryCount` 与 `adbReconnectTimeoutSeconds`，持续离线仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 引入 control CPU、enabled 绝对 CPU 和带符号 delta；当前 schema v3 继续保留这些字段，并绑定精确 APK、clean source revision、matrix/budget/runner 哈希、lane 及完整设备身份。runner 在任何 ADB 设备操作前拒绝 dirty worktree；旧 schema v1/v2 仍可单工件读取，但只有 schema v3 能进入矩阵汇总。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
 
 `device-lab-matrix.json` 把受控设备实验室准入固定为三个不重叠的物理 ARM64 API lane：24–28 执行 smoke，29–33 执行 smoke/24h，34–36 执行 smoke/24h/72h；完整汇总要求 smoke 覆盖 3 台设备/3 个厂商及两种 reset strategy，24h 覆盖 2 台设备/2 个厂商，72h 覆盖 1 台设备。`verifyDeviceLabMatrix` / 无 `--results` 的 `verify_device_matrix.py` 只检查计划与预算 schema，不产生任何真机结论；只有显式传入全部 lane/profile 工件的 `verifyDeviceLabCoverageFromResults` 才会检查逐项预算、来源哈希、lane、OEM/设备/reset 多样性以及单 APK/单源码一致性。当前没有 schema-v3 的 24h/72h 接受工件。
 
-2026-07-23 的 Redmi/Xiaomi `22041216UC` 物理验证中，AndroidX encode、decode 和 32-event SQLite 三项 microbenchmark 均通过 checked-in time/allocation 预算。最初两轮完整 `smoke` 因平均 CPU `28.425%`、`32.046%` 连续超过 `20%` 上限而失败；线程级归因定位到 FPS 模块在静态页面持续自注册 Choreographer，使主线程被每个 VSync 唤醒。改为 API 24+ 优先使用仅在真实渲染时触发的 FrameMetrics、只在禁用或注册失败时回退 Choreographer 后，同一设备、同一 `20%` 门禁和同一 APK SHA-256 的两轮 smoke 以 `12.928%`、`12.362%` CPU 全项通过。24h/72h 与长稳功耗仍未执行，所以这不是完整生产验收。MIUI 仍会拒绝 Gradle 的 session-based 测试 APK 安装；直接安装同一构建 APK 后运行正式 runner 可通过，需分别记录 OEM 安装器结果和 benchmark 结果。
+2026-07-23 的 Redmi/Xiaomi `22041216UC` 物理验证中，当时的 AndroidX encode、decode 和 32-event SQLite 三项 microbenchmark 均通过 checked-in time/allocation 预算；这仍是历史三项证据，不包含后来新增的 Dispatcher 两项。最初两轮完整 `smoke` 因平均 CPU `28.425%`、`32.046%` 连续超过 `20%` 上限而失败；线程级归因定位到 FPS 模块在静态页面持续自注册 Choreographer，使主线程被每个 VSync 唤醒。改为 API 24+ 优先使用仅在真实渲染时触发的 FrameMetrics、只在禁用或注册失败时回退 Choreographer 后，同一设备、同一 `20%` 门禁和同一 APK SHA-256 的两轮 smoke 以 `12.928%`、`12.362%` CPU 全项通过。24h/72h 与长稳功耗仍未执行，所以这不是完整生产验收。MIUI 仍会拒绝 Gradle 的 session-based 测试 APK 安装；直接安装同一构建 APK 后运行正式 runner 可通过，需分别记录 OEM 安装器结果和 benchmark 结果。
 
 同日 OnePlus `PLK110`（Android 16）预检发现 ADB shell 无 `CLEAR_APP_USER_DATA` 权限；限定包卸载重装回退后，schema-v2 smoke 在原预算下通过：enabled CPU `6.161%`、control `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour`，工件明确记录 `uninstall-reinstall`。这关闭了该 OEM 的干净基线与功耗采集前置条件，但仍不是 24h/72h 接受结论。
 

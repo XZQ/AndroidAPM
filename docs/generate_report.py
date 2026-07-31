@@ -80,8 +80,8 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "106", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
-        ("当前完整测试", "103 suites / 700 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("测试文件", "107", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
+        ("当前完整测试", "103 suites / 701 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -114,7 +114,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；三 lane/六工件矩阵及 provenance 门禁已固化，24h/72h 真机执行延期到预生产设备实验室"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "历史三项 microbenchmark 与 Redmi 原预算 smoke 通过；现行五项 gate 新增 Dispatcher 常态/满队列准入且待真机执行，三 lane/六工件矩阵及 provenance 门禁已固化"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("运行时接入自检", "hostIntegrationSnapshot 模块/注册/调用证据", "只存枚举、计数、时间戳；无流量不能被误判为静态接入失败"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
@@ -207,7 +207,7 @@ def build_status_report() -> Document:
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
             "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
             "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",
-            "Dispatcher 在 self-monitor 开启时以固定无逐样本分配直方图输出六阶段 count、平均、P95 上界和最大延迟；"
+            "Dispatcher 在 self-monitor 开启时以固定无逐样本分配直方图输出六阶段 count、平均、P95 上界和最大延迟；满队列高优先级替换按固定优先级 FIFO 扫描而不再复制排序全队列，AndroidX gate 新增常态与满队列准入；"
             "关闭时跳过计时，阶段证据不自动触发并行化。",
             "ApmDiagnostics 以固定大小、无宿主值的 hostIntegrationSnapshot 区分模块运行、当前 registration 与会话内调用证据；"
             "NO_RUNTIME_EVIDENCE 只表示本会话尚未发生相应流程。",

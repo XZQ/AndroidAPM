@@ -191,6 +191,37 @@ class ApmDispatcherTest {
         assertEquals(1L, selfMonitor.getDropCount(ApmPriority.LOW))
     }
 
+    /** Mixed pressure must preserve LOW-before-NORMAL and FIFO-within-priority eviction. */
+    @Test
+    fun `high event evicts oldest lowest priority event from mixed full queue`() {
+        val firstAppendStarted = CountDownLatch(1)
+        val releaseFirstAppend = CountDownLatch(1)
+        val store = BlockingFirstAppendStore(firstAppendStarted, releaseFirstAppend)
+        val dispatcher = ApmDispatcher(
+            store = store,
+            uploader = RecordingUploader(),
+            logger = RecordingLogger(),
+            queueCapacity = 4,
+            enableModuleIsolation = false
+        )
+
+        dispatcher.dispatch(createEvent("blocking", priority = ApmPriority.NORMAL))
+        assertTrue(firstAppendStarted.await(AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS))
+        dispatcher.dispatch(createEvent("normal-oldest", priority = ApmPriority.NORMAL))
+        dispatcher.dispatch(createEvent("low-oldest", priority = ApmPriority.LOW))
+        dispatcher.dispatch(createEvent("low-newest", priority = ApmPriority.LOW))
+        dispatcher.dispatch(createEvent("normal-newest", priority = ApmPriority.NORMAL))
+        dispatcher.dispatch(createEvent("high", priority = ApmPriority.HIGH))
+
+        releaseFirstAppend.countDown()
+        dispatcher.shutdown()
+
+        assertEquals(
+            listOf("blocking", "normal-oldest", "low-newest", "normal-newest", "high"),
+            store.events.map(ApmEvent::name)
+        )
+    }
+
     /** A single event larger than the retained-byte budget must fail before queue visibility. */
     @Test
     fun `dispatcher rejects event larger than byte budget`() {

@@ -134,6 +134,22 @@ class BenchmarkBudgetVerifierTest(unittest.TestCase):
 
         self.assertIn(self.key, measurements)
 
+    def test_checked_in_contract_covers_dispatcher_common_and_pressure_paths(self) -> None:
+        """The release contract must retain both producer-side dispatcher regressions."""
+        checked_in = VERIFIER.load_budgets(MODULE_PATH.parent / "benchmark-budgets.json")
+
+        accepted = checked_in[
+            "com.apm.benchmark.DispatcherAdmissionBenchmark.emitAcceptedBatch"
+        ]
+        pressure = checked_in[
+            "com.apm.benchmark.DispatcherAdmissionBenchmark.emitHighPriorityIntoFullQueue"
+        ]
+
+        self.assertEqual(32, accepted["operationCount"])
+        self.assertEqual(1, pressure["operationCount"])
+        self.assertGreater(accepted["maxMedianTimeNs"], 0)
+        self.assertGreater(pressure["maxMedianAllocationCount"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()

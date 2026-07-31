@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 106 |
+| 测试/benchmark 文件 | 107 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -203,11 +203,11 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 2026-07-24 当前 Redmi `22041216UC` 的 package-scoped 人类可读 batterystats 省略 sample UID，但 `dumpsys batterystats -c` 保留精确 `9,10217,l,pwi,uid,...`。runner 增加这一 current-checkin fallback，并要求首尾累计 UID 功耗严格增长；平坦 `0→0`、回退、错误 UID、非有限/坏值继续作为缺失证据，不能被 `max(0, delta)` 伪装为合格零功耗。30 个 host tests、Python 编译检查和 JDK 17.0.14 benchmark Release/AndroidTest Kotlin 构建通过。五分钟、10 events/second 诊断后 Redmi 的 checkin computed power 仍为 `0`，所以这不是功耗接受；预算未修改。
 
-2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于三项 microbenchmark 和原预算 smoke。
+2026-07-25 项目决定当前客户端 SDK 迭代不再要求个人手机持续连接 24 小时。正在运行的 Redmi 24h 重试在完成前被明确取消，host runner 与 `com.apm.sample.debug` 进程均已停止，未生成结果 JSON；该取消既不是通过，也不是门禁失败。仓库已实现的 fail-closed `24h`/`72h` profiles、严格功耗证据和原预算全部保留，执行时点延期到预生产准入阶段，并应使用受控设备实验室或校准功耗设施。当前可声明的物理证据仍限于历史三项 microbenchmark 和原预算 smoke；后来新增的两项 Dispatcher benchmark 尚无物理结果。
 
-2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 654 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 103 suites / 700 tests，plugin 18 tests 独立报告，取代同日较早的 647-test Android 刷新和 2026-07-22 的 682-test 组合基线。
+2026-07-31 当前 `develop` tip 在 JDK 17.0.14 下完成强制全量刷新：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 655 tests 和 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。当前客户端完整基线为根 Android + model 103 suites / 701 tests，plugin 18 tests 独立报告，取代同日较早的 654-test Android 刷新和 2026-07-22 的 682-test 组合基线。
 
-同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 98 suites / 654 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与关键 hand-off 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
+同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告为 Android 98 suites / 655 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 45 Markdown / 61 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与关键 hand-off 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
 
 同一源码的 critical-handoff 故障注入定向验证覆盖 core/crash/ANR/storage：JDK 17.0.14 下 `43` suites / `284` tests 全部通过，0 failures/errors/skips；对应 lint 与根 `apiCheck` 通过。测试证明 Crash true/false/recoverable/fatal 分支始终只委托原 handler 一次，fatal error 在委托后仍可见；critical IPC 首次同步存储故障会保留 ready 文件，第二次扫描成功后才删除，并保持 `eventId`、priority、fields。真实 SQLite 还验证关闭并重开 store 后 CRITICAL 行不丢失。
 
@@ -218,6 +218,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件；smoke/24h/72h 分别要求 3/2/1 台设备，smoke/24h 分别要求 3/2 个厂商，smoke 还必须覆盖 `pm-clear` 与 `uninstall-reinstall`。result schema v3 绑定 exact APK、clean source revision、matrix/budget/runner hash、lane/UTC/device identity；aggregate verifier 逐工件执行原预算后再检查完整性、多样性和单 APK/source。40 个 host tests、Python 编译、plan gate 和 504 个 benchmark/sample Gradle 动作通过；plan 输出明确没有评估真机证据。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证通过 44 Markdown / 55 links，两份 DOCX 通过 OOXML 结构和关键文本检查；本机仍缺 LibreOffice/`soffice`，不声明页面渲染验收。当前没有 schema-v3 的 24h/72h 工件。
 
 同日发布与供应链门禁完成：四个 Gradle build root 提交严格 SHA-256 dependency verification metadata，策略检查覆盖 554 / 238 / 239 / 409 个 component；consumer 仅信任由候选校验器逐文件复核的内部坐标。独立候选仓库包含 25 坐标、22 AAR、26 JAR、25 POM，Bundle 精确暴露 22 个运行时制品，`com.apm.slow-method` marker 精确指向 `com.apm:apm-plugin`。校验器检查 POM/Gradle metadata/sources/固定版本/Java 17/ZIP 安全与签名完整性，生成 SHA-256 manifest 和 SPDX 2.3 SBOM；5 个 host tests 覆盖完整与篡改分支，隔离 consumer 从候选仓库解析 Bundle/插件并完成 ASM transformation 与 Debug 构建。外部 URL 强制 HTTPS，缺凭据或 PGP key 在上传前失败；仓库没有真实外部 staging/promotion 证据。
+
+同日 Dispatcher 性能证据与源码热点完成补强：满队列高优先级替换不再对最多 2,048 个候选执行 `filter + sortedBy`，而是固定 LOW→NORMAL→HIGH、同优先级 FIFO 扫描，只保留最终足够的 victim list；默认关闭聚合时直接处理标量事件，非 durable 成功批次不再创建空 rejected-ID set。混合优先级单测锁定 LOW-first/oldest-first；core 定向结果为 28 suites / 205 tests、零失败，lint `No Issues Found`。AndroidX contract 从历史三项扩为五项，新增 32 accepted emits 与满 2,048 队列 HIGH admission；Release/AndroidTest Kotlin 编译和 41 个 host tests 通过。当前无 ADB 设备，因此新增两项没有真机 JSON，历史三项结果不能冒充当前五项 gate 通过。
 
 ## 新电脑接手
 

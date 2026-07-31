@@ -176,6 +176,7 @@ android {
 }
 
 dependencies {
+    androidTestImplementation(project(":apm-core"))
     androidTestImplementation(project(":apm-model"))
     androidTestImplementation(project(":apm-storage"))
     androidTestImplementation(libs.benchmark.junit4)
