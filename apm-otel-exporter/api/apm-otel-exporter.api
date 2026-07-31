@@ -1,0 +1,58 @@
+public final class com/apm/otel/OtelConfig {
+	public fun <init> ()V
+	public fun <init> (ZLjava/lang/String;Ljava/lang/String;Ljava/util/Map;ZZZ)V
+	public synthetic fun <init> (ZLjava/lang/String;Ljava/lang/String;Ljava/util/Map;ZZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/util/Map;
+	public final fun component5 ()Z
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun copy (ZLjava/lang/String;Ljava/lang/String;Ljava/util/Map;ZZZ)Lcom/apm/otel/OtelConfig;
+	public static synthetic fun copy$default (Lcom/apm/otel/OtelConfig;ZLjava/lang/String;Ljava/lang/String;Ljava/util/Map;ZZZILjava/lang/Object;)Lcom/apm/otel/OtelConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEnabled ()Z
+	public final fun getEndpoint ()Ljava/lang/String;
+	public final fun getExportLogs ()Z
+	public final fun getExportMetrics ()Z
+	public final fun getExportSpans ()Z
+	public final fun getResourceAttributes ()Ljava/util/Map;
+	public final fun getServiceName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/otel/OtelEventBridge {
+	public fun <init> (Lcom/apm/otel/OtelConfig;)V
+	public final fun export (Lcom/apm/model/ApmEvent;)Lcom/apm/otel/OtelEventBridge$ExportResult;
+	public final fun exportBatch (Ljava/util/List;)Lcom/apm/otel/OtelEventBridge$ExportResult;
+}
+
+public final class com/apm/otel/OtelEventBridge$ExportResult {
+	public fun <init> (Ljava/util/List;Ljava/util/List;Ljava/util/List;)V
+	public final fun component1 ()Ljava/util/List;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/util/List;
+	public final fun copy (Ljava/util/List;Ljava/util/List;Ljava/util/List;)Lcom/apm/otel/OtelEventBridge$ExportResult;
+	public static synthetic fun copy$default (Lcom/apm/otel/OtelEventBridge$ExportResult;Ljava/util/List;Ljava/util/List;Ljava/util/List;ILjava/lang/Object;)Lcom/apm/otel/OtelEventBridge$ExportResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLog ()Ljava/util/Map;
+	public final fun getLogs ()Ljava/util/List;
+	public final fun getMetrics ()Ljava/util/List;
+	public final fun getSpans ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/otel/OtelMetricExporter {
+	public static final field INSTANCE Lcom/apm/otel/OtelMetricExporter;
+	public final fun toMetricData (Lcom/apm/model/ApmEvent;)Ljava/util/List;
+	public final fun toMetricDataBatch (Ljava/util/List;)Ljava/util/List;
+}
+
+public final class com/apm/otel/OtelSpanExporter {
+	public static final field INSTANCE Lcom/apm/otel/OtelSpanExporter;
+	public final fun toSpanData (Lcom/apm/model/ApmEvent;)Ljava/util/Map;
+}
+

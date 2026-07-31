@@ -1,0 +1,93 @@
+public final class com/apm/slowmethod/ApmSlowMethodTracer {
+	public static final field INSTANCE Lcom/apm/slowmethod/ApmSlowMethodTracer;
+	public final fun clearHotMethods ()V
+	public final fun disable ()V
+	public final fun getHotMethods ()Ljava/util/List;
+	public final fun init (JI)V
+	public static synthetic fun init$default (Lcom/apm/slowmethod/ApmSlowMethodTracer;JIILjava/lang/Object;)V
+	public static final fun methodEnter (Ljava/lang/String;)V
+	public static final fun methodExit (Ljava/lang/String;)V
+}
+
+public final class com/apm/slowmethod/ApmSlowMethodTracer$HotMethodInfo {
+	public fun <init> (Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicInteger;Ljava/util/concurrent/atomic/AtomicLong;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicInteger;Ljava/util/concurrent/atomic/AtomicLong;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getHitCount ()Ljava/util/concurrent/atomic/AtomicInteger;
+	public final fun getMethodSignature ()Ljava/lang/String;
+	public final fun getTotalDurationMs ()Ljava/util/concurrent/atomic/AtomicLong;
+}
+
+public final class com/apm/slowmethod/SlowMethodConfig {
+	public static final field Companion Lcom/apm/slowmethod/SlowMethodConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZJJIZZJJI)V
+	public synthetic fun <init> (ZJJIZZJJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun component5 ()Z
+	public final fun component6 ()Z
+	public final fun component7 ()J
+	public final fun component8 ()J
+	public final fun component9 ()I
+	public final fun copy (ZJJIZZJJI)Lcom/apm/slowmethod/SlowMethodConfig;
+	public static synthetic fun copy$default (Lcom/apm/slowmethod/SlowMethodConfig;ZJJIZZJJIILjava/lang/Object;)Lcom/apm/slowmethod/SlowMethodConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEnableSlowMethod ()Z
+	public final fun getEnableStackSampling ()Z
+	public final fun getIncludeStackTrace ()Z
+	public final fun getMaxStackTraceLength ()I
+	public final fun getSamplingIntervalMs ()J
+	public final fun getSamplingWindowMs ()J
+	public final fun getSevereThresholdMs ()J
+	public final fun getThresholdMs ()J
+	public final fun getTopMethodCount ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/slowmethod/SlowMethodConfig$Companion {
+}
+
+public final class com/apm/slowmethod/SlowMethodModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/slowmethod/SlowMethodModule$Companion;
+	public static final field MODULE_NAME_REF Ljava/lang/String;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/slowmethod/SlowMethodConfig;)V
+	public synthetic fun <init> (Lcom/apm/slowmethod/SlowMethodConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getName ()Ljava/lang/String;
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public fun onStart ()V
+	public fun onStop ()V
+}
+
+public final class com/apm/slowmethod/SlowMethodModule$Companion {
+}
+
+public final class com/apm/slowmethod/StackSamplingProfiler {
+	public static final field Companion Lcom/apm/slowmethod/StackSamplingProfiler$Companion;
+	public fun <init> (Lcom/apm/slowmethod/SlowMethodConfig;)V
+	public final fun destroy ()V
+	public final fun getOnSamplingComplete ()Lkotlin/jvm/functions/Function2;
+	public final fun setOnSamplingComplete (Lkotlin/jvm/functions/Function2;)V
+	public final fun startSampling ()V
+	public final fun stopSampling ()V
+}
+
+public final class com/apm/slowmethod/StackSamplingProfiler$Companion {
+}
+
+public final class com/apm/slowmethod/StackSamplingProfiler$MethodSample {
+	public fun <init> (Ljava/lang/String;I)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun copy (Ljava/lang/String;I)Lcom/apm/slowmethod/StackSamplingProfiler$MethodSample;
+	public static synthetic fun copy$default (Lcom/apm/slowmethod/StackSamplingProfiler$MethodSample;Ljava/lang/String;IILjava/lang/Object;)Lcom/apm/slowmethod/StackSamplingProfiler$MethodSample;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getHitCount ()I
+	public final fun getMethodSignature ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

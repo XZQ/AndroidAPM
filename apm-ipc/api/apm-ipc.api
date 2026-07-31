@@ -1,0 +1,45 @@
+public final class com/apm/ipc/IpcConfig {
+	public static final field Companion Lcom/apm/ipc/IpcConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZJJIZZI)V
+	public synthetic fun <init> (ZJJIZZIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun component5 ()Z
+	public final fun component6 ()Z
+	public final fun component7 ()I
+	public final fun copy (ZJJIZZI)Lcom/apm/ipc/IpcConfig;
+	public static synthetic fun copy$default (Lcom/apm/ipc/IpcConfig;ZJJIZZIILjava/lang/Object;)Lcom/apm/ipc/IpcConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAggregationWindowSize ()I
+	public final fun getBinderThresholdMs ()J
+	public final fun getEnableBinderAggregation ()Z
+	public final fun getEnableBinderHook ()Z
+	public final fun getEnableIpcMonitor ()Z
+	public final fun getMainThreadBinderThresholdMs ()J
+	public final fun getMaxStackTraceLength ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/ipc/IpcConfig$Companion {
+}
+
+public final class com/apm/ipc/IpcModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/ipc/IpcModule$Companion;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/ipc/IpcConfig;)V
+	public synthetic fun <init> (Lcom/apm/ipc/IpcConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getName ()Ljava/lang/String;
+	public final fun onBinderCallComplete (Ljava/lang/String;Ljava/lang/String;J)V
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public fun onStart ()V
+	public fun onStop ()V
+	public final fun traceBinderCall (Ljava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function0;)Ljava/lang/Object;
+}
+
+public final class com/apm/ipc/IpcModule$Companion {
+}
+

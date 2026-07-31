@@ -1,5 +1,6 @@
 plugins {
     id("org.jetbrains.kotlin.jvm") version libs.versions.kotlin
+    alias(libs.plugins.binary.compatibility.validator)
     `java-gradle-plugin`
 }
 

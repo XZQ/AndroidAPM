@@ -1,0 +1,133 @@
+public final class com/apm/webview/ResourceRecord {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JJJIJ)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JJJIJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()I
+	public final fun component8 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JJJIJ)Lcom/apm/webview/ResourceRecord;
+	public static synthetic fun copy$default (Lcom/apm/webview/ResourceRecord;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JJJIJILjava/lang/Object;)Lcom/apm/webview/ResourceRecord;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDurationMs ()J
+	public final fun getEndTimeMs ()J
+	public final fun getHttpStatus ()I
+	public final fun getPageUrl ()Ljava/lang/String;
+	public final fun getResourceType ()Ljava/lang/String;
+	public final fun getSizeBytes ()J
+	public final fun getStartTimeMs ()J
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setDurationMs (J)V
+	public final fun setEndTimeMs (J)V
+	public final fun setHttpStatus (I)V
+	public final fun setSizeBytes (J)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/webview/ResourceWaterfall {
+	public static final field Companion Lcom/apm/webview/ResourceWaterfall$Companion;
+	public fun <init> (Lcom/apm/webview/WebviewConfig;)V
+	public final fun onPageComplete (Ljava/lang/String;)V
+	public final fun onResourceEnd (Ljava/lang/String;Landroid/webkit/WebResourceResponse;)V
+	public final fun onResourceEnd (Ljava/lang/String;Ljava/lang/String;Landroid/webkit/WebResourceResponse;)V
+	public final fun onResourceStart (Landroid/webkit/WebResourceRequest;)V
+	public final fun onResourceStart (Ljava/lang/String;Landroid/webkit/WebResourceRequest;)V
+	public final fun setActivePage (Ljava/lang/String;)V
+}
+
+public final class com/apm/webview/ResourceWaterfall$Companion {
+}
+
+public final class com/apm/webview/WaterfallResult {
+	public fun <init> (Ljava/lang/String;ILjava/util/List;Ljava/util/List;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3 ()Ljava/util/List;
+	public final fun component4 ()Ljava/util/List;
+	public final fun component5 ()J
+	public final fun copy (Ljava/lang/String;ILjava/util/List;Ljava/util/List;J)Lcom/apm/webview/WaterfallResult;
+	public static synthetic fun copy$default (Lcom/apm/webview/WaterfallResult;Ljava/lang/String;ILjava/util/List;Ljava/util/List;JILjava/lang/Object;)Lcom/apm/webview/WaterfallResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCriticalPathResources ()Ljava/util/List;
+	public final fun getPageUrl ()Ljava/lang/String;
+	public final fun getSlowResources ()Ljava/util/List;
+	public final fun getTotalCount ()I
+	public final fun getTotalDurationMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/webview/WebviewConfig {
+	public static final field Companion Lcom/apm/webview/WebviewConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZJJJIZZJZJZI)V
+	public synthetic fun <init> (ZJJJIZZJZJZIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component10 ()J
+	public final fun component11 ()Z
+	public final fun component12 ()I
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()I
+	public final fun component6 ()Z
+	public final fun component7 ()Z
+	public final fun component8 ()J
+	public final fun component9 ()Z
+	public final fun copy (ZJJJIZZJZJZI)Lcom/apm/webview/WebviewConfig;
+	public static synthetic fun copy$default (Lcom/apm/webview/WebviewConfig;ZJJJIZZJZJZIILjava/lang/Object;)Lcom/apm/webview/WebviewConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEnableAutoRegister ()Z
+	public final fun getEnableJsBridgeMonitor ()Z
+	public final fun getEnableJsConsoleMonitor ()Z
+	public final fun getEnableResourceWaterfall ()Z
+	public final fun getEnableWebviewMonitor ()Z
+	public final fun getJsBridgeThresholdMs ()J
+	public final fun getJsExecutionThresholdMs ()J
+	public final fun getMaxTrackedResources ()I
+	public final fun getMaxUrlLength ()I
+	public final fun getPageLoadThresholdMs ()J
+	public final fun getResourceSlowThresholdMs ()J
+	public final fun getWhiteScreenThresholdMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/webview/WebviewConfig$Companion {
+}
+
+public final class com/apm/webview/WebviewModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/webview/WebviewModule$Companion;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/webview/WebviewConfig;)V
+	public synthetic fun <init> (Lcom/apm/webview/WebviewConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun evaluateJavascript (Landroid/webkit/WebView;Ljava/lang/String;Landroid/webkit/ValueCallback;)V
+	public static synthetic fun evaluateJavascript$default (Lcom/apm/webview/WebviewModule;Landroid/webkit/WebView;Ljava/lang/String;Landroid/webkit/ValueCallback;ILjava/lang/Object;)V
+	public fun getName ()Ljava/lang/String;
+	public final fun getResourceWaterfall ()Lcom/apm/webview/ResourceWaterfall;
+	public final fun install (Landroid/webkit/WebView;Landroid/webkit/WebViewClient;Landroid/webkit/WebChromeClient;)V
+	public static synthetic fun install$default (Lcom/apm/webview/WebviewModule;Landroid/webkit/WebView;Landroid/webkit/WebViewClient;Landroid/webkit/WebChromeClient;ILjava/lang/Object;)V
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public final fun onJsBridgeCall (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JZ)V
+	public final fun onJsConsoleError (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;I)V
+	public final fun onJsEvalComplete (Ljava/lang/String;Ljava/lang/String;J)V
+	public final fun onPageFinished (Ljava/lang/String;)V
+	public final fun onPageStarted (Ljava/lang/String;)V
+	public final fun onPageVisible (Ljava/lang/String;)V
+	public fun onStart ()V
+	public fun onStop ()V
+	public final fun onWhiteScreen (Ljava/lang/String;J)V
+	public final fun uninstall (Landroid/webkit/WebView;)Z
+	public final fun wrapWebChromeClient (Landroid/webkit/WebChromeClient;)Landroid/webkit/WebChromeClient;
+	public static synthetic fun wrapWebChromeClient$default (Lcom/apm/webview/WebviewModule;Landroid/webkit/WebChromeClient;ILjava/lang/Object;)Landroid/webkit/WebChromeClient;
+	public final fun wrapWebViewClient (Landroid/webkit/WebViewClient;)Landroid/webkit/WebViewClient;
+	public static synthetic fun wrapWebViewClient$default (Lcom/apm/webview/WebviewModule;Landroid/webkit/WebViewClient;ILjava/lang/Object;)Landroid/webkit/WebViewClient;
+}
+
+public final class com/apm/webview/WebviewModule$Companion {
+}
+

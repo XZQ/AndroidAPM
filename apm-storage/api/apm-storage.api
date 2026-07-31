@@ -1,0 +1,145 @@
+public final class com/apm/storage/EventDbHelper : android/database/sqlite/SQLiteOpenHelper {
+	public static final field Companion Lcom/apm/storage/EventDbHelper$Companion;
+	public fun <init> (Landroid/content/Context;Ljava/lang/String;I)V
+	public synthetic fun <init> (Landroid/content/Context;Ljava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun onCreate (Landroid/database/sqlite/SQLiteDatabase;)V
+	public fun onUpgrade (Landroid/database/sqlite/SQLiteDatabase;II)V
+}
+
+public final class com/apm/storage/EventDbHelper$Companion {
+}
+
+public abstract interface class com/apm/storage/EventStore {
+	public abstract fun append (Lcom/apm/model/ApmEvent;)V
+	public fun appendBatch (Ljava/util/List;)V
+	public fun appendBatchWithResult (Ljava/util/List;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun appendWithResult (Lcom/apm/model/ApmEvent;)Lcom/apm/storage/EventStoreAppendResult;
+	public abstract fun clear ()V
+	public fun close ()V
+	public abstract fun readRecent (I)Ljava/util/List;
+	public static synthetic fun readRecent$default (Lcom/apm/storage/EventStore;IILjava/lang/Object;)Ljava/util/List;
+}
+
+public final class com/apm/storage/EventStore$DefaultImpls {
+	public static fun appendBatch (Lcom/apm/storage/EventStore;Ljava/util/List;)V
+	public static fun appendBatchWithResult (Lcom/apm/storage/EventStore;Ljava/util/List;)Lcom/apm/storage/EventStoreAppendResult;
+	public static fun appendWithResult (Lcom/apm/storage/EventStore;Lcom/apm/model/ApmEvent;)Lcom/apm/storage/EventStoreAppendResult;
+	public static fun close (Lcom/apm/storage/EventStore;)V
+	public static synthetic fun readRecent$default (Lcom/apm/storage/EventStore;IILjava/lang/Object;)Ljava/util/List;
+}
+
+public final class com/apm/storage/EventStoreAppendResult {
+	public fun <init> (ILjava/util/List;ILjava/util/Map;)V
+	public synthetic fun <init> (ILjava/util/List;ILjava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/util/Map;
+	public final fun copy (ILjava/util/List;ILjava/util/Map;)Lcom/apm/storage/EventStoreAppendResult;
+	public static synthetic fun copy$default (Lcom/apm/storage/EventStoreAppendResult;ILjava/util/List;ILjava/util/Map;ILjava/lang/Object;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAcceptedEventCount ()I
+	public final fun getCapacityEvictedEventCount ()I
+	public final fun getCapacityEvictedPriorityCounts ()Ljava/util/Map;
+	public final fun getRejectedEvents ()Ljava/util/List;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/storage/EventStorePruneResult {
+	public fun <init> (ILjava/util/Map;)V
+	public synthetic fun <init> (ILjava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/util/Map;
+	public final fun copy (ILjava/util/Map;)Lcom/apm/storage/EventStorePruneResult;
+	public static synthetic fun copy$default (Lcom/apm/storage/EventStorePruneResult;ILjava/util/Map;ILjava/lang/Object;)Lcom/apm/storage/EventStorePruneResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getPriorityCounts ()Ljava/util/Map;
+	public final fun getPrunedEventCount ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/storage/FileEventStore : com/apm/storage/EventStore {
+	public static final field Companion Lcom/apm/storage/FileEventStore$Companion;
+	public fun <init> (Landroid/content/Context;I)V
+	public synthetic fun <init> (Landroid/content/Context;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun append (Lcom/apm/model/ApmEvent;)V
+	public fun appendBatch (Ljava/util/List;)V
+	public fun appendBatchWithResult (Ljava/util/List;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun appendWithResult (Lcom/apm/model/ApmEvent;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun clear ()V
+	public fun close ()V
+	public fun readRecent (I)Ljava/util/List;
+}
+
+public final class com/apm/storage/FileEventStore$Companion {
+}
+
+public final class com/apm/storage/PendingEvent {
+	public fun <init> (JLcom/apm/model/ApmEvent;I)V
+	public final fun component1 ()J
+	public final fun component2 ()Lcom/apm/model/ApmEvent;
+	public final fun component3 ()I
+	public final fun copy (JLcom/apm/model/ApmEvent;I)Lcom/apm/storage/PendingEvent;
+	public static synthetic fun copy$default (Lcom/apm/storage/PendingEvent;JLcom/apm/model/ApmEvent;IILjava/lang/Object;)Lcom/apm/storage/PendingEvent;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getEvent ()Lcom/apm/model/ApmEvent;
+	public final fun getId ()J
+	public final fun getRetryCount ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class com/apm/storage/PendingEventStore : com/apm/storage/EventStore {
+	public fun acknowledgeClaim (Ljava/lang/String;Ljava/util/List;)I
+	public fun claimPending (Ljava/lang/String;IJJ)Ljava/util/List;
+	public abstract fun deletePending (Ljava/util/List;)I
+	public fun failClaim (Ljava/lang/String;Ljava/util/List;)V
+	public abstract fun markRetry (Ljava/util/List;)V
+	public abstract fun pendingCount ()I
+	public fun pruneExpired (IJ)I
+	public fun pruneExpiredWithResult (IJ)Lcom/apm/storage/EventStorePruneResult;
+	public abstract fun readPending (I)Ljava/util/List;
+	public fun releaseClaims (Ljava/lang/String;)I
+}
+
+public final class com/apm/storage/PendingEventStore$DefaultImpls {
+	public static fun acknowledgeClaim (Lcom/apm/storage/PendingEventStore;Ljava/lang/String;Ljava/util/List;)I
+	public static fun appendBatch (Lcom/apm/storage/PendingEventStore;Ljava/util/List;)V
+	public static fun appendBatchWithResult (Lcom/apm/storage/PendingEventStore;Ljava/util/List;)Lcom/apm/storage/EventStoreAppendResult;
+	public static fun appendWithResult (Lcom/apm/storage/PendingEventStore;Lcom/apm/model/ApmEvent;)Lcom/apm/storage/EventStoreAppendResult;
+	public static fun claimPending (Lcom/apm/storage/PendingEventStore;Ljava/lang/String;IJJ)Ljava/util/List;
+	public static fun close (Lcom/apm/storage/PendingEventStore;)V
+	public static fun failClaim (Lcom/apm/storage/PendingEventStore;Ljava/lang/String;Ljava/util/List;)V
+	public static fun pruneExpired (Lcom/apm/storage/PendingEventStore;IJ)I
+	public static fun pruneExpiredWithResult (Lcom/apm/storage/PendingEventStore;IJ)Lcom/apm/storage/EventStorePruneResult;
+	public static fun releaseClaims (Lcom/apm/storage/PendingEventStore;Ljava/lang/String;)I
+}
+
+public final class com/apm/storage/SQLiteEventStore : com/apm/storage/PendingEventStore {
+	public static final field Companion Lcom/apm/storage/SQLiteEventStore$Companion;
+	public fun <init> (Lcom/apm/storage/EventDbHelper;IJI)V
+	public synthetic fun <init> (Lcom/apm/storage/EventDbHelper;IJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun acknowledgeClaim (Ljava/lang/String;Ljava/util/List;)I
+	public fun append (Lcom/apm/model/ApmEvent;)V
+	public fun appendBatch (Ljava/util/List;)V
+	public fun appendBatchWithResult (Ljava/util/List;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun appendWithResult (Lcom/apm/model/ApmEvent;)Lcom/apm/storage/EventStoreAppendResult;
+	public fun claimPending (Ljava/lang/String;IJJ)Ljava/util/List;
+	public fun clear ()V
+	public fun close ()V
+	public fun deletePending (Ljava/util/List;)I
+	public fun failClaim (Ljava/lang/String;Ljava/util/List;)V
+	public fun markRetry (Ljava/util/List;)V
+	public fun pendingCount ()I
+	public fun pruneExpired (IJ)I
+	public fun pruneExpiredWithResult (IJ)Lcom/apm/storage/EventStorePruneResult;
+	public fun readPending (I)Ljava/util/List;
+	public fun readRecent (I)Ljava/util/List;
+	public fun releaseClaims (Ljava/lang/String;)I
+}
+
+public final class com/apm/storage/SQLiteEventStore$Companion {
+}
+

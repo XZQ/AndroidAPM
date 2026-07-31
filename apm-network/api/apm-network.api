@@ -1,0 +1,194 @@
+public final class com/apm/network/ApmEventListener : okhttp3/EventListener {
+	public static final field Companion Lcom/apm/network/ApmEventListener$Companion;
+	public fun <init> (Lcom/apm/network/NetworkModule;JZ)V
+	public synthetic fun <init> (Lcom/apm/network/NetworkModule;JZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun callEnd (Lokhttp3/Call;)V
+	public fun callFailed (Lokhttp3/Call;Ljava/io/IOException;)V
+	public fun callStart (Lokhttp3/Call;)V
+	public fun connectEnd (Lokhttp3/Call;Ljava/net/InetSocketAddress;Ljava/net/Proxy;Lokhttp3/Protocol;)V
+	public fun connectFailed (Lokhttp3/Call;Ljava/net/InetSocketAddress;Ljava/net/Proxy;Lokhttp3/Protocol;Ljava/io/IOException;)V
+	public fun connectStart (Lokhttp3/Call;Ljava/net/InetSocketAddress;Ljava/net/Proxy;)V
+	public fun dnsEnd (Lokhttp3/Call;Ljava/lang/String;Ljava/util/List;)V
+	public fun dnsStart (Lokhttp3/Call;Ljava/lang/String;)V
+	public fun requestHeadersEnd (Lokhttp3/Call;Lokhttp3/Request;)V
+	public fun requestHeadersStart (Lokhttp3/Call;)V
+	public fun responseBodyEnd (Lokhttp3/Call;J)V
+	public fun responseBodyStart (Lokhttp3/Call;)V
+	public fun responseHeadersEnd (Lokhttp3/Call;Lokhttp3/Response;)V
+	public fun responseHeadersStart (Lokhttp3/Call;)V
+	public fun secureConnectEnd (Lokhttp3/Call;Lokhttp3/Handshake;)V
+	public fun secureConnectStart (Lokhttp3/Call;)V
+}
+
+public final class com/apm/network/ApmEventListener$CallTiming {
+	public fun <init> ()V
+	public fun <init> (JJJJJJJJJJJJJLjava/lang/String;Ljava/lang/String;ILjava/lang/String;)V
+	public synthetic fun <init> (JJJJJJJJJJJJJLjava/lang/String;Ljava/lang/String;ILjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component10 ()J
+	public final fun component11 ()J
+	public final fun component12 ()J
+	public final fun component13 ()J
+	public final fun component14 ()Ljava/lang/String;
+	public final fun component15 ()Ljava/lang/String;
+	public final fun component16 ()I
+	public final fun component17 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun component8 ()J
+	public final fun component9 ()J
+	public final fun copy (JJJJJJJJJJJJJLjava/lang/String;Ljava/lang/String;ILjava/lang/String;)Lcom/apm/network/ApmEventListener$CallTiming;
+	public static synthetic fun copy$default (Lcom/apm/network/ApmEventListener$CallTiming;JJJJJJJJJJJJJLjava/lang/String;Ljava/lang/String;ILjava/lang/String;ILjava/lang/Object;)Lcom/apm/network/ApmEventListener$CallTiming;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCallStartNs ()J
+	public final fun getConnectStartNs ()J
+	public final fun getConnectionError ()Ljava/lang/String;
+	public final fun getDnsMs ()J
+	public final fun getDnsStartNs ()J
+	public final fun getMethod ()Ljava/lang/String;
+	public final fun getRequestHeaderMs ()J
+	public final fun getRequestHeaderStartNs ()J
+	public final fun getResponseBodyMs ()J
+	public final fun getResponseBodyStartNs ()J
+	public final fun getResponseHeaderMs ()J
+	public final fun getResponseHeaderStartNs ()J
+	public final fun getStatusCode ()I
+	public final fun getTcpMs ()J
+	public final fun getTlsMs ()J
+	public final fun getTlsStartNs ()J
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun setCallStartNs (J)V
+	public final fun setConnectStartNs (J)V
+	public final fun setConnectionError (Ljava/lang/String;)V
+	public final fun setDnsMs (J)V
+	public final fun setDnsStartNs (J)V
+	public final fun setMethod (Ljava/lang/String;)V
+	public final fun setRequestHeaderMs (J)V
+	public final fun setRequestHeaderStartNs (J)V
+	public final fun setResponseBodyMs (J)V
+	public final fun setResponseBodyStartNs (J)V
+	public final fun setResponseHeaderMs (J)V
+	public final fun setResponseHeaderStartNs (J)V
+	public final fun setStatusCode (I)V
+	public final fun setTcpMs (J)V
+	public final fun setTlsMs (J)V
+	public final fun setTlsStartNs (J)V
+	public final fun setUrl (Ljava/lang/String;)V
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/network/ApmEventListener$Companion {
+	public final fun factory (Lcom/apm/network/NetworkModule;JZ)Lokhttp3/EventListener$Factory;
+	public static synthetic fun factory$default (Lcom/apm/network/ApmEventListener$Companion;Lcom/apm/network/NetworkModule;JZILjava/lang/Object;)Lokhttp3/EventListener$Factory;
+}
+
+public final class com/apm/network/ApmNetworkInterceptor : okhttp3/Interceptor {
+	public static final field Companion Lcom/apm/network/ApmNetworkInterceptor$Companion;
+	public fun <init> (Lcom/apm/network/NetworkModule;)V
+	public fun intercept (Lokhttp3/Interceptor$Chain;)Lokhttp3/Response;
+}
+
+public final class com/apm/network/ApmNetworkInterceptor$Companion {
+}
+
+public final class com/apm/network/NetworkConfig {
+	public static final field Companion Lcom/apm/network/NetworkConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZIJI)V
+	public synthetic fun <init> (ZIJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun component4 ()I
+	public final fun copy (ZIJI)Lcom/apm/network/NetworkConfig;
+	public static synthetic fun copy$default (Lcom/apm/network/NetworkConfig;ZIJIILjava/lang/Object;)Lcom/apm/network/NetworkConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAggregateWindowSize ()I
+	public final fun getEnableNetworkMonitor ()Z
+	public final fun getMaxPayloadSize ()I
+	public final fun getSlowThresholdMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/network/NetworkConfig$Companion {
+}
+
+public final class com/apm/network/NetworkModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/network/NetworkModule$Companion;
+	public fun <init> (Lcom/apm/network/NetworkConfig;)V
+	public synthetic fun <init> (Lcom/apm/network/NetworkConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getName ()Ljava/lang/String;
+	public final fun getStats ()Lcom/apm/network/NetworkStats;
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public final fun onNetworkPhaseStats (Lcom/apm/network/NetworkRequestStats;)V
+	public final fun onRequestComplete (Ljava/lang/String;Ljava/lang/String;IJJJLjava/lang/String;)V
+	public static synthetic fun onRequestComplete$default (Lcom/apm/network/NetworkModule;Ljava/lang/String;Ljava/lang/String;IJJJLjava/lang/String;ILjava/lang/Object;)V
+	public fun onStart ()V
+	public fun onStop ()V
+	public final fun traceHttpUrlConnection (Ljava/net/HttpURLConnection;JLkotlin/jvm/functions/Function2;)Ljava/lang/Object;
+	public static synthetic fun traceHttpUrlConnection$default (Lcom/apm/network/NetworkModule;Ljava/net/HttpURLConnection;JLkotlin/jvm/functions/Function2;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class com/apm/network/NetworkModule$Companion {
+}
+
+public final class com/apm/network/NetworkRequestStats {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;IJJJJJJJLjava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;IJJJJJJJLjava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()J
+	public final fun component11 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()I
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()J
+	public final fun component7 ()J
+	public final fun component8 ()J
+	public final fun component9 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;IJJJJJJJLjava/lang/String;)Lcom/apm/network/NetworkRequestStats;
+	public static synthetic fun copy$default (Lcom/apm/network/NetworkRequestStats;Ljava/lang/String;Ljava/lang/String;IJJJJJJJLjava/lang/String;ILjava/lang/Object;)Lcom/apm/network/NetworkRequestStats;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDnsMs ()J
+	public final fun getError ()Ljava/lang/String;
+	public final fun getMethod ()Ljava/lang/String;
+	public final fun getRequestHeaderMs ()J
+	public final fun getResponseBodyMs ()J
+	public final fun getResponseHeaderMs ()J
+	public final fun getStatusCode ()I
+	public final fun getTcpMs ()J
+	public final fun getTlsMs ()J
+	public final fun getTotalMs ()J
+	public final fun getUrl ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/network/NetworkStats {
+	public fun <init> ()V
+	public fun <init> (JJJJJ)V
+	public synthetic fun <init> (JJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun copy (JJJJJ)Lcom/apm/network/NetworkStats;
+	public static synthetic fun copy$default (Lcom/apm/network/NetworkStats;JJJJJILjava/lang/Object;)Lcom/apm/network/NetworkStats;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAvgDurationMs ()J
+	public final fun getErrorCount ()J
+	public final fun getMaxDurationMs ()J
+	public final fun getSuccessCount ()J
+	public final fun getTotalRequests ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

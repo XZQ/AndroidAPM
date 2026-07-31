@@ -13,7 +13,7 @@
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
-详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)。所有云端事项统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，版本与公开面规则见 [API 兼容策略](docs/API_COMPATIBILITY.md)。所有云端事项统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 第一性原理架构
 
@@ -454,7 +454,7 @@ ApmDiagnostics.clearAllProcesses()
 
 仓库根目录的 `.java-version` 固定推荐 JDK 17；Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17。`settings.gradle.kts` 会在项目配置前拒绝低于 17 的 Gradle runtime，并给出 `JAVA_HOME` 修复提示。
 
-任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，强制重跑根 Android/model、included plugin，并验证文档：
+任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，验证 24 个发布制品的已提交 ABI 基线，强制重跑根 Android/model、included plugin，并验证文档：
 
 ```powershell
 python tools/verify_ci.py
@@ -465,6 +465,9 @@ python tools/verify_ci.py
 ```powershell
 ./gradlew.bat testDebugUnitTest
 ./gradlew.bat :apm-model:test
+./gradlew.bat apiCheck
+./gradlew.bat -p apm-plugin apiCheck
+python tools/verify_api_baselines.py
 ./gradlew.bat assembleDebug
 ./gradlew.bat -p apm-plugin test
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
@@ -473,7 +476,7 @@ python apm-benchmark/run_device_soak.py --profile smoke --serial <serial> --apk 
 python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-budgets.json --results apm-benchmark/build/device-soak/smoke.json --profile smoke
 ```
 
-2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 101 suites / 688 tests，plugin 独立报告。
+2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 101 suites / 688 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。
 
 `verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件。UID 功耗优先读取 package-scoped 人类可读值；OEM 隐藏该 UID 时回退到 Android current checkin 中精确 UID 的 `pwi,uid` 项，并且累计值只有严格增长才构成功耗证据，平坦零值/回退/坏值继续按缺失处理。只读采样命令仅对三种明确 transport 瞬断做一秒间隔重试：smoke 默认 30 秒，24h/72h 默认 300 秒，CLI 绝对上限 600 秒；安装/卸载/清理/Activity 启停绝不自动重放。工件记录 `transientAdbRetryCount` 与 `adbReconnectTimeoutSeconds`，持续离线仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 同时输出 control CPU、enabled 绝对 CPU 和带符号 delta，校验器从原始 jiffies 重算并核对；原 `cpuAveragePercent` 绝对门禁与预算保持不变，旧 schema v1 工件继续兼容。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
 

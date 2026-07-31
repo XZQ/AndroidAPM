@@ -1,0 +1,45 @@
+public final class com/apm/plugin/ApmClassTransformer {
+	public static final field INSTANCE Lcom/apm/plugin/ApmClassTransformer;
+	public final fun createClassVisitor (ILorg/objectweb/asm/ClassVisitor;Ljava/lang/String;)Lorg/objectweb/asm/ClassVisitor;
+	public static synthetic fun createClassVisitor$default (Lcom/apm/plugin/ApmClassTransformer;ILorg/objectweb/asm/ClassVisitor;Ljava/lang/String;ILjava/lang/Object;)Lorg/objectweb/asm/ClassVisitor;
+	public final fun isInstrumentable (Ljava/lang/String;Ljava/util/List;)Z
+	public final fun transformDirectory (Ljava/io/File;Ljava/io/File;Lcom/apm/plugin/ApmSlowMethodExtension;)V
+	public final fun transformJar (Ljava/io/File;Ljava/io/File;Lcom/apm/plugin/ApmSlowMethodExtension;)V
+}
+
+public abstract class com/apm/plugin/ApmSlowMethodAsmClassVisitorFactory : com/android/build/api/instrumentation/AsmClassVisitorFactory {
+	public fun <init> ()V
+	public fun createClassVisitor (Lcom/android/build/api/instrumentation/ClassContext;Lorg/objectweb/asm/ClassVisitor;)Lorg/objectweb/asm/ClassVisitor;
+	public fun isInstrumentable (Lcom/android/build/api/instrumentation/ClassData;)Z
+}
+
+public class com/apm/plugin/ApmSlowMethodExtension {
+	public static final field Companion Lcom/apm/plugin/ApmSlowMethodExtension$Companion;
+	public fun <init> ()V
+	public final fun getEnabled ()Z
+	public final fun getExcludePackages ()Ljava/util/List;
+	public final fun setEnabled (Z)V
+	public final fun setExcludePackages (Ljava/util/List;)V
+}
+
+public final class com/apm/plugin/ApmSlowMethodExtension$Companion {
+}
+
+public abstract interface class com/apm/plugin/ApmSlowMethodInstrumentationParameters : com/android/build/api/instrumentation/InstrumentationParameters {
+	public abstract fun getEnabled ()Lorg/gradle/api/provider/Property;
+	public abstract fun getExcludePackages ()Lorg/gradle/api/provider/ListProperty;
+}
+
+public final class com/apm/plugin/ApmSlowMethodPlugin : org/gradle/api/Plugin {
+	public static final field Companion Lcom/apm/plugin/ApmSlowMethodPlugin$Companion;
+	public field extension Lcom/apm/plugin/ApmSlowMethodExtension;
+	public fun <init> ()V
+	public synthetic fun apply (Ljava/lang/Object;)V
+	public fun apply (Lorg/gradle/api/Project;)V
+	public final fun getExtension ()Lcom/apm/plugin/ApmSlowMethodExtension;
+	public final fun setExtension (Lcom/apm/plugin/ApmSlowMethodExtension;)V
+}
+
+public final class com/apm/plugin/ApmSlowMethodPlugin$Companion {
+}
+

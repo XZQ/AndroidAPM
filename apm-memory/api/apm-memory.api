@@ -1,0 +1,256 @@
+public final class com/apm/memory/MemoryConfig {
+	public static final field Companion Lcom/apm/memory/MemoryConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (JJFFIFZZZZZJZZZJZZJ)V
+	public synthetic fun <init> (JJFFIFZZZZZJZZZJZZJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component10 ()Z
+	public final fun component11 ()Z
+	public final fun component12 ()J
+	public final fun component13 ()Z
+	public final fun component14 ()Z
+	public final fun component15 ()Z
+	public final fun component16 ()J
+	public final fun component17 ()Z
+	public final fun component18 ()Z
+	public final fun component19 ()J
+	public final fun component2 ()J
+	public final fun component3 ()F
+	public final fun component4 ()F
+	public final fun component5 ()I
+	public final fun component6 ()F
+	public final fun component7 ()Z
+	public final fun component8 ()Z
+	public final fun component9 ()Z
+	public final fun copy (JJFFIFZZZZZJZZZJZZJ)Lcom/apm/memory/MemoryConfig;
+	public static synthetic fun copy$default (Lcom/apm/memory/MemoryConfig;JJFFIFZZZZZJZZZJZZJILjava/lang/Object;)Lcom/apm/memory/MemoryConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBackgroundIntervalMs ()J
+	public final fun getDumpCooldownMs ()J
+	public final fun getEnableActivityLeak ()Z
+	public final fun getEnableForkHprofDump ()Z
+	public final fun getEnableFragmentLeak ()Z
+	public final fun getEnableHprofDump ()Z
+	public final fun getEnableHprofStrip ()Z
+	public final fun getEnableNativeMonitor ()Z
+	public final fun getEnableOomMonitor ()Z
+	public final fun getEnableTrimCallbacks ()Z
+	public final fun getEnableViewModelLeak ()Z
+	public final fun getForegroundIntervalMs ()J
+	public final fun getJavaHeapCriticalRatio ()F
+	public final fun getJavaHeapWarnRatio ()F
+	public final fun getLeakCheckDelayMs ()J
+	public final fun getNativeHeapWarnKb ()J
+	public final fun getReportEverySnapshot ()Z
+	public final fun getSampleRate ()F
+	public final fun getTotalPssWarnKb ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/memory/MemoryConfig$Companion {
+}
+
+public final class com/apm/memory/MemoryModule : android/app/Application$ActivityLifecycleCallbacks, androidx/lifecycle/DefaultLifecycleObserver, com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/memory/MemoryModule$Companion;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/memory/MemoryConfig;)V
+	public synthetic fun <init> (Lcom/apm/memory/MemoryConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun captureOnce (Ljava/lang/String;)V
+	public static synthetic fun captureOnce$default (Lcom/apm/memory/MemoryModule;Ljava/lang/String;ILjava/lang/Object;)V
+	public final fun checkViewModel (Landroidx/lifecycle/ViewModel;)V
+	public fun getName ()Ljava/lang/String;
+	public fun onActivityCreated (Landroid/app/Activity;Landroid/os/Bundle;)V
+	public fun onActivityDestroyed (Landroid/app/Activity;)V
+	public fun onActivityPaused (Landroid/app/Activity;)V
+	public fun onActivityResumed (Landroid/app/Activity;)V
+	public fun onActivitySaveInstanceState (Landroid/app/Activity;Landroid/os/Bundle;)V
+	public fun onActivityStarted (Landroid/app/Activity;)V
+	public fun onActivityStopped (Landroid/app/Activity;)V
+	public fun onCreate (Landroidx/lifecycle/LifecycleOwner;)V
+	public fun onDestroy (Landroidx/lifecycle/LifecycleOwner;)V
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public fun onPause (Landroidx/lifecycle/LifecycleOwner;)V
+	public fun onResume (Landroidx/lifecycle/LifecycleOwner;)V
+	public fun onStart ()V
+	public fun onStart (Landroidx/lifecycle/LifecycleOwner;)V
+	public fun onStop ()V
+	public fun onStop (Landroidx/lifecycle/LifecycleOwner;)V
+}
+
+public final class com/apm/memory/MemoryModule$Companion {
+}
+
+public final class com/apm/memory/MemorySnapshot {
+	public fun <init> ()V
+	public fun <init> (JLjava/lang/String;JJJIIIIIJJJJJZJJJJJLjava/lang/String;Z)V
+	public synthetic fun <init> (JLjava/lang/String;JJJIIIIIJJJJJZJJJJJLjava/lang/String;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component10 ()I
+	public final fun component11 ()J
+	public final fun component12 ()J
+	public final fun component13 ()J
+	public final fun component14 ()J
+	public final fun component15 ()J
+	public final fun component16 ()Z
+	public final fun component17 ()J
+	public final fun component18 ()J
+	public final fun component19 ()J
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component20 ()J
+	public final fun component21 ()J
+	public final fun component22 ()Ljava/lang/String;
+	public final fun component23 ()Z
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun component6 ()I
+	public final fun component7 ()I
+	public final fun component8 ()I
+	public final fun component9 ()I
+	public final fun copy (JLjava/lang/String;JJJIIIIIJJJJJZJJJJJLjava/lang/String;Z)Lcom/apm/memory/MemorySnapshot;
+	public static synthetic fun copy$default (Lcom/apm/memory/MemorySnapshot;JLjava/lang/String;JJJIIIIIJJJJJZJJJJJLjava/lang/String;ZILjava/lang/Object;)Lcom/apm/memory/MemorySnapshot;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDalvikPssKb ()I
+	public final fun getForeground ()Z
+	public final fun getGcCount ()J
+	public final fun getGcTimeMs ()J
+	public final fun getGraphicsPssKb ()I
+	public final fun getJavaHeapFreeMb ()J
+	public final fun getJavaHeapMaxMb ()J
+	public final fun getJavaHeapUsedMb ()J
+	public final fun getLowMemThresholdKb ()J
+	public final fun getNativeHeapAllocatedKb ()J
+	public final fun getNativeHeapFreeKb ()J
+	public final fun getNativeHeapSizeKb ()J
+	public final fun getNativePssKb ()I
+	public final fun getOtherPssKb ()I
+	public final fun getProcessName ()Ljava/lang/String;
+	public final fun getScene ()Ljava/lang/String;
+	public final fun getSystemAvailMemKb ()J
+	public final fun getSystemTotalMemKb ()J
+	public final fun getTimestamp ()J
+	public final fun getTotalPssKb ()I
+	public final fun getVmPeakKb ()J
+	public final fun getVmRssKb ()J
+	public fun hashCode ()I
+	public final fun isLowMemory ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/memory/leak/GcRootType : java/lang/Enum {
+	public static final field FINALIZING Lcom/apm/memory/leak/GcRootType;
+	public static final field JAVA_FRAME Lcom/apm/memory/leak/GcRootType;
+	public static final field JNI_GLOBAL Lcom/apm/memory/leak/GcRootType;
+	public static final field JNI_LOCAL Lcom/apm/memory/leak/GcRootType;
+	public static final field MONITOR_USED Lcom/apm/memory/leak/GcRootType;
+	public static final field NATIVE_STACK Lcom/apm/memory/leak/GcRootType;
+	public static final field STICKY_CLASS Lcom/apm/memory/leak/GcRootType;
+	public static final field SYSTEM_CLASS Lcom/apm/memory/leak/GcRootType;
+	public static final field THREAD_BLOCK Lcom/apm/memory/leak/GcRootType;
+	public static final field THREAD_OBJ Lcom/apm/memory/leak/GcRootType;
+	public static final field UNKNOWN Lcom/apm/memory/leak/GcRootType;
+	public final fun getDisplayName ()Ljava/lang/String;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/memory/leak/GcRootType;
+	public static fun values ()[Lcom/apm/memory/leak/GcRootType;
+}
+
+public final class com/apm/memory/leak/LeakResult {
+	public fun <init> (Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;J)V
+	public synthetic fun <init> (Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Lcom/apm/memory/leak/LeakType;
+	public final fun component3 ()I
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/util/List;
+	public final fun component6 ()Ljava/util/List;
+	public final fun component7 ()J
+	public final fun copy (Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;J)Lcom/apm/memory/leak/LeakResult;
+	public static synthetic fun copy$default (Lcom/apm/memory/leak/LeakResult;Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;JILjava/lang/Object;)Lcom/apm/memory/leak/LeakResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getLeakClass ()Ljava/lang/String;
+	public final fun getReferenceChain ()Ljava/util/List;
+	public final fun getRetainedCount ()I
+	public final fun getScene ()Ljava/lang/String;
+	public final fun getSuspectFields ()Ljava/util/List;
+	public final fun getTimestamp ()J
+	public final fun getType ()Lcom/apm/memory/leak/LeakType;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/memory/leak/LeakType : java/lang/Enum {
+	public static final field ACTIVITY Lcom/apm/memory/leak/LeakType;
+	public static final field CUSTOM Lcom/apm/memory/leak/LeakType;
+	public static final field FRAGMENT Lcom/apm/memory/leak/LeakType;
+	public static final field VIEW_MODEL Lcom/apm/memory/leak/LeakType;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/memory/leak/LeakType;
+	public static fun values ()[Lcom/apm/memory/leak/LeakType;
+}
+
+public final class com/apm/memory/leak/RefNode {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lcom/apm/memory/leak/RefNode;
+	public static synthetic fun copy$default (Lcom/apm/memory/leak/RefNode;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lcom/apm/memory/leak/RefNode;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getClassName ()Ljava/lang/String;
+	public final fun getFieldName ()Ljava/lang/String;
+	public final fun getObjectId ()J
+	public final fun getReferenceType ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/memory/leak/ReferenceChainAnalyzer {
+	public static final field Companion Lcom/apm/memory/leak/ReferenceChainAnalyzer$Companion;
+	public fun <init> ()V
+	public final fun analyze (Ljava/io/File;Ljava/lang/String;)Lcom/apm/memory/leak/ReferenceChainResult;
+}
+
+public final class com/apm/memory/leak/ReferenceChainAnalyzer$Companion {
+}
+
+public final class com/apm/memory/leak/ReferenceChainResult {
+	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;J)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/util/List;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;J)Lcom/apm/memory/leak/ReferenceChainResult;
+	public static synthetic fun copy$default (Lcom/apm/memory/leak/ReferenceChainResult;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;JILjava/lang/Object;)Lcom/apm/memory/leak/ReferenceChainResult;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAnalysisDurationMs ()J
+	public final fun getChain ()Ljava/util/List;
+	public final fun getGcRootType ()Ljava/lang/String;
+	public final fun getTargetClassName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/memory/nativeheap/NativeHeapStats {
+	public fun <init> ()V
+	public fun <init> (JJJJJ)V
+	public synthetic fun <init> (JJJJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()J
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()J
+	public final fun copy (JJJJJ)Lcom/apm/memory/nativeheap/NativeHeapStats;
+	public static synthetic fun copy$default (Lcom/apm/memory/nativeheap/NativeHeapStats;JJJJJILjava/lang/Object;)Lcom/apm/memory/nativeheap/NativeHeapStats;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAllocCount ()J
+	public final fun getCurrentBytes ()J
+	public final fun getPeakBytes ()J
+	public final fun getTotalAllocBytes ()J
+	public final fun getTotalFreeBytes ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

@@ -1,0 +1,98 @@
+public final class com/apm/sqlite/ApmSQLiteDatabase {
+	public static final field Companion Lcom/apm/sqlite/ApmSQLiteDatabase$Companion;
+	public fun <init> (Landroid/database/sqlite/SQLiteDatabase;Lcom/apm/sqlite/SqliteModule;Ljava/lang/String;)V
+	public synthetic fun <init> (Landroid/database/sqlite/SQLiteDatabase;Lcom/apm/sqlite/SqliteModule;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun delete (Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;)I
+	public final fun execSQL (Ljava/lang/String;[Ljava/lang/Object;)V
+	public static synthetic fun execSQL$default (Lcom/apm/sqlite/ApmSQLiteDatabase;Ljava/lang/String;[Ljava/lang/Object;ILjava/lang/Object;)V
+	public final fun getDelegate ()Landroid/database/sqlite/SQLiteDatabase;
+	public final fun insert (Ljava/lang/String;Ljava/lang/String;Landroid/content/ContentValues;)J
+	public final fun query (Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Landroid/database/Cursor;
+	public static synthetic fun query$default (Lcom/apm/sqlite/ApmSQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Landroid/database/Cursor;
+	public final fun rawQuery (Ljava/lang/String;[Ljava/lang/String;)Landroid/database/Cursor;
+	public static synthetic fun rawQuery$default (Lcom/apm/sqlite/ApmSQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;ILjava/lang/Object;)Landroid/database/Cursor;
+	public final fun update (Ljava/lang/String;Landroid/content/ContentValues;Ljava/lang/String;[Ljava/lang/String;)I
+}
+
+public final class com/apm/sqlite/ApmSQLiteDatabase$Companion {
+}
+
+public final class com/apm/sqlite/QueryPlanAnalyzer {
+	public static final field Companion Lcom/apm/sqlite/QueryPlanAnalyzer$Companion;
+	public fun <init> (Lcom/apm/sqlite/SqliteConfig;)V
+	public final fun analyze (Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;)Ljava/util/List;
+	public final fun analyze (Landroid/database/sqlite/SQLiteDatabase;Ljava/lang/String;[Ljava/lang/String;)Ljava/util/List;
+	public final fun isAnalyzable (Ljava/lang/String;)Z
+}
+
+public final class com/apm/sqlite/QueryPlanAnalyzer$Companion {
+}
+
+public final class com/apm/sqlite/QueryPlanAnalyzer$QueryPlanIssue {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/apm/model/ApmSeverity;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Lcom/apm/model/ApmSeverity;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/apm/model/ApmSeverity;)Lcom/apm/sqlite/QueryPlanAnalyzer$QueryPlanIssue;
+	public static synthetic fun copy$default (Lcom/apm/sqlite/QueryPlanAnalyzer$QueryPlanIssue;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lcom/apm/model/ApmSeverity;ILjava/lang/Object;)Lcom/apm/sqlite/QueryPlanAnalyzer$QueryPlanIssue;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public final fun getIssueType ()Ljava/lang/String;
+	public final fun getSeverity ()Lcom/apm/model/ApmSeverity;
+	public final fun getTableName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/sqlite/SqliteConfig {
+	public static final field Companion Lcom/apm/sqlite/SqliteConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZJZIIIZJZZ)V
+	public synthetic fun <init> (ZJZIIIZJZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component10 ()Z
+	public final fun component2 ()J
+	public final fun component3 ()Z
+	public final fun component4 ()I
+	public final fun component5 ()I
+	public final fun component6 ()I
+	public final fun component7 ()Z
+	public final fun component8 ()J
+	public final fun component9 ()Z
+	public final fun copy (ZJZIIIZJZZ)Lcom/apm/sqlite/SqliteConfig;
+	public static synthetic fun copy$default (Lcom/apm/sqlite/SqliteConfig;ZJZIIIZJZZILjava/lang/Object;)Lcom/apm/sqlite/SqliteConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetectMainThreadDb ()Z
+	public final fun getEnableFullScanDetection ()Z
+	public final fun getEnableQueryPlanAnalysis ()Z
+	public final fun getEnableSqliteMonitor ()Z
+	public final fun getEnableTempBTreeDetection ()Z
+	public final fun getLargeAffectedRowsThreshold ()I
+	public final fun getMaxSqlLength ()I
+	public final fun getMaxStackTraceLength ()I
+	public final fun getQueryPlanThresholdMs ()J
+	public final fun getSlowQueryThresholdMs ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/sqlite/SqliteConfig$Companion {
+}
+
+public final class com/apm/sqlite/SqliteModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/sqlite/SqliteModule$Companion;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/sqlite/SqliteConfig;)V
+	public synthetic fun <init> (Lcom/apm/sqlite/SqliteConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getName ()Ljava/lang/String;
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public final fun onSqlExecuted (Ljava/lang/String;JILjava/lang/String;)V
+	public static synthetic fun onSqlExecuted$default (Lcom/apm/sqlite/SqliteModule;Ljava/lang/String;JILjava/lang/String;ILjava/lang/Object;)V
+	public fun onStart ()V
+	public fun onStop ()V
+}
+
+public final class com/apm/sqlite/SqliteModule$Companion {
+}
+

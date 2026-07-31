@@ -1,0 +1,121 @@
+public abstract interface class com/apm/uploader/ApmUploader {
+	public fun retryAfterHintMs ()Ljava/lang/Long;
+	public fun shutdown ()V
+	public abstract fun upload (Lcom/apm/model/ApmEvent;)Z
+}
+
+public final class com/apm/uploader/ApmUploader$DefaultImpls {
+	public static fun retryAfterHintMs (Lcom/apm/uploader/ApmUploader;)Ljava/lang/Long;
+	public static fun shutdown (Lcom/apm/uploader/ApmUploader;)V
+}
+
+public abstract interface class com/apm/uploader/BatchApmUploader : com/apm/uploader/ApmUploader {
+	public fun upload (Lcom/apm/model/ApmEvent;)Z
+	public abstract fun uploadBatch (Ljava/util/List;)Z
+}
+
+public final class com/apm/uploader/BatchApmUploader$DefaultImpls {
+	public static fun retryAfterHintMs (Lcom/apm/uploader/BatchApmUploader;)Ljava/lang/Long;
+	public static fun shutdown (Lcom/apm/uploader/BatchApmUploader;)V
+	public static fun upload (Lcom/apm/uploader/BatchApmUploader;Lcom/apm/model/ApmEvent;)Z
+}
+
+public final class com/apm/uploader/HttpApmUploader : com/apm/uploader/BatchApmUploader {
+	public static final field Companion Lcom/apm/uploader/HttpApmUploader$Companion;
+	public static final field DEFAULT_MAX_BATCH_BYTES I
+	public static final field MAX_BATCH_BYTES I
+	public fun <init> (Ljava/lang/String;Lcom/apm/uploader/HttpEndpointProvider;Ljava/util/Map;Lcom/apm/uploader/HttpHeaderProvider;IIZLcom/apm/model/SerializationFormat;Lcom/apm/uploader/UploaderLogger;Lcom/apm/model/ApmResourceContext;I)V
+	public synthetic fun <init> (Ljava/lang/String;Lcom/apm/uploader/HttpEndpointProvider;Ljava/util/Map;Lcom/apm/uploader/HttpHeaderProvider;IIZLcom/apm/model/SerializationFormat;Lcom/apm/uploader/UploaderLogger;Lcom/apm/model/ApmResourceContext;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun retryAfterHintMs ()Ljava/lang/Long;
+	public fun shutdown ()V
+	public fun upload (Lcom/apm/model/ApmEvent;)Z
+	public fun uploadBatch (Ljava/util/List;)Z
+}
+
+public final class com/apm/uploader/HttpApmUploader$Companion {
+}
+
+public abstract interface class com/apm/uploader/HttpEndpointProvider {
+	public static final field Companion Lcom/apm/uploader/HttpEndpointProvider$Companion;
+	public abstract fun currentEndpoint (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class com/apm/uploader/HttpEndpointProvider$Companion {
+	public final fun getDEFAULT ()Lcom/apm/uploader/HttpEndpointProvider;
+}
+
+public abstract interface class com/apm/uploader/HttpHeaderProvider {
+	public static final field Companion Lcom/apm/uploader/HttpHeaderProvider$Companion;
+	public abstract fun currentHeaders ()Ljava/util/Map;
+}
+
+public final class com/apm/uploader/HttpHeaderProvider$Companion {
+	public final fun getEMPTY ()Lcom/apm/uploader/HttpHeaderProvider;
+}
+
+public final class com/apm/uploader/LogcatApmUploader : com/apm/uploader/ApmUploader {
+	public static final field Companion Lcom/apm/uploader/LogcatApmUploader$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun retryAfterHintMs ()Ljava/lang/Long;
+	public fun shutdown ()V
+	public fun upload (Lcom/apm/model/ApmEvent;)Z
+}
+
+public final class com/apm/uploader/LogcatApmUploader$Companion {
+}
+
+public final class com/apm/uploader/RetryPolicy {
+	public static final field Companion Lcom/apm/uploader/RetryPolicy$Companion;
+	public fun <init> ()V
+	public fun <init> (IJJF)V
+	public synthetic fun <init> (IJJFILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()F
+	public final fun copy (IJJF)Lcom/apm/uploader/RetryPolicy;
+	public static synthetic fun copy$default (Lcom/apm/uploader/RetryPolicy;IJJFILjava/lang/Object;)Lcom/apm/uploader/RetryPolicy;
+	public final fun delayForAttempt (I)J
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getBackoffMultiplier ()F
+	public final fun getBaseDelayMs ()J
+	public final fun getMaxDelayMs ()J
+	public final fun getMaxRetries ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/uploader/RetryPolicy$Companion {
+}
+
+public final class com/apm/uploader/RetryingApmUploader : com/apm/uploader/ApmUploader {
+	public static final field Companion Lcom/apm/uploader/RetryingApmUploader$Companion;
+	public fun <init> (Lcom/apm/uploader/ApmUploader;Lcom/apm/uploader/RetryPolicy;IJLcom/apm/uploader/UploaderLogger;)V
+	public synthetic fun <init> (Lcom/apm/uploader/ApmUploader;Lcom/apm/uploader/RetryPolicy;IJLcom/apm/uploader/UploaderLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun queueSize ()I
+	public fun retryAfterHintMs ()Ljava/lang/Long;
+	public fun shutdown ()V
+	public fun upload (Lcom/apm/model/ApmEvent;)Z
+}
+
+public final class com/apm/uploader/RetryingApmUploader$Companion {
+}
+
+public abstract interface class com/apm/uploader/UploaderLogger {
+	public static final field Companion Lcom/apm/uploader/UploaderLogger$Companion;
+	public abstract fun d (Ljava/lang/String;)V
+	public abstract fun e (Ljava/lang/String;Ljava/lang/Throwable;)V
+	public static synthetic fun e$default (Lcom/apm/uploader/UploaderLogger;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)V
+	public abstract fun w (Ljava/lang/String;)V
+}
+
+public final class com/apm/uploader/UploaderLogger$Companion {
+	public final fun getDEFAULT ()Lcom/apm/uploader/UploaderLogger;
+}
+
+public final class com/apm/uploader/UploaderLogger$DefaultImpls {
+	public static synthetic fun e$default (Lcom/apm/uploader/UploaderLogger;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)V
+}
+

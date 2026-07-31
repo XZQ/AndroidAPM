@@ -1,0 +1,68 @@
+public final class com/apm/trace/ApmSpan {
+	public final fun end ()V
+	public final fun getContext ()Lcom/apm/trace/SpanContext;
+	public final fun getDurationMs ()J
+	public final fun getEndTimestampMs ()J
+	public final fun getName ()Ljava/lang/String;
+	public final fun getStartTimestampMs ()J
+	public final fun isFinished ()Z
+	public final fun setAttribute (Ljava/lang/String;Ljava/lang/String;)Lcom/apm/trace/ApmSpan;
+	public final fun setError (Ljava/lang/String;)Lcom/apm/trace/ApmSpan;
+	public final fun setParent (Lcom/apm/trace/ApmSpan;)Lcom/apm/trace/ApmSpan;
+	public final fun start ()Lcom/apm/trace/ApmSpan;
+}
+
+public final class com/apm/trace/ApmTrace {
+	public static final field INSTANCE Lcom/apm/trace/ApmTrace;
+	public final fun getConfig ()Lcom/apm/trace/TraceConfig;
+	public final fun setConfig (Lcom/apm/trace/TraceConfig;)V
+	public final fun span (Ljava/lang/String;)Lcom/apm/trace/ApmSpan;
+	public final fun startSpan (Ljava/lang/String;)Lcom/apm/trace/ApmSpan;
+	public final fun traced (Ljava/lang/String;Lkotlin/jvm/functions/Function1;)Ljava/lang/Object;
+}
+
+public final class com/apm/trace/SpanContext {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lcom/apm/trace/SpanContext;
+	public static synthetic fun copy$default (Lcom/apm/trace/SpanContext;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lcom/apm/trace/SpanContext;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getParentSpanId ()Ljava/lang/String;
+	public final fun getSpanId ()Ljava/lang/String;
+	public final fun getTraceId ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/trace/SpanStatus : java/lang/Enum {
+	public static final field ERROR Lcom/apm/trace/SpanStatus;
+	public static final field OK Lcom/apm/trace/SpanStatus;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/trace/SpanStatus;
+	public static fun values ()[Lcom/apm/trace/SpanStatus;
+}
+
+public final class com/apm/trace/TraceConfig {
+	public fun <init> ()V
+	public fun <init> (ZJZLjava/lang/String;I)V
+	public synthetic fun <init> (ZJZLjava/lang/String;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component2 ()J
+	public final fun component3 ()Z
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()I
+	public final fun copy (ZJZLjava/lang/String;I)Lcom/apm/trace/TraceConfig;
+	public static synthetic fun copy$default (Lcom/apm/trace/TraceConfig;ZJZLjava/lang/String;IILjava/lang/Object;)Lcom/apm/trace/TraceConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAutoReport ()Z
+	public final fun getEnabled ()Z
+	public final fun getMaxAttributes ()I
+	public final fun getMaxSpanDurationMs ()J
+	public final fun getReportModule ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+

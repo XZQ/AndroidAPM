@@ -87,10 +87,22 @@ def gradle_wrapper() -> str:
 
 
 def main() -> int:
-    """Execute tests, included-build tests, and documentation verification."""
+    """Execute ABI checks, tests, and documentation verification."""
     try:
         require_supported_java()
         wrapper = gradle_wrapper()
+        run_step(
+            "root public API compatibility",
+            [wrapper, "apiCheck", "--no-daemon"],
+        )
+        run_step(
+            "included Gradle plugin public API compatibility",
+            [wrapper, "-p", "apm-plugin", "apiCheck", "--no-daemon"],
+        )
+        run_step(
+            "API baseline integrity",
+            [sys.executable, "tools/verify_api_baselines.py"],
+        )
         run_step(
             "root Android and model tests",
             [

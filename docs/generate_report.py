@@ -82,6 +82,7 @@ def add_summary_table(document: Document) -> None:
         ("主源码", "164", "159 Kotlin + 4 C + 1 proto"),
         ("测试文件", "102", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
         ("当前完整测试", "101 suites / 688 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
@@ -288,6 +289,10 @@ def build_architecture_report() -> Document:
     document.add_heading("验证入口", level=1)
     document.add_paragraph("仓库的标准验证链如下，最终结果以项目状态文档和实际命令输出为准：")
     for command in (
+        "python tools/verify_ci.py",
+        "./gradlew apiCheck",
+        "./gradlew -p apm-plugin apiCheck",
+        "python tools/verify_api_baselines.py",
         "./gradlew assembleDebug",
         "./gradlew testDebugUnitTest",
         "./gradlew -p apm-plugin test",
@@ -312,6 +317,7 @@ def build_architecture_report() -> Document:
             "当前状态唯一主入口：docs/Android_APM_项目文档.md。",
             "便携交接入口：docs/PROJECT_HANDOFF.md。",
             "架构细节：docs/architecture/00_整体架构.md 与对应模块文档。",
+            "版本与公开面规则：docs/API_COMPATIBILITY.md；CI 只检查已提交 ABI，不自动覆盖基线。",
             "云端、发布和真机设备实验室清单由独立 AndroidAPM-Server 仓库的 docs/云端待建设清单.md 维护。",
             "DOCX、SVG 和 PNG 是派生产物；出现冲突时以源码和 Markdown 为准。",
             "历史原始附件已移除，不再作为文档交付或当前事实来源。",

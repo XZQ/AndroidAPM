@@ -14,10 +14,15 @@ plugins {
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.androidx.benchmark) apply false
+    alias(libs.plugins.binary.compatibility.validator)
 }
 
 group = "com.apm"
 version = "0.1.0"
+
+apiValidation {
+    ignoredProjects.addAll(listOf("apm-benchmark", "apm-sample-app"))
+}
 
 /** 项目主页地址，写入所有发布产物的 POM。 */
 val projectUrl = "https://github.com/XZQ/AndroidAPM"

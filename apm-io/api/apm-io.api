@@ -1,0 +1,120 @@
+public final class com/apm/io/IoConfig {
+	public static final field Companion Lcom/apm/io/IoConfig$Companion;
+	public fun <init> ()V
+	public fun <init> (ZJJJIZIIZZIZIZZ)V
+	public synthetic fun <init> (ZJJJIZIIZZIZIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun component10 ()Z
+	public final fun component11 ()I
+	public final fun component12 ()Z
+	public final fun component13 ()I
+	public final fun component14 ()Z
+	public final fun component15 ()Z
+	public final fun component2 ()J
+	public final fun component3 ()J
+	public final fun component4 ()J
+	public final fun component5 ()I
+	public final fun component6 ()Z
+	public final fun component7 ()I
+	public final fun component8 ()I
+	public final fun component9 ()Z
+	public final fun copy (ZJJJIZIIZZIZIZZ)Lcom/apm/io/IoConfig;
+	public static synthetic fun copy$default (Lcom/apm/io/IoConfig;ZJJJIZIIZZIZIZZILjava/lang/Object;)Lcom/apm/io/IoConfig;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDuplicateReadThreshold ()I
+	public final fun getEnableAutoHook ()Z
+	public final fun getEnableCloseableLeak ()Z
+	public final fun getEnableFdLeakDetection ()Z
+	public final fun getEnableIoMonitor ()Z
+	public final fun getEnableNativePltHook ()Z
+	public final fun getEnableThroughputStats ()Z
+	public final fun getEnableZeroCopyDetection ()Z
+	public final fun getFdLeakThreshold ()I
+	public final fun getLargeBufferSize ()J
+	public final fun getMainThreadIoThresholdMs ()J
+	public final fun getMaxStackTraceLength ()I
+	public final fun getSingleIoThresholdMs ()J
+	public final fun getSmallBufferThreshold ()I
+	public final fun getThroughputWindow ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/io/IoConfig$Companion {
+}
+
+public final class com/apm/io/IoModule : com/apm/core/ApmModule {
+	public static final field Companion Lcom/apm/io/IoModule$Companion;
+	public fun <init> ()V
+	public fun <init> (Lcom/apm/io/IoConfig;)V
+	public synthetic fun <init> (Lcom/apm/io/IoConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun getName ()Ljava/lang/String;
+	public final fun onBufferCopy (Ljava/lang/String;Ljava/lang/String;JI)V
+	public final fun onClose (Ljava/lang/Object;J)V
+	public fun onInitialize (Lcom/apm/core/ApmContext;)V
+	public final fun onIoOperation (Ljava/lang/String;Ljava/lang/String;JJ)V
+	public static synthetic fun onIoOperation$default (Lcom/apm/io/IoModule;Ljava/lang/String;Ljava/lang/String;JJILjava/lang/Object;)V
+	public final fun onRead (Ljava/lang/String;II)V
+	public fun onStart ()V
+	public fun onStop ()V
+	public final fun wrapInputStream (Ljava/io/InputStream;Ljava/lang/String;)Ljava/io/InputStream;
+	public final fun wrapOutputStream (Ljava/io/OutputStream;Ljava/lang/String;)Ljava/io/OutputStream;
+}
+
+public final class com/apm/io/IoModule$Companion {
+}
+
+public final class com/apm/io/NativeIoHook {
+	public static final field Companion Lcom/apm/io/NativeIoHook$Companion;
+	public fun <init> (Lcom/apm/io/IoConfig;)V
+	public final fun destroy ()V
+	public final fun getGlobalStats ()Ljava/util/Map;
+	public final fun getThroughputStats ()Ljava/util/List;
+	public final fun init ()V
+	public final fun onBufferCopy (Ljava/lang/String;Ljava/lang/String;JI)V
+	public final fun onClose (Ljava/lang/Object;J)V
+	public final fun onRead (Ljava/lang/String;II)V
+	public final fun onWrite (Ljava/lang/String;II)V
+	public final fun wrapInputStream (Ljava/io/InputStream;Ljava/lang/String;)Ljava/io/InputStream;
+	public final fun wrapOutputStream (Ljava/io/OutputStream;Ljava/lang/String;)Ljava/io/OutputStream;
+}
+
+public final class com/apm/io/NativeIoHook$Companion {
+}
+
+public final class com/apm/io/NativeIoHook$CopyChain {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getBufferCountSum ()Ljava/util/concurrent/atomic/AtomicLong;
+	public final fun getCopyCount ()Ljava/util/concurrent/atomic/AtomicLong;
+	public final fun getFromPath ()Ljava/lang/String;
+	public final fun getToPath ()Ljava/lang/String;
+	public final fun getTotalBytes ()Ljava/util/concurrent/atomic/AtomicLong;
+}
+
+public final class com/apm/io/NativeIoHook$IoSession {
+	public fun <init> (Ljava/lang/String;JLjava/lang/String;Z)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()J
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Z
+	public final fun copy (Ljava/lang/String;JLjava/lang/String;Z)Lcom/apm/io/NativeIoHook$IoSession;
+	public static synthetic fun copy$default (Lcom/apm/io/NativeIoHook$IoSession;Ljava/lang/String;JLjava/lang/String;ZILjava/lang/Object;)Lcom/apm/io/NativeIoHook$IoSession;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOpenTime ()J
+	public final fun getPath ()Ljava/lang/String;
+	public final fun getThreadName ()Ljava/lang/String;
+	public fun hashCode ()I
+	public final fun isMainThread ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/io/NativeIoHook$ThroughputStats {
+	public fun <init> (Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;Ljava/util/concurrent/atomic/AtomicLong;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getOpCount ()Ljava/util/concurrent/atomic/AtomicLong;
+	public final fun getPath ()Ljava/lang/String;
+	public final fun getReadBytes ()Ljava/util/concurrent/atomic/AtomicLong;
+	public final fun getWriteBytes ()Ljava/util/concurrent/atomic/AtomicLong;
+}
+
