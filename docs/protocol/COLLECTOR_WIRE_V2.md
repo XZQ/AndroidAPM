@@ -1,6 +1,6 @@
 # AndroidAPM Collector Wire Protocol V2
 
-> 状态：客户端协议已冻结｜同步日期：2026-07-22｜服务端实现位于仓库边界之外
+> 状态：客户端协议已冻结｜同步日期：2026-07-31｜参考服务端已联调，生产部署仍位于仓库边界之外
 
 ## 1. 适用范围
 
@@ -112,3 +112,5 @@ V2 的 HTTP 2xx 不是充分成功条件。Collector 必须在同一响应中返
 - V2 message 只能 append 新 field number，不能复用或改变现有字段语义。
 - 破坏性变化必须新增 schema version、media-type version 与配置枚举，不能在 V2 下静默切换。
 - Collector 仍需实现鉴权、租户隔离、eventId 幂等、协议错误指标和死信；这些不属于客户端仓库。
+
+2026-07-31，独立 `AndroidAPM-Server` 仓库的 `codex/collector-v2-e2e` 分支已实现 V2 decoder、typed scalar、resource/header 一致性、提交后精确 ACK 和 `(tenant_id,event_id)` 去重。客户端仓库的 `tools/verify_collector_e2e.py` 会构建真实 `HttpApmUploader`，经 Gzip HTTP 向运行中的 Gateway 连续重放同一 batch，并从测试用 SQLite 核对唯一事件、类型和 resource。该证据冻结了跨语言 wire 兼容性；它不代表 PostgreSQL 并发/事务、TLS ingress、反向代理丢 ACK、SigNoz 或生产部署已经验收。

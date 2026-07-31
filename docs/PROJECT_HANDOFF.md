@@ -206,6 +206,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日公开 API 门禁完成：根构建使用 Kotlin binary-compatibility-validator 0.18.1 对 23 个发布制品执行 `apiCheck`，included `apm-plugin` 独立执行同一门禁；已提交 24 份 ABI 基线，其中 23 份包含公开声明，`apm-bundle` 因不承载实现类而保持空基线。`tools/verify_api_baselines.py` 对缺失、意外空文件、错误纳入 sample/benchmark 和未知基线 fail closed，`tools/verify_ci.py` 在单元测试前统一执行 ABI 比较与完整性检查。扩展后的完整门禁在 JDK 17.0.14 下通过，测试报告仍为 Android 96 suites / 642 tests、model 5 suites / 46 tests、plugin 1 suite / 18 tests，全部零失败；文档校验通过 44 Markdown / 55 links。两份 DOCX 已从同步生成源重建并通过 OOXML 包、关系、XML 与新增 ABI 文本结构检查；本机缺少 LibreOffice/`soffice`，因此不声明 PNG 视觉验收。当前 0.x 的 patch 默认禁止 breaking ABI，minor breaking 也必须显式迁移与人工审查；完整规则见 [API 兼容策略](API_COMPATIBILITY.md)。
 
+同日 Collector V2 跨仓闭环完成：独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）通过 57 tests、ruff、mypy 和文档校验。客户端 `tools/verify_collector_e2e.py` 以 JDK 17 构建真实 `HttpApmUploader`，启动实际 FastAPI/uvicorn Gateway，经 Gzip HTTP 两次发送相同 2-event V2 batch；两次均取得精确 schema/batch/count ACK，测试用 SQLite inbox 最终仅有 2 个 eventId，12 种 typed scalar、`NaN/Infinity` 的 JSON-safe typed text、resource 和协议元数据均经数据库复核。该脚本不输出一次性 ingest key。Docker 本机不可用，因此不能把这一 SQLite 兼容闭环外推为 PostgreSQL、TLS、Compose、SigNoz 或生产 durability 验收。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
@@ -238,7 +240,7 @@ python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 
 ## 后续优先级
 
-客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。后续事项均需要 Collector、平台凭据、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。Collector 必须部署独立 V2 endpoint、返回 exact whole-batch ACK 并按 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用短 smoke、host tests 或模拟器 parser 证据冒充已完成。
+客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。参考 Collector 已完成本地 V2/认证/幂等联调；后续仍需平台凭据、生产 PostgreSQL/TLS、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。生产 Collector 必须保留独立 V2 endpoint、exact whole-batch ACK 和 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用短 smoke、host tests 或模拟器 parser 证据冒充已完成。
 
 ## Git 与文档策略
 

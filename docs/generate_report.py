@@ -182,6 +182,8 @@ def build_status_report() -> Document:
         "通过 SQLite outbox 持久化并交给可注入上传器。它仍是客户端框架，不包含生产采集后端、查询、"
         "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过；FPS 静态页面 VSync observer 修复后，"
         "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过；OnePlus Android 16 预检也在原预算下通过并产出 UID 功耗证据。"
+        "2026-07-31 真实 HttpApmUploader 已与独立参考服务端完成 V2/Gzip/exact ACK/typed persistence/重放去重联调；"
+        "该 SQLite 兼容证据不替代 PostgreSQL/TLS/代理故障或生产部署验收。"
         "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
         "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
     )
@@ -213,8 +215,8 @@ def build_status_report() -> Document:
 
     document.add_heading("走向生产的优先级", level=1)
     priorities = [
-        ("P0", "接入生产 collector，并定义鉴权、限流、协议版本和隐私治理"),
-        ("P0", "在 Collector 按客户端 eventId 幂等，明确整批 ACK、重放与死信"),
+        ("P0", "把已联调的参考 Collector 部署到 PostgreSQL/TLS staging，完成鉴权、限流和隐私治理"),
+        ("P0", "验收并发 eventId 幂等、commit uncertainty、ACK 丢失、重放与死信"),
         ("发布前", "在受控设备实验室按原预算执行 24h/72h、长稳功耗、热与磁盘验收"),
         ("P1", "建立真机/OEM/API 设备矩阵，覆盖 native、ANR、多进程和长期离线"),
         ("P1", "建设 Native 符号上传/后台符号化与外部制品发布"),
@@ -290,6 +292,7 @@ def build_architecture_report() -> Document:
     document.add_paragraph("仓库的标准验证链如下，最终结果以项目状态文档和实际命令输出为准：")
     for command in (
         "python tools/verify_ci.py",
+        "python tools/verify_collector_e2e.py --server-repo <AndroidAPM-Server checkout>",
         "./gradlew apiCheck",
         "./gradlew -p apm-plugin apiCheck",
         "python tools/verify_api_baselines.py",

@@ -460,6 +460,15 @@ ApmDiagnostics.clearAllProcesses()
 python tools/verify_ci.py
 ```
 
+参考 Collector 的跨仓协议闭环单独执行，不放进只依赖本仓库的标准客户端门禁。准备 JDK 17、`uv` 和 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` checkout 后运行：
+
+```powershell
+python tools/verify_collector_e2e.py `
+  --server-repo D:\path\to\AndroidAPM-Server
+```
+
+该脚本构建真实 `HttpApmUploader`，启动本地 Gateway，以 V2 + Gzip 上传并重放同一批次，随后校验精确 ACK、typed fields/resource 和 test-only SQLite 去重。它不会把 SQLite 结果描述成 PostgreSQL 生产 durability。
+
 需要定向执行时可使用底层命令：
 
 ```powershell
@@ -477,6 +486,8 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 ```
 
 2026-07-31 在 JDK 17.0.14 下以 `--rerun-tasks` 强制刷新当前 tip：根 Android 96 suites / 642 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests 全部通过且为 0 failures/errors/skips；根 Android + model 当前完整基线为 101 suites / 688 tests，plugin 独立报告。同日 `apiCheck` 覆盖 23 个根发布制品和 included `apm-plugin`，基线完整性确认 24 个制品中 23 个具有非空公开 ABI，空的 `apm-bundle` 与其无实现类分发设计一致。
+
+同日与独立服务端分支 `codex/collector-v2-e2e`（验证 tip `2feb2f5`）完成真实 HTTP 联调：客户端两次发送相同的 2-event V2 Gzip batch，只有三项精确 ACK 匹配时才报告成功；SQLite 最终保持 2 个唯一 eventId，并核对 12 种标量、`NaN/Infinity` 的 JSON-safe typed text、固定 resource 和协议元数据。服务端自身为 57 tests / 0 failures；Docker 不可用，所以 PostgreSQL/Compose/SigNoz 仍是外部待验收项。
 
 `verifyReleasePerformanceBudgets` 运行 AndroidX benchmark 并检查 median time/allocation。`run_device_soak.py` 先清理明确的 sample package，执行无 SDK control 与失败 uploader 的 SDK-enabled 冷进程段，再采集启动、主线程、CPU、PSS、app-private disk、UID 功耗和 thermal；若 OEM 明确拒绝 ADB shell 的 `CLEAR_APP_USER_DATA`，只对所选 sample APK 执行卸载重装回退，并把 `appDataResetStrategy` 写入工件。UID 功耗优先读取 package-scoped 人类可读值；OEM 隐藏该 UID 时回退到 Android current checkin 中精确 UID 的 `pwi,uid` 项，并且累计值只有严格增长才构成功耗证据，平坦零值/回退/坏值继续按缺失处理。只读采样命令仅对三种明确 transport 瞬断做一秒间隔重试：smoke 默认 30 秒，24h/72h 默认 300 秒，CLI 绝对上限 600 秒；安装/卸载/清理/Activity 启停绝不自动重放。工件记录 `transientAdbRetryCount` 与 `adbReconnectTimeoutSeconds`，持续离线仍 fail closed。换成 `--profile 24h` / `72h` 才能产生对应长稳工件。result schema v2 同时输出 control CPU、enabled 绝对 CPU 和带符号 delta，校验器从原始 jiffies 重算并核对；原 `cpuAveragePercent` 绝对门禁与预算保持不变，旧 schema v1 工件继续兼容。校验器对缺项、坏 JSON、时长/重启不足、功耗缺失、超预算或 emulator 证据都会失败。详细 acquisition 契约见 [benchmark 文档](apm-benchmark/README.md)。没有可安装的物理设备时只能运行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"` 验证 host gate 逻辑，不能据此声明真机预算通过。
 
@@ -503,7 +514,7 @@ python apm-benchmark/verify_device_soak.py --budgets apm-benchmark/device-soak-b
 
 仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v3 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、dispatcher 固定阶段的有界尾延迟证据、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断、固定 microbenchmark 预算，以及 fail-closed 的物理设备 A/B/离线/重启 smoke、24h、72h campaign 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：按已冻结 V2 协议实现生产 Collector、租户/鉴权、服务端 eventId 幂等、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：参考 Collector 的本地 V2/认证/幂等闭环已经联调，但生产 PostgreSQL/TLS 部署、并发与 ACK 丢失故障注入、查询/聚合/告警/Dashboard、Native 后台符号化、外部制品发布、云端 runner 接线仍待完成；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 

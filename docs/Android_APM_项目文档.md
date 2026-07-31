@@ -352,6 +352,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 96 suites / 642 tests 与 model 5 suites / 46 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 101 suites / 688 tests，plugin 18 tests 独立报告；该结果取代 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的 24h/72h 结论。
 
+同日 Collector V2 不再只有双方各自的 mock/单元证据。独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）实现并验证 V2 envelope、typed scalar、resource/header 一致性、提交后 exact ACK 和 `(tenant_id,event_id)` 去重；服务端门禁为 57 tests、ruff/mypy/docs 全绿。客户端新增 `tools/verify_collector_e2e.py`，以真实 `HttpApmUploader` 经 Gzip HTTP 重放相同 batch，并从 test-only SQLite 核对 2 个唯一事件、12 种标量、非有限浮点安全文本、resource 和协议元数据。该结果证明跨语言 wire 兼容，不替代 PostgreSQL/TLS/代理故障/SigNoz/生产部署。
+
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略
@@ -365,15 +367,15 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 - 物理设备 `24h` / `72h` 与长稳功耗、热和磁盘验收
 - 真机跑满 24/72 小时的功耗、内存、离线和重启结果
 - 多 OEM/Android 版本兼容
-- 真实 Collector 协议与服务端幂等
+- 生产 PostgreSQL/TLS Collector 的并发、commit uncertainty 与 ACK 丢失故障注入
 
 ## 十三、客户端完成边界与外部工作
 
 仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、直接事件异步 map 冻结、epoch/单调时钟职责分离、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、按实际 interval 定义的 FPS、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断、固定 microbenchmark 预算，以及 fail-closed 的真机 A/B/离线/重启 smoke/24h/72h gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
-本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。生产落地仍需 Collector 按冻结协议部署、返回 exact ACK 并按 eventId 去重。
+本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。参考 Collector 已按冻结协议完成本地 exact ACK/eventId 去重联调；生产落地仍需 PostgreSQL/TLS 部署和故障验收。
 
-生产 Collector、鉴权/租户、服务端幂等、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及预生产阶段的 24h/72h、功耗仪或 UID、热与磁盘验收，全部依赖外部系统或受控设备。长 profile 不阻塞当前客户端 SDK 迭代，但正式生产准入前仍须按原预算执行。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
+生产 Collector 的 PostgreSQL/TLS/租户运维、查询聚合/告警/Dashboard、Native 后台符号化、外部 Maven 发布、云端 runner 接线，以及预生产阶段的 24h/72h、功耗仪或 UID、热与磁盘验收，全部依赖外部系统或受控设备。长 profile 不阻塞当前客户端 SDK 迭代，但正式生产准入前仍须按原预算执行。唯一任务清单和验收条件由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
 ## 十四、设计原则
 
