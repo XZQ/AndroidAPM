@@ -27,6 +27,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.
+- `settings.gradle.kts` fails before project configuration when Gradle runs on a JVM below `17`; `.java-version` advertises the repository default. `python tools/verify_ci.py` is the platform-neutral client CI entry and always reruns root Android/model tests, included plugin tests, and documentation verification.
 
 Current-tip full test refresh on `2026-07-31` used JDK `17.0.14` with forced task reruns. Root `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` passed Android `96` suites / `642` tests and model `5` suites / `46` tests; included `apm-plugin test --rerun-tasks --no-daemon` passed `1` suite / `18` tests. All reports contain zero failures/errors/skips. Root Android plus model therefore establishes the current `101`-suite / `688`-test client baseline, with the plugin reported separately. This supersedes the Fourteenth-batch `636`-test root / `682`-test Android-plus-model baseline below; the older entries remain historical evidence for the changes they accompanied.
 
@@ -178,6 +179,6 @@ SDK self-diagnostics are separate from event delivery. They are enabled by defau
 
 1. `git status --short --branch`
 2. Relevant Gradle tests/builds under JDK 17
-3. `python docs/verify_docs.py` plus documentation stale-claim checks
+3. For a full client CI refresh, `python tools/verify_ci.py`; otherwise run `python docs/verify_docs.py` plus documentation stale-claim checks
 4. `git diff --check`
 5. After push: exact equality among `HEAD`, `origin/develop`, and `git ls-remote origin refs/heads/develop`

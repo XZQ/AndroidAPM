@@ -1,3 +1,14 @@
+/** Minimum supported JVM for running Gradle and the Android Gradle Plugin. */
+val minimumGradleRuntime = JavaVersion.VERSION_17
+
+if (!JavaVersion.current().isCompatibleWith(minimumGradleRuntime)) {
+    throw GradleException(
+        "AndroidAPM requires JDK 17 or newer to run Gradle, but the current runtime is " +
+            "${System.getProperty("java.version")}. Set JAVA_HOME to a JDK 17+ installation " +
+            "before invoking gradlew.",
+    )
+}
+
 pluginManagement {
     // 共享构建约定（convention plugin）所在的 included build
     includeBuild("build-logic")

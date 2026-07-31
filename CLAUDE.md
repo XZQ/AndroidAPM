@@ -12,6 +12,7 @@
 ## 项目信息
 - Multi-module Gradle (Kotlin 2.2.21, AGP 8.13.2, Gradle 8.13, Java 17 toolchain, Gradle runtime JDK 17+, compileSdk 34, minSdk 24)
 - JVM 字节码目标保持 Java 17；构建与验证命令见 `AGENTS.md`
+- `settings.gradle.kts` 对 Gradle runtime JDK 17+ fail fast；完整客户端 CI 使用 `python tools/verify_ci.py`
 
 ## Git 提交
 英文，格式 `Type: Subject`。Type：Feat / Fix / Refactor / Perf / Style / Docs / Revert / Build。

@@ -207,10 +207,10 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
-2. 推荐 `JAVA_HOME` 指向 JDK 17；也可使用 Gradle/AGP 支持的更新 JDK，实际编译与测试仍由 Java 17 toolchain 执行。
+2. 根目录 `.java-version` 推荐 JDK 17；设置 `JAVA_HOME` 指向 JDK 17 或 Gradle/AGP 支持的更新 JDK。低于 17 时 settings 会在项目配置前给出明确错误，实际编译与测试仍由 Java 17 toolchain 执行。
 3. 安装 Android SDK 34 和项目需要的 NDK/CMake。
 4. 按 AGENTS 读序阅读。
-5. 执行：
+5. 完整客户端 CI 直接执行 `python tools/verify_ci.py`；需要逐项诊断时执行：
 
 ```powershell
 git status --short --branch

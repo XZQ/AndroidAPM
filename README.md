@@ -452,7 +452,15 @@ ApmDiagnostics.clearAllProcesses()
 
 ## 构建与验证
 
-推荐直接使用 JDK 17。Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17：
+仓库根目录的 `.java-version` 固定推荐 JDK 17；Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17。`settings.gradle.kts` 会在项目配置前拒绝低于 17 的 Gradle runtime，并给出 `JAVA_HOME` 修复提示。
+
+任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，强制重跑根 Android/model、included plugin，并验证文档：
+
+```powershell
+python tools/verify_ci.py
+```
+
+需要定向执行时可使用底层命令：
 
 ```powershell
 ./gradlew.bat testDebugUnitTest
