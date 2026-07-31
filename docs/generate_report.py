@@ -80,7 +80,7 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "104", "JVM、Robolectric、instrumented benchmark、device-soak host gate、插件和 native 契约测试"),
+        ("测试文件", "105", "JVM、Robolectric、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
         ("当前完整测试", "103 suites / 700 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
@@ -114,7 +114,7 @@ def add_capability_table(document: Document) -> None:
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
         ("跨层字节预算", "Dispatcher 8 MiB；IPC 4 MiB/256 KiB/1 MiB/16 MiB；SQLite 256 KiB/64 MiB", "各层按 retained estimate、encoded/file bytes、durable payload 的真实资源维度独立限界"),
-        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；24h/72h 门禁保留，延期到预生产受控设备实验室"),
+        ("真机开销门", "A/B 启动、主线程、CPU、PSS、功耗、磁盘、热、离线重启", "三项 microbenchmark 与 Redmi 原预算 smoke 通过；三 lane/六工件矩阵及 provenance 门禁已固化，24h/72h 真机执行延期到预生产设备实验室"),
         ("显式 API 接入", "Network、SQLite、IPC、WebView、ThreadPool、Battery、IO", "由宿主在真实调用点安装 wrapper 或传入 executor/耗时/错误"),
         ("运行时接入自检", "hostIntegrationSnapshot 模块/注册/调用证据", "只存枚举、计数、时间戳；无流量不能被误判为静态接入失败"),
         ("构建期插桩", "ASM slow-method", "AGP instrumentation API；需应用 Gradle 插件"),
@@ -185,8 +185,9 @@ def build_status_report() -> Document:
         "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过；OnePlus Android 16 预检也在原预算下通过并产出 UID 功耗证据。"
         "2026-07-31 真实 HttpApmUploader 已与独立参考服务端完成 V2/Gzip/exact ACK/typed persistence/重放去重联调；"
         "该 SQLite 兼容证据不替代 PostgreSQL/TLS/代理故障或生产部署验收。"
-        "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
-        "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
+            "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
+            "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
+            "2026-07-31 已固化 API 24–28 / 29–33 / 34–36 三 lane、六组 profile 工件与 exact provenance 汇总门禁；plan-only 通过不代表真机长稳通过。"
     )
     add_summary_table(document)
 
@@ -212,6 +213,8 @@ def build_status_report() -> Document:
             "NO_RUNTIME_EVIDENCE 只表示本会话尚未发生相应流程。",
             "Device-soak UID 功耗优先读取 package-scoped 值，OEM 隐藏时精确读取 current checkin pwi；"
             "累计值必须严格增长，平坦零值、回退、坏值和错误 UID 继续 fail closed。",
+            "Device-soak schema v3 绑定 APK、clean source、matrix/budget/runner 哈希、lane 与完整设备身份；"
+            "aggregate gate 要求同一 APK/source、全部 lane/profile 以及 OEM/设备/reset 多样性。",
         ],
     )
     add_diagram(document, "android-apm-event-pipeline.png", "图 1：事件从采集到确认删除的真实管线")
@@ -221,7 +224,7 @@ def build_status_report() -> Document:
         ("P0", "把已联调的参考 Collector 部署到 PostgreSQL/TLS staging，完成鉴权、限流和隐私治理"),
         ("P0", "验收并发 eventId 幂等、commit uncertainty、ACK 丢失、重放与死信"),
         ("发布前", "在受控设备实验室按原预算执行 24h/72h、长稳功耗、热与磁盘验收"),
-        ("P1", "建立真机/OEM/API 设备矩阵，覆盖 native、ANR、多进程和长期离线"),
+        ("P1", "按已固化的真机/OEM/API 矩阵执行 native、ANR、多进程和长期离线实测"),
         ("P1", "建设 Native 符号上传/后台符号化与外部制品发布"),
         ("P2", "建设查询、聚合、告警、版本对比与 SDK 自身健康观测"),
     ]
@@ -277,6 +280,9 @@ def build_architecture_report() -> Document:
             "device-soak UID 功耗可从精确 current-checkin pwi 回退采集，但累计值必须严格增长；"
             "当前 Redmi 五分钟诊断仍为零，不能把零值写成通过；2026-07-25 的 24h 重试主动取消且无 JSON，"
             "长 profile 保留到预生产受控设备实验室执行。",
+            "device-soak schema v3 绑定 exact APK/source/matrix/budget/runner/lane/device provenance；"
+            "三 lane/六工件 aggregate gate 检查完整性、OEM/设备/reset 多样性和单 APK/source 一致性，"
+            "plan-only 校验不产生真机结论。",
         ],
     )
     add_diagram(document, "android-apm-module-dependencies.png", "图 2：主要模块依赖方向")

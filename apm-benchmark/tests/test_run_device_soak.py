@@ -23,6 +23,26 @@ SPEC.loader.exec_module(RUNNER)
 class DeviceSoakRunnerTest(unittest.TestCase):
     """Protects host parsers and weighted resource summary semantics."""
 
+    def test_device_identity_includes_matrix_matching_fields(self) -> None:
+        """Acquisition records manufacturer/API/ABI instead of relying on a model string."""
+        adb = Mock()
+        adb.read_shell.side_effect = [
+            "vendor/device/release\n",
+            "Physical Phone\n",
+            "device-code\n",
+            "0\n",
+            "Example OEM\n",
+            "arm64-v8a\n",
+            "34\n",
+        ]
+
+        identity = RUNNER._device_identity(adb, "serial-1")
+
+        self.assertEqual("Example OEM", identity["manufacturer"])
+        self.assertEqual("arm64-v8a", identity["primaryAbi"])
+        self.assertEqual(34, identity["apiLevel"])
+        self.assertFalse(identity["isEmulator"])
+
     def test_activity_manager_total_time_is_required(self) -> None:
         """Cold-start parsing accepts TotalTime and rejects incomplete output."""
         self.assertEqual(123.0, RUNNER._parse_startup_ms("Status: ok\nTotalTime: 123\n"))
@@ -212,6 +232,8 @@ class DeviceSoakRunnerTest(unittest.TestCase):
             [
                 "--profile",
                 "smoke",
+                "--lane-id",
+                "legacy-api24-28",
                 "--serial",
                 "serial",
                 "--apk",
@@ -225,6 +247,8 @@ class DeviceSoakRunnerTest(unittest.TestCase):
             [
                 "--profile",
                 "24h",
+                "--lane-id",
+                "mainstream-api29-33",
                 "--serial",
                 "serial",
                 "--apk",
@@ -251,6 +275,8 @@ class DeviceSoakRunnerTest(unittest.TestCase):
                     [
                         "--profile",
                         "24h",
+                        "--lane-id",
+                        "mainstream-api29-33",
                         "--serial",
                         "serial",
                         "--apk",
@@ -262,6 +288,59 @@ class DeviceSoakRunnerTest(unittest.TestCase):
                         "601",
                     ]
                 )
+
+    @patch.object(RUNNER.subprocess, "run")
+    def test_source_state_requires_exact_git_revision(self, run_command: Mock) -> None:
+        """Device evidence binds to one clean commit rather than an unnamed worktree."""
+        run_command.side_effect = [
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="a" * 40 + "\n",
+                stderr="",
+            ),
+            subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout="",
+                stderr="",
+            ),
+        ]
+
+        revision, dirty = RUNNER._git_source_state()
+
+        self.assertEqual("a" * 40, revision)
+        self.assertFalse(dirty)
+
+    @patch.object(RUNNER, "Adb")
+    @patch.object(RUNNER, "_git_source_state", return_value=("a" * 40, True))
+    def test_dirty_source_fails_before_any_device_command(
+        self,
+        source_state: Mock,
+        adb_type: Mock,
+    ) -> None:
+        """An unnamed source state cannot mutate a device or produce evidence."""
+        args = RUNNER.parse_args(
+            [
+                "--profile",
+                "smoke",
+                "--lane-id",
+                "legacy-api24-28",
+                "--serial",
+                "serial",
+                "--apk",
+                "sample.apk",
+                "--output",
+                "result.json",
+                "--reset-app-data",
+            ]
+        )
+
+        with self.assertRaisesRegex(RUNNER.DeviceSoakRunError, "clean Git worktree"):
+            RUNNER.run(args)
+
+        source_state.assert_called_once_with()
+        adb_type.assert_not_called()
 
     def test_app_data_reset_prefers_package_manager_clear(self) -> None:
         """A supported device clears only the selected package without reinstalling."""

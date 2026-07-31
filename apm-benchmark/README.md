@@ -1,9 +1,13 @@
 # AndroidAPM performance and device-soak gates
 
-`apm-benchmark` is a non-published verification module with two independent layers:
+`apm-benchmark` is a non-published verification module with two measurement
+layers and one aggregate device-lab acceptance contract:
 
 1. AndroidX Microbenchmark measures durable codec and the 32-event SQLite transaction.
 2. The host-driven sample-App campaign measures cold start, SDK init, main-thread emit, CPU, PSS, app-private disk, app UID power attribution, thermal status, collector outage, and process restart recovery.
+3. `device-lab-matrix.json` requires non-overlapping legacy, mainstream, and
+   modern API lanes plus profile-level device, manufacturer, and reset-strategy
+   diversity.
 
 Build-only or host-unit-test success does not produce physical-device performance evidence.
 
@@ -54,20 +58,32 @@ Read-only evidence commands (`getprop`, `pidof`, `/proc`, `dumpsys`, `run-as du/
 
 The first background OnePlus 24h attempt from commit `97cdc90` ended during its first hour because the device remained absent beyond the then-common 30-second window. The host failure log was retained, no result JSON was written, and no long-duration claim was made. That real failure motivated the profile-aware 300-second long window. The Redmi `22041216UC` then passed a fresh current-code smoke at `11.319%` CPU with `window=30s`, retry count `0`, and `pm-clear`. On 2026-07-24 a five-minute diagnostic proved that MIUI exposes the exact UID `pwi` checkin row but keeps its computed power at zero. On 2026-07-25 the active Redmi 24h retry was explicitly cancelled before completion because a personal phone is not required to remain attached for the current client-SDK iteration. The runner and sample process were stopped and no result JSON exists, so the cancellation is neither a pass nor a gate failure. The unchanged 24h/72h profiles are retained for pre-production execution on managed device-lab hardware or calibrated power infrastructure.
 
-Result schema version 2 makes CPU semantics explicit:
+Result schema version 2 made CPU semantics explicit:
 
 - `cpuAveragePercent` remains the authoritative enabled-process absolute CPU field used by the unchanged budget gate;
 - `cpuControlPercent` is recomputed from the raw control segment jiffies and elapsed time;
 - `cpuEnabledAveragePercent` is the wall-time-weighted enabled-process CPU and must equal `cpuAveragePercent`;
 - `cpuDeltaPercent` is the signed diagnostic difference `enabled - control`.
 
-The verifier independently recomputes control and enabled CPU from raw samples and rejects mismatched summary fields. Result schema version 1 remains readable with its original absolute `cpuAveragePercent` gate, so checked-in budgets and historical physical artifacts are not invalidated. The new delta is attribution evidence only: it does not replace or relax `maxCpuAveragePercent`, and one pre-campaign control segment is not a paired causal estimate across a 24h/72h run.
+Current result schema version 3 retains those CPU fields and additionally binds
+an acquisition to the exact APK SHA-256, clean 40-character source revision,
+matrix/budget/runner SHA-256 values, selected lane, UTC timestamp, serial,
+manufacturer, model, device codename, fingerprint, API level, and primary ABI.
+The runner refuses a dirty Git worktree before it creates an ADB client or
+mutates a device. The verifier independently recomputes control and enabled CPU
+from raw samples and rejects mismatched summary fields. Result schema versions 1
+and 2 remain readable for historical single-artifact inspection, but only
+current schema version 3 can satisfy the aggregate matrix gate. The CPU delta is
+attribution evidence only: it does not replace or relax
+`maxCpuAveragePercent`, and one pre-campaign control segment is not a paired
+causal estimate across a 24h/72h run.
 
 ```powershell
 ./gradlew.bat :apm-sample-app:assembleDebug --no-daemon
 
 python apm-benchmark/run_device_soak.py `
   --profile smoke `
+  --lane-id legacy-api24-28 `
   --serial <physical-adb-serial> `
   --apk apm-sample-app/build/outputs/apk/debug/apm-sample-app-debug.apk `
   --output apm-benchmark/build/device-soak/smoke.json `
@@ -78,6 +94,19 @@ python apm-benchmark/verify_device_soak.py `
   --results apm-benchmark/build/device-soak/smoke.json `
   --profile smoke
 ```
+
+Before reserving physical devices, validate the checked-in plan:
+
+```powershell
+python apm-benchmark/verify_device_matrix.py `
+  --matrix apm-benchmark/device-lab-matrix.json `
+  --budgets apm-benchmark/device-soak-budgets.json
+
+./gradlew.bat :apm-benchmark:verifyDeviceLabMatrix --no-daemon
+```
+
+This is a schema/policy check only. Its success explicitly says that no physical
+evidence was evaluated.
 
 The equivalent Gradle artifact gate is:
 
@@ -98,11 +127,47 @@ The equivalent Gradle artifact gate is:
 
 Use the same runner command with `--profile 24h` or `--profile 72h`. The verifier requires actual accumulated enabled-process duration; a short run renamed to a long profile fails. Long profiles also fail when neither app-UID `batterystats` delta nor calibrated external-meter evidence is present. An external meter may be supplied as app-attributed enabled-phase consumption with `--external-power-mah <mAh>`; preserve the meter's raw artifact and calibration record beside the JSON.
 
+### Managed device-lab matrix
+
+| Lane | API range | Required profiles |
+|---|---:|---|
+| `legacy-api24-28` | 24–28 | `smoke` |
+| `mainstream-api29-33` | 29–33 | `smoke`, `24h` |
+| `modern-api34-36` | 34–36 | `smoke`, `24h`, `72h` |
+
+All lanes require a physical `arm64-v8a` device. Complete aggregate acceptance
+requires three distinct devices from three manufacturers for `smoke`, two
+devices from two manufacturers for `24h`, and one device for `72h`. Smoke
+evidence must collectively cover both `pm-clear` and `uninstall-reinstall`.
+Every lane/profile pair is mandatory, and all artifacts must identify one exact
+APK and one exact source revision.
+
+After collecting the six explicit lane/profile artifacts from the exact source
+checkout that produced them, verify the complete set:
+
+```powershell
+python apm-benchmark/verify_device_matrix.py `
+  --matrix apm-benchmark/device-lab-matrix.json `
+  --budgets apm-benchmark/device-soak-budgets.json `
+  --results <legacy-smoke.json> <mainstream-smoke.json> <mainstream-24h.json> `
+            <modern-smoke.json> <modern-24h.json> <modern-72h.json>
+
+./gradlew.bat :apm-benchmark:verifyDeviceLabCoverageFromResults `
+  -PapmDeviceLabResults=<comma-separated-result-paths> `
+  --no-daemon
+```
+
+The aggregate gate first applies the per-profile budgets, then checks current
+schema, exact matrix/budget/runner hashes, lane matching, lane/profile
+completeness, OEM/device/reset diversity, and single-APK/single-source
+consistency. Missing, duplicate, stale, mixed-build, emulator, or over-budget
+evidence fails closed.
+
 Checked-in ceilings in `device-soak-budgets.json` cover:
 
 - enabled-minus-control cold-start delta and maximum `Apm.init` time;
 - main-thread synthetic-operation P95;
-- enabled-process absolute CPU and maximum PSS growth across restarts; schema-v2 control/delta CPU remains diagnostic;
+- enabled-process absolute CPU and maximum PSS growth across restarts; schema-v2/v3 control/delta CPU remains diagnostic;
 - app-private database/files/cache growth during collector outage;
 - app-attributed mAh/hour and maximum Android thermal status.
 
@@ -114,4 +179,10 @@ Run all deterministic host tests with:
 python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 ```
 
-An accepted result must retain the runner JSON, exact APK SHA-256, device model/fingerprint/API, raw process samples, profile, acquisition command, external meter evidence when used, and verifier output. A device-policy installation rejection is a blocked validation result, not a passing or failing SDK budget.
+The current host suite contains 40 deterministic tests. An accepted result must
+retain the runner JSON, exact APK SHA-256, clean source revision, matrix/budget/
+runner hashes, lane, device serial/manufacturer/model/codename/fingerprint/API/
+ABI, raw process samples, profile, acquisition command, external meter evidence
+when used, and verifier output. A device-policy installation rejection is a
+blocked validation result, not a passing or failing SDK budget. No schema-v3
+24h or 72h result is currently claimed.

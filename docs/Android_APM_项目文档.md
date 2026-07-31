@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜104 个测试/benchmark 文件
+> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜105 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -54,7 +54,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 104 |
+| 测试/benchmark 文件 | 105 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |
 | Gradle | 8.13 |
@@ -267,7 +267,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十一、构建与发布
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。仓库以 `.java-version` 声明推荐 JDK 17，`settings.gradle.kts` 在项目配置前拒绝低于 17 的 Gradle runtime；`python tools/verify_ci.py` 是平台无关的完整客户端门禁，会检查 Java、23 个根发布制品与 included `apm-plugin` 的公开 ABI、基线完整性，并强制重跑根 Android/model、included plugin 和文档校验。Kotlin binary-compatibility-validator 0.18.1 从 Android Release/JVM 产物生成已提交基线；24 个制品中除不承载实现类的 `apm-bundle` 外均要求非空，sample/benchmark 明确排除。版本、基线更新和门禁边界见 [API 兼容策略](API_COMPATIBILITY.md)。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`verifyReleasePerformanceBudgets` 把 connected microbenchmark 与 fail-closed verifier 串联；`run_device_soak.py` 生成显式物理机工件，`verifyDeviceSoakFromResults` 只验证显式 profile/result，不搜索旧文件。`apm-plugin` 作为 included build 独立测试。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。仓库以 `.java-version` 声明推荐 JDK 17，`settings.gradle.kts` 在项目配置前拒绝低于 17 的 Gradle runtime；`python tools/verify_ci.py` 是平台无关的完整客户端门禁，会检查 Java、23 个根发布制品与 included `apm-plugin` 的公开 ABI、基线完整性、device-lab plan 和 benchmark host tests，并强制重跑根 Android/model、included plugin 和文档校验。Kotlin binary-compatibility-validator 0.18.1 从 Android Release/JVM 产物生成已提交基线；24 个制品中除不承载实现类的 `apm-bundle` 外均要求非空，sample/benchmark 明确排除。版本、基线更新和门禁边界见 [API 兼容策略](API_COMPATIBILITY.md)。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`verifyReleasePerformanceBudgets` 把 connected microbenchmark 与 fail-closed verifier 串联；`run_device_soak.py` 生成显式物理机工件，`verifyDeviceSoakFromResults` 只验证显式 profile/result，不搜索旧文件；`verifyDeviceLabMatrix` 只验证计划，`verifyDeviceLabCoverageFromResults` 才验证全部显式 schema-v3 工件、exact provenance 和完整矩阵。`apm-plugin` 作为 included build 独立测试。
 
 2026-07-16 在 JDK 17.0.14 执行的开发验证：
 
@@ -361,11 +361,13 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 同日 Collector V2 不再只有双方各自的 mock/单元证据。独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）实现并验证 V2 envelope、typed scalar、resource/header 一致性、提交后 exact ACK 和 `(tenant_id,event_id)` 去重；服务端门禁为 57 tests、ruff/mypy/docs 全绿。客户端新增 `tools/verify_collector_e2e.py`，以真实 `HttpApmUploader` 经 Gzip HTTP 重放相同 batch，并从 test-only SQLite 核对 2 个唯一事件、12 种标量、非有限浮点安全文本、resource 和协议元数据。该结果证明跨语言 wire 兼容，不替代 PostgreSQL/TLS/代理故障/SigNoz/生产部署。
 
+同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件，profile 级别要求 smoke/24h/72h 的 3/2/1 台设备、smoke/24h 的 3/2 个厂商以及 smoke 的两种 reset strategy。result schema v3 在 v2 CPU 口径上强制 exact APK、clean source revision、matrix/budget/runner hash、lane、UTC 与完整 device identity；旧 v1/v2 仅做历史单工件读取，aggregate gate 只接受当前 schema 并检查单 APK/source 一致性。40 个 host Python tests 与编译检查通过，plan gate 明确只验证 3 lanes / 6 requirements、没有评估真机证据；JDK 17.0.14 下 benchmark/sample 的 504 个强制 Gradle 动作通过。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证为 44 Markdown / 55 links，两份 DOCX 通过 package/relationship/XML/key-text 检查；本机缺 LibreOffice/`soffice`，所以不声明页面级视觉验收。该资产没有生成 schema-v3 24h/72h 数值。
+
 仓库没有外部 Maven 发布凭据或已完成的 Maven Central 发布；`publishToMavenLocal` 成功不代表外部仓库已发布。
 
 ## 十二、测试策略
 
-104 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak host gate 的通过、解析、聚合、时长、重启、功耗、超限和 emulator 完整性分支。
+105 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2 typed/resource/batch identity/byte split/exact ACK、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v3/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、两个 AndroidX Microbenchmark 类，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
 
 测试通过不能代替以下验证：
 

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "lanes": [
+    {
+      "id": "legacy-api24-28",
+      "description": "Oldest supported Android generations on a physical 64-bit ARM device",
+      "apiLevelMin": 24,
+      "apiLevelMax": 28,
+      "manufacturers": [
+        "*"
+      ],
+      "primaryAbis": [
+        "arm64-v8a"
+      ],
+      "profiles": [
+        "smoke"
+      ],
+      "allowedResetStrategies": [
+        "pm-clear",
+        "uninstall-reinstall"
+      ]
+    },
+    {
+      "id": "mainstream-api29-33",
+      "description": "Mainstream Android generations with one smoke and one 24-hour campaign",
+      "apiLevelMin": 29,
+      "apiLevelMax": 33,
+      "manufacturers": [
+        "*"
+      ],
+      "primaryAbis": [
+        "arm64-v8a"
+      ],
+      "profiles": [
+        "smoke",
+        "24h"
+      ],
+      "allowedResetStrategies": [
+        "pm-clear",
+        "uninstall-reinstall"
+      ]
+    },
+    {
+      "id": "modern-api34-36",
+      "description": "Current Android generations with smoke, 24-hour, and 72-hour evidence",
+      "apiLevelMin": 34,
+      "apiLevelMax": 36,
+      "manufacturers": [
+        "*"
+      ],
+      "primaryAbis": [
+        "arm64-v8a"
+      ],
+      "profiles": [
+        "smoke",
+        "24h",
+        "72h"
+      ],
+      "allowedResetStrategies": [
+        "pm-clear",
+        "uninstall-reinstall"
+      ]
+    }
+  ],
+  "profileCoverage": {
+    "smoke": {
+      "minDistinctDevices": 3,
+      "minDistinctManufacturers": 3,
+      "requiredResetStrategies": [
+        "pm-clear",
+        "uninstall-reinstall"
+      ]
+    },
+    "24h": {
+      "minDistinctDevices": 2,
+      "minDistinctManufacturers": 2,
+      "requiredResetStrategies": []
+    },
+    "72h": {
+      "minDistinctDevices": 1,
+      "minDistinctManufacturers": 1,
+      "requiredResetStrategies": []
+    }
+  }
+}

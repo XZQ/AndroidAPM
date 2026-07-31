@@ -104,6 +104,30 @@ def main() -> int:
             [sys.executable, "tools/verify_api_baselines.py"],
         )
         run_step(
+            "device-lab matrix policy",
+            [
+                sys.executable,
+                "apm-benchmark/verify_device_matrix.py",
+                "--matrix",
+                "apm-benchmark/device-lab-matrix.json",
+                "--budgets",
+                "apm-benchmark/device-soak-budgets.json",
+            ],
+        )
+        run_step(
+            "benchmark and device-lab host tests",
+            [
+                sys.executable,
+                "-m",
+                "unittest",
+                "discover",
+                "-s",
+                "apm-benchmark/tests",
+                "-p",
+                "test_*.py",
+            ],
+        )
+        run_step(
             "root Android and model tests",
             [
                 wrapper,

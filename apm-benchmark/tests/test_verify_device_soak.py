@@ -125,6 +125,32 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         result = VERIFIER.load_result(self.result_path, "smoke")
         return VERIFIER.verify_result(profile, result)
 
+    def _promote_to_schema_three(self) -> None:
+        """Add the reproducibility provenance required by current artifacts."""
+        self.result["schemaVersion"] = 3
+        self.result["generatedAtUtc"] = "2026-07-31T00:00:00+00:00"
+        self.result["apkSha256"] = "a" * 64
+        self.result["device"].update(
+            {
+                "serial": "physical-1",
+                "manufacturer": "Example",
+                "model": "Phone",
+                "device": "device-code",
+                "fingerprint": "example/device/release",
+                "primaryAbi": "arm64-v8a",
+                "apiLevel": 34,
+            }
+        )
+        self.result["provenance"] = {
+            "matrixSchemaVersion": 1,
+            "matrixSha256": "b" * 64,
+            "budgetsSha256": "c" * 64,
+            "runnerSha256": "d" * 64,
+            "laneId": "modern-api34-36",
+            "sourceRevision": "e" * 40,
+            "sourceDirty": False,
+        }
+
     def test_complete_physical_smoke_result_passes(self) -> None:
         """A complete physical A/B result below every ceiling passes."""
         self.assertGreater(len(self._verify_smoke()), 1)
@@ -171,6 +197,30 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         with self.assertRaisesRegex(
             VERIFIER.DeviceSoakVerificationError,
             "enabled minus control",
+        ):
+            self._verify_smoke()
+
+    def test_schema_three_requires_complete_clean_provenance(self) -> None:
+        """Current artifacts require device, source, input, and runner identity."""
+        self._promote_to_schema_three()
+        self._write_result()
+
+        self.assertTrue(any("duration=" in message for message in self._verify_smoke()))
+
+        self.result["provenance"]["sourceDirty"] = True
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "sourceDirty",
+        ):
+            self._verify_smoke()
+
+        self.result["provenance"]["sourceDirty"] = False
+        self.result["provenance"]["runnerSha256"] = "not-a-hash"
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "runnerSha256",
         ):
             self._verify_smoke()
 

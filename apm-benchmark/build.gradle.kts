@@ -18,11 +18,17 @@ val benchmarkBudgets = layout.projectDirectory.file("benchmark-budgets.json")
 /** Checked-in end-to-end device-soak budgets for smoke, 24-hour, and 72-hour profiles. */
 val deviceSoakBudgets = layout.projectDirectory.file("device-soak-budgets.json")
 
+/** Versioned OEM/API/profile coverage contract for managed physical-device validation. */
+val deviceLabMatrix = layout.projectDirectory.file("device-lab-matrix.json")
+
 /** Host artifact supplied to the standalone device-soak verification task. */
 val deviceSoakResults = providers.gradleProperty("apmDeviceSoakResults")
 
 /** Named budget profile supplied with a host device-soak artifact. */
 val deviceSoakProfile = providers.gradleProperty("apmDeviceSoakProfile")
+
+/** Comma-separated explicit result artifacts supplied to the aggregate matrix gate. */
+val deviceLabResults = providers.gradleProperty("apmDeviceLabResults")
 
 /** Applies the common fail-closed host verifier command to a Gradle Exec task. */
 fun Exec.configureBenchmarkBudgetVerification() {
@@ -80,6 +86,59 @@ tasks.register<Exec>("verifyDeviceSoakFromResults") {
             file(resultPath).absolutePath,
             "--profile",
             profile
+        )
+    }
+}
+
+/** Host-only schema/policy gate; this validates the plan without claiming physical evidence. */
+tasks.register<Exec>("verifyDeviceLabMatrix") {
+    group = "verification"
+    description = "Validates the checked-in OEM/API/profile device-lab matrix plan."
+    inputs.file(deviceLabMatrix)
+    inputs.file(deviceSoakBudgets)
+    outputs.upToDateWhen { false }
+
+    doFirst {
+        commandLine(
+            benchmarkPython.get(),
+            layout.projectDirectory.file("verify_device_matrix.py").asFile.absolutePath,
+            "--matrix",
+            deviceLabMatrix.asFile.absolutePath,
+            "--budgets",
+            deviceSoakBudgets.asFile.absolutePath
+        )
+    }
+}
+
+/** Fail-closed aggregate gate for a complete set of explicit managed-device artifacts. */
+tasks.register<Exec>("verifyDeviceLabCoverageFromResults") {
+    group = "verification"
+    description = "Checks exact APK/source provenance and complete device-lab matrix coverage."
+    inputs.file(deviceLabMatrix)
+    inputs.file(deviceSoakBudgets)
+    outputs.upToDateWhen { false }
+
+    doFirst {
+        val rawResults = deviceLabResults.orNull
+            ?: error("Set -PapmDeviceLabResults=<result1.json,result2.json,...>")
+        val resultFiles = rawResults.split(',')
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .map { file(it) }
+        require(resultFiles.isNotEmpty()) {
+            "-PapmDeviceLabResults must contain at least one explicit result path"
+        }
+        commandLine(
+            buildList {
+                add(benchmarkPython.get())
+                add(layout.projectDirectory.file("verify_device_matrix.py").asFile.absolutePath)
+                add("--matrix")
+                add(deviceLabMatrix.asFile.absolutePath)
+                add("--budgets")
+                add(deviceSoakBudgets.asFile.absolutePath)
+                add("--results")
+                addAll(resultFiles.map { it.absolutePath })
+            }
         )
     }
 }

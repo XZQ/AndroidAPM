@@ -5,16 +5,20 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 
 BUDGET_SCHEMA_VERSION = 1
-RESULT_SCHEMA_VERSION = 2
-SUPPORTED_RESULT_SCHEMA_VERSIONS = (1, RESULT_SCHEMA_VERSION)
+RESULT_SCHEMA_VERSION = 3
+SUPPORTED_RESULT_SCHEMA_VERSIONS = (1, 2, RESULT_SCHEMA_VERSION)
 ATTRIBUTION_TOLERANCE = 1e-6
 MAX_ADB_RECONNECT_TIMEOUT_SECONDS = 10 * 60
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class DeviceSoakVerificationError(ValueError):
@@ -45,6 +49,83 @@ def _boolean(value: Any, label: str) -> bool:
     if not isinstance(value, bool):
         raise DeviceSoakVerificationError(f"{label} must be a boolean")
     return value
+
+
+def _text(value: Any, label: str) -> str:
+    """Return one non-empty string without silently coercing another JSON type."""
+    if not isinstance(value, str) or not value.strip():
+        raise DeviceSoakVerificationError(f"{label} must be a non-empty string")
+    return value.strip()
+
+
+def _sha256(value: Any, label: str) -> str:
+    """Require one canonical lowercase SHA-256 provenance value."""
+    digest = _text(value, label)
+    if not SHA256_PATTERN.fullmatch(digest):
+        raise DeviceSoakVerificationError(f"{label} must be a lowercase SHA-256")
+    return digest
+
+
+def _validate_current_provenance(document: dict[str, Any]) -> None:
+    """Require reproducible device/source/acquisition identity for schema v3."""
+    _sha256(document.get("apkSha256"), "apkSha256")
+    generated_at = _text(document.get("generatedAtUtc"), "generatedAtUtc")
+    try:
+        parsed_time = datetime.fromisoformat(generated_at.replace("Z", "+00:00"))
+    except ValueError as error:
+        raise DeviceSoakVerificationError(
+            "generatedAtUtc must be an ISO-8601 timestamp"
+        ) from error
+    if parsed_time.tzinfo is None:
+        raise DeviceSoakVerificationError("generatedAtUtc must include a timezone")
+
+    device = _mapping(document.get("device"), "device")
+    for key in (
+        "serial",
+        "manufacturer",
+        "model",
+        "device",
+        "fingerprint",
+        "primaryAbi",
+    ):
+        _text(device.get(key), f"device.{key}")
+    api_level = device.get("apiLevel")
+    if (
+        isinstance(api_level, bool)
+        or not isinstance(api_level, int)
+        or api_level < 24
+        or api_level > 100
+    ):
+        raise DeviceSoakVerificationError("device.apiLevel must be an integer in 24..100")
+
+    provenance = _mapping(document.get("provenance"), "provenance")
+    expected_keys = {
+        "matrixSchemaVersion",
+        "matrixSha256",
+        "budgetsSha256",
+        "runnerSha256",
+        "laneId",
+        "sourceRevision",
+        "sourceDirty",
+    }
+    if set(provenance) != expected_keys:
+        raise DeviceSoakVerificationError(
+            "provenance keys mismatch; "
+            f"missing={sorted(expected_keys - set(provenance))}, "
+            f"unknown={sorted(set(provenance) - expected_keys)}"
+        )
+    if provenance.get("matrixSchemaVersion") != 1:
+        raise DeviceSoakVerificationError("provenance.matrixSchemaVersion must be 1")
+    for key in ("matrixSha256", "budgetsSha256", "runnerSha256"):
+        _sha256(provenance.get(key), f"provenance.{key}")
+    _text(provenance.get("laneId"), "provenance.laneId")
+    source_revision = _text(provenance.get("sourceRevision"), "provenance.sourceRevision")
+    if not SOURCE_REVISION_PATTERN.fullmatch(source_revision):
+        raise DeviceSoakVerificationError(
+            "provenance.sourceRevision must be a lowercase 40-character commit"
+        )
+    if provenance.get("sourceDirty") is not False:
+        raise DeviceSoakVerificationError("provenance.sourceDirty must be false")
 
 
 def _segment_cpu_percent(
@@ -149,6 +230,8 @@ def load_result(path: Path, expected_profile: str) -> dict[str, Any]:
     segments = document.get("segments")
     if not isinstance(segments, list) or not segments:
         raise DeviceSoakVerificationError("segments must be a non-empty JSON array")
+    if document.get("schemaVersion") == RESULT_SCHEMA_VERSION:
+        _validate_current_provenance(document)
     return document
 
 
@@ -191,7 +274,7 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
     }
     result_schema = result.get("schemaVersion")
     cpu_attribution: dict[str, float] | None = None
-    if result_schema == RESULT_SCHEMA_VERSION:
+    if isinstance(result_schema, int) and result_schema >= 2:
         clock_ticks_per_second = _number(
             config.get("clockTicksPerSecond"),
             "config.clockTicksPerSecond",
@@ -234,6 +317,10 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             "rawEnabled": raw_enabled_cpu,
         }
     reset_strategy = config.get("appDataResetStrategy")
+    if result_schema == RESULT_SCHEMA_VERSION and reset_strategy is None:
+        raise DeviceSoakVerificationError(
+            "config.appDataResetStrategy is required by result schema 3"
+        )
     if reset_strategy is not None and reset_strategy not in (
         "pm-clear",
         "uninstall-reinstall",
@@ -242,6 +329,10 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             "config.appDataResetStrategy must be pm-clear or uninstall-reinstall"
         )
     transient_retry_count = config.get("transientAdbRetryCount")
+    if result_schema == RESULT_SCHEMA_VERSION and transient_retry_count is None:
+        raise DeviceSoakVerificationError(
+            "config.transientAdbRetryCount is required by result schema 3"
+        )
     if transient_retry_count is not None and (
         isinstance(transient_retry_count, bool)
         or not isinstance(transient_retry_count, int)
@@ -251,6 +342,10 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             "config.transientAdbRetryCount must be a non-negative integer"
         )
     reconnect_timeout = config.get("adbReconnectTimeoutSeconds")
+    if result_schema == RESULT_SCHEMA_VERSION and reconnect_timeout is None:
+        raise DeviceSoakVerificationError(
+            "config.adbReconnectTimeoutSeconds is required by result schema 3"
+        )
     if reconnect_timeout is not None and (
         isinstance(reconnect_timeout, bool)
         or not isinstance(reconnect_timeout, int)

@@ -33,7 +33,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 104 |
+| 测试/benchmark 文件 | 105 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -215,6 +215,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日 Collector V2 跨仓闭环完成：独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）通过 57 tests、ruff、mypy 和文档校验。客户端 `tools/verify_collector_e2e.py` 以 JDK 17 构建真实 `HttpApmUploader`，启动实际 FastAPI/uvicorn Gateway，经 Gzip HTTP 两次发送相同 2-event V2 batch；两次均取得精确 schema/batch/count ACK，测试用 SQLite inbox 最终仅有 2 个 eventId，12 种 typed scalar、`NaN/Infinity` 的 JSON-safe typed text、resource 和协议元数据均经数据库复核。该脚本不输出一次性 ingest key。Docker 本机不可用，因此不能把这一 SQLite 兼容闭环外推为 PostgreSQL、TLS、Compose、SigNoz 或生产 durability 验收。
 
+同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件；smoke/24h/72h 分别要求 3/2/1 台设备，smoke/24h 分别要求 3/2 个厂商，smoke 还必须覆盖 `pm-clear` 与 `uninstall-reinstall`。result schema v3 绑定 exact APK、clean source revision、matrix/budget/runner hash、lane/UTC/device identity；aggregate verifier 逐工件执行原预算后再检查完整性、多样性和单 APK/source。40 个 host tests、Python 编译、plan gate 和 504 个 benchmark/sample Gradle 动作通过；plan 输出明确没有评估真机证据。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证通过 44 Markdown / 55 links，两份 DOCX 通过 OOXML 结构和关键文本检查；本机仍缺 LibreOffice/`soffice`，不声明页面渲染验收。当前没有 schema-v3 的 24h/72h 工件。
+
 ## 新电脑接手
 
 1. 克隆仓库并切到 `develop`。
@@ -236,6 +238,7 @@ python tools/verify_api_baselines.py
 ./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin
 ./gradlew.bat :apm-benchmark:verifyReleasePerformanceBudgets
 python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
+python apm-benchmark/verify_device_matrix.py --matrix apm-benchmark/device-lab-matrix.json --budgets apm-benchmark/device-soak-budgets.json
 ```
 
 6. 发布相关变更再执行：
@@ -247,7 +250,7 @@ python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 
 ## 后续优先级
 
-客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。参考 Collector 已完成本地 V2/认证/幂等联调；后续仍需平台凭据、生产 PostgreSQL/TLS、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。生产 Collector 必须保留独立 V2 endpoint、exact whole-batch ACK 和 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用短 smoke、host tests 或模拟器 parser 证据冒充已完成。
+客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。受控设备实验室准入已固化为 3 个不重叠 API lane、6 个 lane/profile 工件、OEM/设备/reset 多样性和 schema-v3 exact provenance 汇总门禁；plan-only 校验不会冒充真机执行。参考 Collector 已完成本地 V2/认证/幂等联调；后续仍需平台凭据、生产 PostgreSQL/TLS、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。生产 Collector 必须保留独立 V2 endpoint、exact whole-batch ACK 和 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用矩阵 plan、短 smoke、host tests 或模拟器 parser 证据冒充已完成。
 
 ## Git 与文档策略
 

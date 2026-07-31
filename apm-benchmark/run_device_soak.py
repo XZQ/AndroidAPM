@@ -18,10 +18,25 @@ from pathlib import Path
 from typing import Any
 
 
-RESULT_SCHEMA_VERSION = 2
+BENCHMARK_DIR = Path(__file__).resolve().parent
+if str(BENCHMARK_DIR) not in sys.path:
+    sys.path.insert(0, str(BENCHMARK_DIR))
+
+from device_lab_matrix import (  # noqa: E402
+    MATRIX_SCHEMA_VERSION,
+    DeviceLabMatrixError,
+    file_sha256,
+    load_matrix,
+    require_device_lane,
+)
+
+
+RESULT_SCHEMA_VERSION = 3
 DEFAULT_PACKAGE = "com.apm.sample.debug"
 DEFAULT_ACTIVITY = "com.apm.sample.MainActivity"
 RESULT_FILE = "files/apm-device-soak-result.json"
+DEFAULT_MATRIX_PATH = BENCHMARK_DIR / "device-lab-matrix.json"
+DEFAULT_BUDGETS_PATH = BENCHMARK_DIR / "device-soak-budgets.json"
 EMULATOR_MARKERS = ("emulator", "generic", "sdk_gphone", "emu64")
 CLEAR_DATA_PERMISSION_MARKERS = (
     "securityexception",
@@ -263,9 +278,11 @@ def _device_identity(adb: Adb, serial: str) -> dict[str, Any]:
     combined = " ".join((fingerprint, model, device)).lower()
     return {
         "serial": serial,
+        "manufacturer": _getprop(adb, "ro.product.manufacturer"),
         "model": model,
         "device": device,
         "fingerprint": fingerprint,
+        "primaryAbi": _getprop(adb, "ro.product.cpu.abi"),
         "apiLevel": int(_getprop(adb, "ro.build.version.sdk")),
         "isEmulator": qemu == "1" or any(marker in combined for marker in EMULATOR_MARKERS),
     }
@@ -660,10 +677,52 @@ def _adb_reconnect_timeout(value: str) -> int:
     return parsed
 
 
+def _git_source_state() -> tuple[str, bool]:
+    """Bind device evidence to one exact clean repository revision."""
+    repository_root = BENCHMARK_DIR.parent
+    try:
+        revision = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=normal"],
+            cwd=repository_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.SubprocessError) as error:
+        raise DeviceSoakRunError(f"Cannot resolve clean source revision: {error}") from error
+    if not re.fullmatch(r"[0-9a-f]{40}", revision):
+        raise DeviceSoakRunError(f"Git returned an invalid source revision: {revision!r}")
+    return revision, bool(status)
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse campaign, device, and optional acquisition overrides."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--profile", choices=tuple(PROFILE_DEFAULTS), required=True)
+    parser.add_argument(
+        "--lane-id",
+        required=True,
+        help="Exact lane id from the checked-in device-lab matrix",
+    )
+    parser.add_argument(
+        "--matrix",
+        type=Path,
+        default=DEFAULT_MATRIX_PATH,
+        help="Versioned device-lab matrix JSON",
+    )
+    parser.add_argument(
+        "--budgets",
+        type=Path,
+        default=DEFAULT_BUDGETS_PATH,
+        help="Exact device-soak budget JSON recorded in provenance",
+    )
     parser.add_argument("--serial", required=True, help="Exact adb device serial")
     parser.add_argument("--apk", type=Path, required=True, help="Debug sample APK to install")
     parser.add_argument("--output", type=Path, required=True, help="Result JSON path")
@@ -696,6 +755,21 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
     """Install the APK, execute control/enabled phases, and build one raw artifact."""
+    try:
+        matrix = load_matrix(args.matrix, available_profiles=PROFILE_DEFAULTS)
+        lane = matrix.lane(args.lane_id)
+    except DeviceLabMatrixError as error:
+        raise DeviceSoakRunError(str(error)) from error
+    if not args.budgets.is_file():
+        raise DeviceSoakRunError(f"Budgets do not exist: {args.budgets}")
+    source_revision, source_dirty = _git_source_state()
+    if source_dirty:
+        raise DeviceSoakRunError(
+            "Device-lab acquisition requires a clean Git worktree so sourceRevision is exact"
+        )
+    matrix_hash = file_sha256(args.matrix)
+    budgets_hash = file_sha256(args.budgets)
+    runner_hash = file_sha256(Path(__file__).resolve())
     defaults = PROFILE_DEFAULTS[args.profile]
     duration = args.duration_seconds or defaults["durationSeconds"]
     control_duration = args.control_duration_seconds or defaults["controlDurationSeconds"]
@@ -712,6 +786,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise DeviceSoakRunError("--external-power-mah must be finite and non-negative")
     if not args.apk.is_file():
         raise DeviceSoakRunError(f"APK does not exist: {args.apk}")
+    apk_hash = _sha256(args.apk)
 
     adb = Adb(
         args.adb,
@@ -720,8 +795,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     adb.read("get-state")
     device = _device_identity(adb, args.serial)
+    try:
+        require_device_lane(device, lane, args.profile)
+    except DeviceLabMatrixError as error:
+        raise DeviceSoakRunError(str(error)) from error
     _install_apk(adb, args.apk, replace=True)
     reset_strategy = _reset_sample_app_data(adb, args.package, args.apk)
+    try:
+        require_device_lane(
+            device,
+            lane,
+            args.profile,
+            reset_strategy=reset_strategy,
+        )
+    except DeviceLabMatrixError as error:
+        raise DeviceSoakRunError(str(error)) from error
     uid = _package_uid(adb, args.package)
     clock_ticks_per_second = _clock_ticks_per_second(adb)
     component = f"{args.package}/{args.activity}"
@@ -761,8 +849,17 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "schemaVersion": RESULT_SCHEMA_VERSION,
         "profile": args.profile,
         "generatedAtUtc": datetime.now(timezone.utc).isoformat(),
-        "apkSha256": _sha256(args.apk),
+        "apkSha256": apk_hash,
         "device": device,
+        "provenance": {
+            "matrixSchemaVersion": MATRIX_SCHEMA_VERSION,
+            "matrixSha256": matrix_hash,
+            "budgetsSha256": budgets_hash,
+            "runnerSha256": runner_hash,
+            "laneId": lane.lane_id,
+            "sourceRevision": source_revision,
+            "sourceDirty": source_dirty,
+        },
         "config": {
             "requestedDurationSeconds": duration,
             "controlDurationSeconds": control_duration,
@@ -799,7 +896,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Device-soak result written to {args.output}")
         print(json.dumps(result["summary"], indent=2, sort_keys=True))
         return 0
-    except (DeviceSoakRunError, OSError, subprocess.SubprocessError, ValueError) as error:
+    except (
+        DeviceLabMatrixError,
+        DeviceSoakRunError,
+        OSError,
+        subprocess.SubprocessError,
+        ValueError,
+    ) as error:
         print(f"Device-soak run failed: {error}", file=sys.stderr)
         return 1
 

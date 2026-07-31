@@ -1,6 +1,6 @@
 # apm-benchmark 架构
 
-> 同步日期：2026-07-23
+> 同步日期：2026-07-31
 
 ## 1. 边界
 
@@ -72,7 +72,38 @@ UID 功耗优先读取 package-scoped 人类可读 `Uid <label>: <mAh>`；当 OE
 
 `test_run_device_soak.py` 覆盖 ActivityManager 解析、UID 映射、可读/checkin 功耗解析、平坦/回退功耗拒绝、control/enabled/delta CPU、跨进程 CPU 加权和功耗/磁盘/PSS 聚合；`test_verify_device_soak.py` 覆盖成功、emulator/online 拒绝、时长/重启不足、资源超限、schema-v2 CPU 缺项/不一致、schema-v1 兼容读取、长稳功耗缺失及 provenance 缺失。它们证明 host 逻辑，不产生真机接受结论。
 
-## 7. 当前物理设备证据
+## 7. 受控设备实验室矩阵
+
+`device-lab-matrix.json` 是预生产真机准入的版本化契约。三个物理
+`arm64-v8a` lane 按 API 24–28、29–33、34–36 划分且对同一 profile
+不得重叠；它们分别要求 `smoke`、`smoke + 24h`、`smoke + 24h + 72h`。
+profile 汇总还要求 smoke 至少覆盖 3 台设备、3 个厂商以及
+`pm-clear` / `uninstall-reinstall` 两种 reset strategy，24h 至少覆盖
+2 台设备和 2 个厂商，72h 至少覆盖 1 台设备。
+
+当前 result schema version 3 在 schema-v2 CPU 口径上新增强制 provenance：
+精确 APK SHA-256、clean Git source revision、matrix/budget/runner SHA-256、
+lane id、UTC 时间和 serial/manufacturer/model/device/fingerprint/API/ABI。
+runner 在创建 ADB client 和设备变更之前拒绝 dirty worktree，并在安装前
+检查物理机、API、ABI 和 lane/profile 匹配。schema v1/v2 继续用于历史
+单工件读取；矩阵汇总只接受当前 schema v3。
+
+`verify_device_matrix.py` 无 `--results` 时只验证计划与预算 schema；
+`:apm-benchmark:verifyDeviceLabMatrix` 以及常规 `tools/verify_ci.py`
+使用的也是这个 plan-only 模式，成功输出会明确写明没有评估真机证据。
+只有显式传入全部 6 个 lane/profile 工件的
+`:apm-benchmark:verifyDeviceLabCoverageFromResults` 才执行逐工件预算、
+exact provenance、lane 完整性、设备/OEM/reset 多样性及单 APK/单源码
+一致性检查。缺失、重复、过期输入哈希、混合 APK/source、emulator 或
+超预算证据都会 fail closed。当前没有 schema-v3 的 24h/72h 接受工件。
+
+`test_verify_device_matrix.py`、`test_verify_device_soak.py` 和
+`test_run_device_soak.py` 共同覆盖矩阵冲突、lane/物理机匹配、完整与缺失
+汇总、stale provenance、mixed APK、schema-v3 必填来源、dirty source
+预变更拒绝以及既有采集/预算边界。当前 benchmark host suite 共 40 tests；
+这些测试与 plan gate 仍不产生物理性能结论。
+
+## 8. 当前物理设备证据
 
 2026-07-23 在物理 Redmi/Xiaomi `22041216UC`（Android 13）上执行同一源码构建：
 
