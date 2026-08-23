@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-07-31｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-08-02｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -222,6 +222,8 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 同日 Dispatcher 性能证据与源码热点完成补强：满队列高优先级替换不再对最多 2,048 个候选执行 `filter + sortedBy`，而是固定 LOW→NORMAL→HIGH、同优先级 FIFO 扫描，只保留最终足够的 victim list；默认关闭聚合时直接处理标量事件，非 durable 成功批次不再创建空 rejected-ID set。混合优先级单测锁定 LOW-first/oldest-first；core 定向结果为 28 suites / 205 tests、零失败，lint `No Issues Found`。AndroidX contract 从历史三项扩为五项，新增 32 accepted emits 与满 2,048 队列 HIGH admission；Release/AndroidTest Kotlin 编译和 41 个 host tests 通过。当前无 ADB 设备，因此新增两项没有真机 JSON，历史三项结果不能冒充当前五项 gate 通过。
 
 同日隐私、安全与协议输入完成 fail-closed 加固：durable codec 在分配前验证剩余字节并拒绝非法 UTF-8/截断/尾随内容，encode 写入时执行 2 MiB 总预算；remote-config 在 canonicalization 前限制 bytes/depth/nodes/text、拒绝重复 key，Ed25519 key/signature 使用规范 Base64 和精确 32/64-byte 长度；PII 覆盖 auth 变体且不误伤 `author`；V2 ACK 只接受规范正十进制，`Retry-After` 乘法饱和。固定种子语料覆盖截断/位翻转、JSON 语法变异、混合 PII 和 ACK 歧义。定向结果为 core 28 suites / 207 tests、remote-config 3 / 14、uploader 4 / 27、model 5 / 51，相关 lint/API 全绿；完整 `tools/verify_ci.py` 通过 41 个 host tests、依赖 checksum、发布候选和隔离 consumer。该结果不替代持续随机 fuzz、生产 TLS/代理故障或第三方渗透测试。
+
+2026-08-02 修复 Android Studio Sync 与严格 dependency verification 的兼容缺口。IDE import 会解析命令行 CI 不需要的 source/POM/module artifact，连续错误先后覆盖根构建、`build-logic` 和 Gradle Libs；其中 Kotlin 标准 `sources` 与 `gradle813-sources` 变体还必须按精确文件名分别登记。修复最终改为穷举三个 Sync build root 的共享缓存：root / `apm-plugin` / `build-logic` 分别覆盖 `298` / `154` / `176` 个源码制品，同时补齐缓存内 POM/module 和此前不存在的 BOM/Groovy components。全部条目逐项对照 Google Maven、Maven Central、Gradle Libs/Plugin Portal、Gradle module 声明或官方分发源核验，仍未增加 trust 规则。四份 metadata 当前覆盖 `569` / `239` / `240` / `409` 个 component（root / `apm-plugin` / `build-logic` / consumer）；供应链策略检查和三个 Sync build root 各自带 `--refresh-dependencies` 的 `:prepareKotlinBuildScriptModel` 均通过。2026-07-31 全量测试基线不因这次元数据定向修复被重新声明。
 
 ## 新电脑接手
 

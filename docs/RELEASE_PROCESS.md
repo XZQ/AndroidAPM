@@ -41,6 +41,8 @@ python tools/verify_supply_chain_metadata.py
 
 consumer 只信任本次生成的 `com.apm` 与插件 marker；这些文件已由候选门禁逐文件重算哈希。任何更宽的 trusted group、正则信任、缺失 checksum 或缺失 build-root 元数据都会失败。升级依赖时必须使用 Gradle 的 `--write-verification-metadata sha256` 重新收集实际工件，人工审查坐标和 checksum diff，再运行完整门禁；不得为了绕过失败而扩大 trust。
 
+Android Studio Sync 的 tooling model 会额外解析 Gradle、AGP、Kotlin 插件及其传递依赖的 source classifier。它们不是运行时依赖，但仍属于被下载的供应链输入，必须在对应 build root 中提交精确 checksum。Sync 报告出现 `detachedConfiguration1` 或 `compileClasspath` verification failure 时，先确认是 missing checksum 还是 mismatch，再与 Google Maven、Maven Central 或 Gradle 官方分发源交叉核验；不得以关闭 verification、信任所有 `*-sources.jar` 或增加宽泛正则来修复 IDE 导入。
+
 ## 签名候选
 
 真正准备上传前，使用 Gradle keyring 属性，或仅通过环境变量注入 ASCII-armored 私钥：
