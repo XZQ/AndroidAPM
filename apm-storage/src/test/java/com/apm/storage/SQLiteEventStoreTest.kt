@@ -7,6 +7,7 @@ import com.apm.model.ApmPriority
 import com.apm.model.toLineProtocol
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicLong
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
@@ -520,6 +521,88 @@ class SQLiteEventStoreTest {
         } finally {
             tightStore.close()
             roomyStore.close()
+        }
+    }
+
+    /**
+     * delete + insert can keep COUNT(*) unchanged; the AUTOINCREMENT watermark must still heal
+     * the first instance's payload cache before its next capacity decision.
+     */
+    @Test
+    fun `cross instance row replacement heals payload bytes when count is unchanged`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "byte-replace-heal-${System.nanoTime()}.db"
+        val large = event("large", ApmPriority.LOW, timestamp = 2L).copy(
+            fields = mapOf("blob" to "x".repeat(LARGE_FIELD_CHARS))
+        )
+        val postHeal = event("post-heal", ApmPriority.HIGH, timestamp = 3L)
+        val tightBudget = ApmEventCodec.encode(large).size.toLong()
+        val tightStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = BYTE_HEAL_MAX_EVENTS,
+            maxPayloadBytes = tightBudget,
+            maxEventPayloadBytes = tightBudget.toInt()
+        )
+        val roomyStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = BYTE_HEAL_MAX_EVENTS,
+            maxPayloadBytes = BYTE_HEAL_ROOMY_BYTE_BUDGET
+        )
+        try {
+            tightStore.append(event("small", ApmPriority.LOW, timestamp = 1L))
+            assertEquals(1, tightStore.pendingCount())
+
+            val smallId = roomyStore.readPending(1).single().id
+            assertEquals(1, roomyStore.deletePending(listOf(smallId)))
+            roomyStore.append(large)
+
+            // Row count is still one, so only the persistent insertion watermark proves drift.
+            assertEquals(1, tightStore.pendingCount())
+            val result = tightStore.appendBatchWithResult(listOf(postHeal))
+
+            assertEquals(1, result.capacityEvictedEventCount)
+            assertEquals(mapOf(ApmPriority.LOW to 1), result.capacityEvictedPriorityCounts)
+            assertEquals(listOf("post-heal"), tightStore.readPending(10).map { it.event.name })
+        } finally {
+            tightStore.close()
+            roomyStore.close()
+        }
+    }
+
+    /** Capacity trim must derive its final cache from transaction truth, not a stale baseline. */
+    @Test
+    fun `capacity trim replaces stale cache with transaction truth`() {
+        val capacityStore = SQLiteEventStore(
+            EventDbHelper(RuntimeEnvironment.getApplication(), "trim-truth-${System.nanoTime()}.db"),
+            maxEvents = 2
+        )
+        try {
+            capacityStore.appendBatch(
+                listOf(
+                    event("seed-1", timestamp = 1L),
+                    event("seed-2", timestamp = 2L)
+                )
+            )
+            val rowCacheField = SQLiteEventStore::class.java.getDeclaredField("cachedRowCount")
+            rowCacheField.isAccessible = true
+            (rowCacheField.get(capacityStore) as AtomicLong).set(1L)
+
+            val firstTrim = capacityStore.appendBatchWithResult(
+                listOf(
+                    event("replacement-1", timestamp = 3L),
+                    event("replacement-2", timestamp = 4L)
+                )
+            )
+            assertEquals(2, firstTrim.capacityEvictedEventCount)
+
+            // A stale-low result from the first trim would make this append incorrectly skip eviction.
+            val secondTrim = capacityStore.appendBatchWithResult(
+                listOf(event("replacement-3", timestamp = 5L))
+            )
+            assertEquals(1, secondTrim.capacityEvictedEventCount)
+            assertEquals(2, capacityStore.pendingCount())
+        } finally {
+            capacityStore.close()
         }
     }
 

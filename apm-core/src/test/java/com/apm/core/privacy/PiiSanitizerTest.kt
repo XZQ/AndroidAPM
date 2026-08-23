@@ -214,20 +214,42 @@ class PiiSanitizerTest {
 
     // --- 性能优化回归 ---
 
-    /** Copy-on-write：零命中事件的 map 与输入共享引用，不做整表复制。 */
+    /** Dispatcher frozen-map fast path：零命中事件不做整表复制。 */
     @Test
-    fun `clean event maps are shared not copied`() {
+    fun `clean frozen event maps are shared not copied`() {
         val fields = mapOf("fps" to 60, "module" to "render")
         val extras = mapOf("version" to "1.0.0")
         val globalContext = mapOf("channel" to "test")
         val event = createEvent(fields = fields, extras = extras, globalContext = globalContext)
 
-        val result = sanitizer.sanitize(event)
+        val result = sanitizer.sanitizeFrozen(event)
 
-        // 未修改的 map 应原样共享，避免每事件三次 map 复制
+        // dispatcher 入队时已经冻结所有权，未修改 map 可原样共享
         assertTrue(result.fields === fields)
         assertTrue(result.extras === extras)
         assertTrue(result.globalContext === globalContext)
+    }
+
+    /** Public API must not return host-owned mutable maps even when no rule changes a value. */
+    @Test
+    fun `public sanitize isolates clean mutable maps`() {
+        val fields = linkedMapOf<String, Any?>("status" to "ok")
+        val extras = linkedMapOf("version" to "1.0.0")
+        val globalContext = linkedMapOf("channel" to "test")
+
+        val result = sanitizer.sanitize(
+            createEvent(fields = fields, extras = extras, globalContext = globalContext)
+        )
+        fields["password"] = "raw-secret"
+        extras["authorization"] = "Bearer raw-secret"
+        globalContext["user_email"] = "raw@example.com"
+
+        assertFalse(result.fields === fields)
+        assertFalse(result.extras === extras)
+        assertFalse(result.globalContext === globalContext)
+        assertFalse(result.fields.containsKey("password"))
+        assertFalse(result.extras.containsKey("authorization"))
+        assertFalse(result.globalContext.containsKey("user_email"))
     }
 
     /** Copy-on-write：有命中的 map 才物化新副本，且保持原始迭代顺序。 */
@@ -246,6 +268,27 @@ class PiiSanitizerTest {
         assertEquals(2, result.fields["omega"])
     }
 
+    /** Stateful custom rules still observe exactly one invocation for the first changed entry. */
+    @Test
+    fun `first changed entry is transformed exactly once`() {
+        var invocationCount = 0
+        val statefulSanitizer = PiiSanitizer(
+            listOf(
+                SanitizationRule { input ->
+                    invocationCount += 1
+                    "$input#$invocationCount"
+                }
+            )
+        )
+
+        val result = statefulSanitizer.sanitize(
+            createEvent(fields = linkedMapOf("message" to "clean"))
+        )
+
+        assertEquals(1, invocationCount)
+        assertEquals("clean#1", result.fields["message"])
+    }
+
     /** 敏感键名判定缓存：重复键的判定结果与首次一致，混合敏感/非敏感键不串扰。 */
     @Test
     fun `repeated field name decisions stay consistent`() {
@@ -255,6 +298,24 @@ class PiiSanitizerTest {
             assertEquals("***", dirty.fields["session_id"])
             assertEquals("Ada", clean.fields["author"])
         }
+    }
+
+    /** Oversized host-controlled keys are evaluated but not retained by the bounded memo. */
+    @Test
+    fun `sensitive name cache rejects oversized keys`() {
+        val shortKey = "author"
+        val oversizedKey = "x".repeat(1_024)
+
+        sanitizer.sanitize(
+            createEvent(fields = linkedMapOf(shortKey to "Ada", oversizedKey to "safe"))
+        )
+
+        val cacheField = PiiSanitizer::class.java.getDeclaredField("sensitiveNameDecisions")
+        cacheField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val cache = cacheField.get(sanitizer) as Map<String, Boolean>
+        assertTrue(cache.containsKey(shortKey))
+        assertFalse(cache.containsKey(oversizedKey))
     }
 
     /** 长度快拒边界：恰好达到最短命中长度的值仍被脱敏，差一字符的短值原样保留。 */

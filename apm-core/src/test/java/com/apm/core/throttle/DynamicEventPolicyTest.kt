@@ -57,10 +57,30 @@ class DynamicEventPolicyTest {
         assertEquals(1_000L, limit.windowMs)
     }
 
+    /** Oversized stream identifiers are resolved normally without being retained by the memo. */
+    @Test
+    fun `oversized stream identifiers bypass interpolated key cache`() {
+        val policy = DynamicEventPolicy(MapProvider(emptyMap())) { error -> throw error }
+
+        assertTrue(policy.shouldSample(event(module = "m".repeat(1_024))))
+
+        val cacheField = DynamicEventPolicy::class.java.getDeclaredField("eventKeys")
+        cacheField.isAccessible = true
+        val cache = cacheField.get(policy) as Map<*, *>
+        assertTrue(cache.isEmpty())
+
+        assertTrue(policy.shouldSample(event()))
+        assertEquals(1, cache.size)
+    }
+
     /** Creates one stable event for key resolution. */
-    private fun event(severity: ApmSeverity = ApmSeverity.INFO): ApmEvent = ApmEvent(
-        module = "network",
-        name = "request",
+    private fun event(
+        severity: ApmSeverity = ApmSeverity.INFO,
+        module: String = "network",
+        name: String = "request",
+    ): ApmEvent = ApmEvent(
+        module = module,
+        name = name,
         severity = severity,
         eventId = "event-policy-test"
     )

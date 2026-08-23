@@ -100,7 +100,10 @@ internal class DynamicEventPolicy(
             eventWindowKey = "apm.rate_limit.$module.$name.window_ms"
         )
         // Cache only while below the capacity bound; decisions stay correct either way.
-        if (eventKeys.size < MAX_CACHED_EVENT_KEYS) {
+        if (module.length <= MAX_CACHED_IDENTIFIER_CHARS &&
+            name.length <= MAX_CACHED_IDENTIFIER_CHARS &&
+            eventKeys.size < MAX_CACHED_EVENT_KEYS
+        ) {
             eventKeys.putIfAbsent(cacheKey, computed)
         }
         return computed
@@ -134,6 +137,9 @@ internal class DynamicEventPolicy(
 
         /** Upper bound for the interpolated-key cache; mirrors the RateLimiter bucket bound. */
         private const val MAX_CACHED_EVENT_KEYS = 256
+
+        /** Prevents one cached stream from retaining oversized host-controlled identifiers. */
+        private const val MAX_CACHED_IDENTIFIER_CHARS = 128
     }
 }
 

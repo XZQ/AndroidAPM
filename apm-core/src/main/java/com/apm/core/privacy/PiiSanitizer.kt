@@ -15,6 +15,9 @@ private const val REDACTED_FIELD_VALUE = "***"
  */
 private const val SENSITIVE_NAME_CACHE_CAPACITY = 256
 
+/** Avoids retaining attacker-controlled or accidentally unbounded field names in the memo. */
+private const val MAX_CACHED_SENSITIVE_NAME_CHARS = 128
+
 /** Exact normalized names that are sensitive but unsafe to match as arbitrary fragments. */
 private val SENSITIVE_FIELD_NAMES = setOf(
     "auth",
@@ -70,7 +73,8 @@ private val SENSITIVE_FIELD_SUFFIXES = setOf(
  * val sanitizedEvent = sanitizer.sanitize(event)
  * ```
  *
- * 线程安全：构造时复制 [SanitizationRule] 列表，sanitize 方法无副作用。
+ * 构造时复制 [SanitizationRule] 列表；脱敏器本身不修改输入事件。自定义规则若包含状态，
+ * 其线程安全由规则实现负责。
  *
  * @param rules 按顺序应用的文本脱敏规则
  * @param logger 保留给兼容接入和未来安全诊断使用；当前不会记录事件内容
@@ -96,22 +100,35 @@ class PiiSanitizer(
      * 对每个字符串值应用所有脱敏规则。
      * 返回脱敏后的事件副本，原始事件不会被修改。
      *
-     * 未被任何规则修改的 map 会与输入共享同一引用：输入 map 必须遵循 SDK 的
-     * 异步边界冻结约定（emit 时已快照，sanitize 后不得再被调用方修改）。
-     *
      * @param event 原始事件
-     * @return 脱敏后的事件副本
+     * @return 脱敏后的事件副本；返回的 map 与调用方输入隔离
      */
-    fun sanitize(event: ApmEvent): ApmEvent {
+    fun sanitize(event: ApmEvent): ApmEvent = sanitizeEvent(event, shareUnchangedMaps = false)
+
+    /**
+     * Dispatcher-only fast path for an event whose maps were already frozen at queue admission.
+     * Clean maps may be shared because no host-owned reference can mutate them afterward.
+     */
+    internal fun sanitizeFrozen(event: ApmEvent): ApmEvent =
+        sanitizeEvent(event, shareUnchangedMaps = true)
+
+    /** Applies all sanitization stages with an explicit clean-map ownership policy. */
+    private fun sanitizeEvent(event: ApmEvent, shareUnchangedMaps: Boolean): ApmEvent {
         // Field-name protection also covers numeric identifiers and credentials that regexes
         // cannot recognize from value shape alone.
-        val sanitizedFields = sanitizeMap(event.fields) { key, value -> sanitizeFieldValue(key, value) }
+        val sanitizedFields = sanitizeMap(event.fields, shareUnchangedMaps) { key, value ->
+            sanitizeFieldValue(key, value)
+        }
 
         // 对 globalContext 执行脱敏
-        val sanitizedContext = sanitizeMap(event.globalContext) { key, value -> sanitizeTextValue(key, value) }
+        val sanitizedContext = sanitizeMap(event.globalContext, shareUnchangedMaps) { key, value ->
+            sanitizeTextValue(key, value)
+        }
 
         // 对 extras 执行脱敏
-        val sanitizedExtras = sanitizeMap(event.extras) { key, value -> sanitizeTextValue(key, value) }
+        val sanitizedExtras = sanitizeMap(event.extras, shareUnchangedMaps) { key, value ->
+            sanitizeTextValue(key, value)
+        }
 
         // 对 scene 执行脱敏
         val sanitizedScene = event.scene?.let { applyRules(it) }
@@ -125,28 +142,44 @@ class PiiSanitizer(
     }
 
     /**
-     * Copy-on-write map sanitize: when no entry changes (the common case for numeric METRIC
-     * fields) the original map reference is returned without any allocation; when at least one
-     * entry changes, a replacement map is materialized preserving the original iteration order.
+     * Copy-on-write map sanitize. The first changed value is retained from the probe so custom
+     * rules are invoked exactly once per entry. Public calls copy clean non-empty maps; the
+     * dispatcher fast path may share maps whose ownership was already frozen.
      */
     private inline fun <V> sanitizeMap(
         source: Map<String, V>,
+        shareUnchanged: Boolean,
         transform: (String, V) -> V,
     ): Map<String, V> {
+        if (source.isEmpty()) {
+            return if (shareUnchanged) source else emptyMap()
+        }
+
         // Fast path: prove no entry changes before allocating any replacement map.
         var entryIndex = 0
+        var firstChangedValue: Any? = null
         for ((key, value) in source) {
-            if (transform(key, value) !== value) break
+            val transformed = transform(key, value)
+            if (transformed !== value) {
+                firstChangedValue = transformed
+                break
+            }
             entryIndex++
         }
-        if (entryIndex >= source.size) return source
+        if (entryIndex >= source.size) {
+            return if (shareUnchanged) source else LinkedHashMap(source)
+        }
 
-        // Slow path: rebuild in original order; entries proven unchanged need no recompute
-        // because the transform is side-effect free.
+        // Slow path: rebuild in original order without invoking the first changing rule twice.
         val result = LinkedHashMap<String, V>(source.size)
         var position = 0
         for ((key, value) in source) {
-            result[key] = if (position < entryIndex) value else transform(key, value)
+            @Suppress("UNCHECKED_CAST")
+            result[key] = when {
+                position < entryIndex -> value
+                position == entryIndex -> firstChangedValue as V
+                else -> transform(key, value)
+            }
             position++
         }
         return result
@@ -188,7 +221,9 @@ class PiiSanitizer(
             SENSITIVE_FIELD_SUFFIXES.any(normalized::endsWith)
 
         // Cache only while below the capacity bound; the decision stays correct either way.
-        if (sensitiveNameDecisions.size < SENSITIVE_NAME_CACHE_CAPACITY) {
+        if (key.length <= MAX_CACHED_SENSITIVE_NAME_CHARS &&
+            sensitiveNameDecisions.size < SENSITIVE_NAME_CACHE_CAPACITY
+        ) {
             sensitiveNameDecisions[key] = decision
         }
         return decision

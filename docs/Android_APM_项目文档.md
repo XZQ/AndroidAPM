@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-08-02｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜107 个测试/benchmark 文件
+> 文档同步：2026-08-24｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜107 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -153,7 +153,7 @@ worker 单轮 drain 最多 32 条：
 6. `appendBatch` 单事务落盘
 7. 唤醒 persistent uploader
 
-热路径分配已按行为保持原则收敛：worker 复用每批落盘缓冲，聚合吞没路径不再分配输出 list，动态策略键与敏感字段名判定各有有界缓存，脱敏 map 采用零命中共享冻结引用的 copy-on-write，内置脱敏规则带可证明的最短命中长度快拒，bizContext 为空时直接共享冻结 defaultContext；V2 上传拆批每事件只编码一次（`ApmBatchEnvelopeSerializer.serializeWithinBudget` 增量公共 API，与逐候选全量序列化的拆分点/batchId/payload 逐字节一致并有等价性测试），SQLite `pendingCount` 用索引覆盖 `COUNT(*)` 替代全表 BLOB 扫描，prune 用单次 GROUP BY 替代三趟同条件扫描，claim 的 payload 解码移到租约事务提交之后。所有改动均有等价性/回归测试，wire、durable codec 与 at-least-once 语义不变。
+热路径分配已按行为保持原则收敛：worker 复用每批落盘缓冲，聚合吞没路径不再分配输出 list，动态策略键与敏感字段名判定各有条目数和单标识符长度边界；公开脱敏 API 对 clean map 仍返回隔离快照，只有 dispatcher 入队时已经冻结所有权的内部路径才零命中共享引用，首个变化项的自定义规则只执行一次。内置脱敏规则带可证明的最短命中长度快拒，bizContext 为空时直接共享冻结 defaultContext；V2 上传拆批每事件只编码一次（`ApmBatchEnvelopeSerializer.serializeWithinBudget` 增量公共 API，与逐候选全量序列化的拆分点/batchId/payload 逐字节一致并有等价性测试），SQLite `pendingCount` 用索引覆盖 `COUNT(*)` 与 `sqlite_sequence` 水位替代常规全表 BLOB 扫描，prune 用单次 GROUP BY 替代三趟同条件扫描，claim 的 payload 解码移到租约事务提交之后。所有改动均有等价性/回归测试，wire、durable codec 与 at-least-once 语义不变。
 
 正常停止顺序：先切断新事件入口，再停止模块，排空 dispatcher，处理聚合残留，停止 uploader，关闭 store。排空均有超时上限。
 
@@ -167,7 +167,7 @@ worker 单轮 drain 最多 32 条：
 - 默认容量同时受 50,000 行与 64 MiB 活跃 payload 逻辑预算约束；逻辑预算不等于 SQLite page/WAL 物理文件大小
 - 默认单事件 durable payload 软上限 256 KiB；编码/超限失败只拒绝该事件，同批有效事件仍在一个事务中落盘
 - 批量事务写入
-- 缓存行数与 payload 字节；每 64 条 insert 与每次 `pendingCount()` 执行索引覆盖的 `COUNT(*)` 并与精确本地缓存比对，检测到外部写入/删除才回读一次全量真值——常规路径零 BLOB 扫描，跨实例漂移在一个 worker 循环内被检测终止
+- 缓存行数、payload 字节和数据库持久化 AUTOINCREMENT 水位；每批 append 在写事务内检查插入水位，每 64 条 insert 与每次 `pendingCount()` 比对索引覆盖的 `COUNT(*)` 和 `sqlite_sequence`。行数检测普通增删，插入水位检测净行数不变的 delete + insert；漂移时用单条 SQL 快照回读三个真值，常规路径零 BLOB 扫描
 - `event_id` 唯一约束，本地重复追加幂等
 - `lease_owner` + `lease_expires_at`；SQLite 写事务保证跨 store/进程 read-and-claim 原子性
 - 高优先级先上传；超行数/字节预算时低优先级、旧事件先淘汰，拒绝和淘汰数量进入 SDK drop 健康计数
@@ -392,7 +392,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十三、客户端完成边界与外部工作
 
-仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v3 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、直接事件异步 map 冻结、epoch/单调时钟职责分离、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、按实际 interval 定义的 FPS、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断、固定 microbenchmark 预算，以及 fail-closed 的真机 A/B/离线/重启 smoke/24h/72h gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
+仓库内可完成的客户端缺口已收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定事件身份、SQLite v4 additive migration、typed durable codec v3 与 v1/v2 兼容读取、本地去重、claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、逐请求短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、业务上下文同步契约与异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、直接事件异步 map 冻结、epoch/单调时钟职责分离、显式 OkHttp/HttpURLConnection/Binder/WebView/线程池公共 API、按实际 interval 定义的 FPS、FrameMetrics 无逐帧对象分配滚动累计、`sdk_health` 双通道、自诊断、固定 microbenchmark 预算，以及 fail-closed 的真机 A/B/离线/重启 smoke/24h/72h gate 均已实现。手动与 Provider 自动初始化现在有明确互斥文档和生命周期测试；sample 对 IO、SQLite、WebView、IPC、线程池与 Battery 使用真实显式 API，而不只注册模块。
 
 本地 durable round-trip 通过 codec v3 恢复受支持标量类型，旧 v1/v2 行仍读取为字符串。legacy Line Protocol/standalone Protobuf 继续输出字符串 field map；新 `PROTOBUF_ENVELOPE_V2` 已以独立 schema 提供 typed wire fields，不能把它与 durable codec tag 或旧 endpoint 混用。参考 Collector 已按冻结协议完成本地 exact ACK/eventId 去重联调；生产落地仍需 PostgreSQL/TLS 部署和故障验收。
 

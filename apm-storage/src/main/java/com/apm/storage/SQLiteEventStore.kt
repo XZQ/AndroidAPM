@@ -64,6 +64,12 @@ class SQLiteEventStore(
     /** 缓存的活跃 payload 总字节数，与行数计数按相同周期重同步。 */
     private val cachedPayloadBytes = AtomicLong(UNINITIALIZED_COUNT)
 
+    /**
+     * 最近一次统计快照对应的 AUTOINCREMENT 水位。
+     * 行数不变时该水位仍可识别另一实例的 delete + insert 替换。
+     */
+    private val cachedInsertionSequence = AtomicLong(UNINITIALIZED_COUNT)
+
     /** 距上次 COUNT(*) 重同步以来的写入条数（synchronized 保护）。 */
     private var appendsSinceResync = 0
 
@@ -149,15 +155,17 @@ class SQLiteEventStore(
      */
     private fun appendBatchLocked(encodedEvents: List<EncodedEvent>): CapacityTrimResult {
         val db = dbHelper.writableDatabase
-        ensureStatisticsInitialized(db)
 
         // 单事务批量插入：一次 fsync 落盘整批事件
         var insertedCount = 0
         var insertedPayloadBytes = 0L
+        var insertionSequenceAfterWrite = UNINITIALIZED_COUNT
         // 复用同一个 ContentValues：每行 clear 后重填，避免逐行分配 HashMap 支撑的容器
         val values = ContentValues()
         db.beginTransaction()
         try {
+            ensureStatisticsInitialized(db)
+            refreshStatisticsForExternalInserts(db)
             for (encodedEvent in encodedEvents) {
                 val event = encodedEvent.event
                 values.clear()
@@ -181,6 +189,8 @@ class SQLiteEventStore(
                     insertedPayloadBytes += encodedEvent.payload.size
                 }
             }
+            // 在仍持有写事务时捕获序列水位；提交后出现的其他实例写入会在下一轮被检测。
+            insertionSequenceAfterWrite = insertionSequenceInternal(db)
             db.setTransactionSuccessful()
         } finally {
             db.endTransaction()
@@ -189,16 +199,21 @@ class SQLiteEventStore(
         // 维护缓存计数并周期性重同步，纠正外部删除造成的漂移
         cachedRowCount.addAndGet(insertedCount.toLong())
         cachedPayloadBytes.addAndGet(insertedPayloadBytes)
+        cachedInsertionSequence.set(insertionSequenceAfterWrite)
         appendsSinceResync += insertedCount
         if (appendsSinceResync >= STATISTICS_RESYNC_INTERVAL) {
             val freshRowCount = rowCountInternal(db)
-            if (freshRowCount != cachedRowCount.get()) {
-                // 行数漂移证明存在外部写入/删除：回读全部真值，同时校准 payload 字节维度，
-                // 终止跨实例插入造成的 stale-low 漂移（罕见路径才触发全表扫描）
+            val freshInsertionSequence = insertionSequenceInternal(db)
+            if (freshRowCount != cachedRowCount.get() ||
+                freshInsertionSequence != cachedInsertionSequence.get()
+            ) {
+                // 行数或插入序列漂移证明存在外部活动：回读单语句真值快照，同时校准
+                // payload 字节维度（罕见路径才触发全表 BLOB 扫描）
                 resyncStatistics(db)
             } else {
                 // 常规路径只取索引覆盖的行数真值，不在 dispatcher 线程做 BLOB 扫描
                 cachedRowCount.set(freshRowCount)
+                cachedInsertionSequence.set(freshInsertionSequence)
             }
             appendsSinceResync = 0
         }
@@ -510,21 +525,25 @@ class SQLiteEventStore(
     /**
      * 获取当前存储的事件总数。
      *
-     * 上传 worker 每轮循环都会调用本方法。返回值保持数据库 COUNT(*) 真值，但只执行
-     * 索引覆盖的 COUNT(*)，不再附带 SUM(LENGTH(payload)) 全表 BLOB 扫描。本实例的
-     * 增删路径维护精确缓存，因此行数不一致即是外部写入/删除的证据——此时回读全部
-     * 真值，一并校准 payload 字节维度，终止跨实例插入造成的 stale-low 漂移。
+     * 上传 worker 每轮循环都会调用本方法。常规路径只执行索引覆盖的 COUNT(*) 和
+     * sqlite_sequence 水位查询，不附带 SUM(LENGTH(payload)) 全表 BLOB 扫描。行数变化
+     * 可发现外部增删，AUTOINCREMENT 水位变化还能发现净行数不变的 delete + insert；
+     * 任一漂移都会用单条 SQL 快照校准行数、payload 字节和插入水位。
      */
     @Synchronized
     override fun pendingCount(): Int {
         val db = dbHelper.readableDatabase
         val rowCount = rowCountInternal(db)
-        if (rowCount != cachedRowCount.get()) {
-            // 外部活动（另一 store 实例/进程）已被证明：全量校准两个维度
+        val insertionSequence = insertionSequenceInternal(db)
+        if (rowCount != cachedRowCount.get() ||
+            insertionSequence != cachedInsertionSequence.get()
+        ) {
+            // 外部活动（另一 store 实例/进程）已被证明：全量校准三个维度
             resyncStatistics(db)
             return cachedRowCount.get().toInt()
         }
         cachedRowCount.set(rowCount)
+        cachedInsertionSequence.set(insertionSequence)
         return rowCount.toInt()
     }
 
@@ -594,10 +613,18 @@ class SQLiteEventStore(
      * @param db 可写数据库
      */
     private fun ensureStatisticsInitialized(db: SQLiteDatabase) {
-        // 任一维度未初始化时从同一数据库快照重建，避免行数与字节水位错配。
+        // 任一维度未初始化时从同一数据库快照重建，避免三个水位错配。
         if (cachedRowCount.get() == UNINITIALIZED_COUNT ||
-            cachedPayloadBytes.get() == UNINITIALIZED_COUNT
+            cachedPayloadBytes.get() == UNINITIALIZED_COUNT ||
+            cachedInsertionSequence.get() == UNINITIALIZED_COUNT
         ) {
+            resyncStatistics(db)
+        }
+    }
+
+    /** Rebuilds statistics when another store has committed any successful insert. */
+    private fun refreshStatisticsForExternalInserts(db: SQLiteDatabase) {
+        if (insertionSequenceInternal(db) != cachedInsertionSequence.get()) {
             resyncStatistics(db)
         }
     }
@@ -620,11 +647,11 @@ class SQLiteEventStore(
         val selectedPriorityCounts = mutableMapOf<ApmPriority, Int>()
         var selectedPayloadBytes = 0L
         var deleted = 0
-        var actual = StoreStatistics(rowCount = 0L, payloadBytes = 0L)
+        var actual = StoreSnapshot(rowCount = 0L, payloadBytes = 0L, insertionSequence = 0L)
         db.beginTransaction()
         try {
             // The write transaction makes candidate selection and deletion atomic against another claimant.
-            actual = statisticsInternal(db)
+            actual = storeSnapshotInternal(db)
             var projectedRows = actual.rowCount
             var projectedPayloadBytes = actual.payloadBytes
             if (isOverCapacity(projectedRows, projectedPayloadBytes)) {
@@ -671,12 +698,15 @@ class SQLiteEventStore(
             // 直接复用事务内已测得的数据库真值校准缓存，避免再执行一次全表统计查询。
             cachedRowCount.set(actual.rowCount)
             cachedPayloadBytes.set(actual.payloadBytes)
+            cachedInsertionSequence.set(actual.insertionSequence)
             return CapacityTrimResult.EMPTY
         }
 
         if (deleted == idsToDelete.size) {
-            // 全部候选删除成功：按已知的精确行数与逐行 LENGTH 字节扣减，等价于全表重同步
-            decrementCachedStatistics(StoreStatistics(idsToDelete.size.toLong(), selectedPayloadBytes))
+            // 全部候选删除成功：从事务内数据库真值计算最终水位，不能从可能漂移的旧缓存扣减。
+            cachedRowCount.set((actual.rowCount - deleted.toLong()).coerceAtLeast(0L))
+            cachedPayloadBytes.set((actual.payloadBytes - selectedPayloadBytes).coerceAtLeast(0L))
+            cachedInsertionSequence.set(actual.insertionSequence)
         } else {
             // 容量淘汰是低频路径，删除不完整时回读数据库真值以覆盖跨实例并发变化。
             resyncStatistics(db)
@@ -737,6 +767,23 @@ class SQLiteEventStore(
         return 0L
     }
 
+    /** Database-global AUTOINCREMENT watermark; unlike row count it changes on row replacement. */
+    private fun insertionSequenceInternal(db: SQLiteDatabase): Long {
+        db.query(
+            SQLITE_SEQUENCE_TABLE,
+            arrayOf(SQLITE_SEQUENCE_VALUE_COLUMN),
+            "$SQLITE_SEQUENCE_NAME_COLUMN = ?",
+            arrayOf(TABLE_NAME),
+            null, null,
+            null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                return cursor.getLong(0)
+            }
+        }
+        return 0L
+    }
+
     /** 查询指定范围的行数与 payload 总字节，不额外加锁。 */
     private fun statisticsInternal(
         db: SQLiteDatabase,
@@ -762,12 +809,31 @@ class SQLiteEventStore(
         return StoreStatistics(rowCount = 0L, payloadBytes = 0L)
     }
 
-    /** 用数据库真值同时校准行数与 payload 字节缓存。 */
-    private fun resyncStatistics(db: SQLiteDatabase): StoreStatistics {
-        val statistics = statisticsInternal(db)
-        cachedRowCount.set(statistics.rowCount)
-        cachedPayloadBytes.set(statistics.payloadBytes)
-        return statistics
+    /** Reads all cache dimensions from one SQLite statement and therefore one snapshot. */
+    private fun storeSnapshotInternal(db: SQLiteDatabase): StoreSnapshot {
+        db.rawQuery(
+            "SELECT COUNT(*), COALESCE(SUM(LENGTH($COLUMN_PAYLOAD)), 0), " +
+                "COALESCE((SELECT $SQLITE_SEQUENCE_VALUE_COLUMN FROM $SQLITE_SEQUENCE_TABLE " +
+                "WHERE $SQLITE_SEQUENCE_NAME_COLUMN = ?), 0) FROM $TABLE_NAME",
+            arrayOf(TABLE_NAME)
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                return StoreSnapshot(
+                    rowCount = cursor.getLong(0),
+                    payloadBytes = cursor.getLong(1),
+                    insertionSequence = cursor.getLong(2)
+                )
+            }
+        }
+        return StoreSnapshot(rowCount = 0L, payloadBytes = 0L, insertionSequence = 0L)
+    }
+
+    /** 用单一数据库快照同时校准行数、payload 字节与插入水位缓存。 */
+    private fun resyncStatistics(db: SQLiteDatabase) {
+        val snapshot = storeSnapshotInternal(db)
+        cachedRowCount.set(snapshot.rowCount)
+        cachedPayloadBytes.set(snapshot.payloadBytes)
+        cachedInsertionSequence.set(snapshot.insertionSequence)
     }
 
     /** 判断任一持久化容量维度是否超限。 */
@@ -861,6 +927,13 @@ class SQLiteEventStore(
         val payloadBytes: Long
     )
 
+    /** Complete cache snapshot, including the persistent insertion watermark. */
+    private data class StoreSnapshot(
+        val rowCount: Long,
+        val payloadBytes: Long,
+        val insertionSequence: Long
+    )
+
     /**
      * 同一选择条件的单趟聚合结果。
      *
@@ -911,6 +984,11 @@ class SQLiteEventStore(
 
         /** 单次容量淘汰删除绑定的最大 ID 数，保守低于 Android SQLite 常见变量上限。 */
         private const val TRIM_DELETE_BATCH_SIZE = 500
+
+        /** SQLite-owned AUTOINCREMENT metadata table and columns. */
+        private const val SQLITE_SEQUENCE_TABLE = "sqlite_sequence"
+        private const val SQLITE_SEQUENCE_NAME_COLUMN = "name"
+        private const val SQLITE_SEQUENCE_VALUE_COLUMN = "seq"
 
         /** claimPending 原始行预分配的上限，防止异常大的 limit 直接预分配过大列表。 */
         private const val RAW_ROW_PREALLOCATE_CAP = 256

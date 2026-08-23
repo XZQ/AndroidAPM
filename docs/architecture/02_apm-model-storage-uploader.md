@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-08-23
+> 同步日期：2026-08-24
 
 ## 1. 分层关系
 
@@ -134,8 +134,8 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - `event_id` UNIQUE + conflict-ignore 使重复追加幂等，缓存计数只增加真实 insert
 - `data` 对新行写空串，避免与 payload 双序列化
 - 批量插入复用单个 `ContentValues`，逐行 clear 重填，避免每行分配 HashMap 支撑的容器
-- cached row count 与 live payload bytes 随增删维护；跨 store 删除造成的 stale delta 下限为 0
-- 每 64 条成功 insert 与每次 `pendingCount()` 都只执行索引覆盖的 `COUNT(*)`，并与本实例精确维护的行数缓存比对：不一致即证明存在外部写入/删除，此时才回读一次全量真值（行数 + payload 字节）；常规路径不做 BLOB 扫描，跨实例插入造成的 stale-low 字节漂移在下一个 worker 循环被检测并终止。缓存判断超限时先回读数据库真值，避免陈旧高估误删；容量淘汰后按已知精确行数与逐行 LENGTH 字节扣减，删除不完整时才回读全量
+- cached row count、live payload bytes 与持久化 AUTOINCREMENT 水位随本实例增删维护；跨 store 删除造成的 stale delta 下限为 0
+- 每批 append 在写事务内检查 `sqlite_sequence`，每 64 条成功 insert 与每次 `pendingCount()` 比对索引覆盖的 `COUNT(*)` 和插入水位：行数发现普通增删，水位发现 delete + insert 后净行数不变的替换。漂移时由单条 SQL 在同一快照回读行数、payload 字节和水位；常规路径不做 BLOB 扫描。容量淘汰从事务内数据库真值减去实际删除量设置最终缓存，删除不完整时回读全量
 - WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 
 ### 读取与淘汰
@@ -148,7 +148,7 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 这两项 SQLite 字节限制是 durable 层的最后一道预算，不替代 core 的 8 MiB dispatcher estimated-retained budget 或 multi-process IPC 的 4 MiB pending / 256 KiB raw event / 1 MiB file / 16 MiB directory 限制。各层使用自己的实际资源度量：dispatcher 估算 retained memory，IPC 对 encoded/file bytes 做精确检查，SQLite 对 codec payload bytes 做事务内精确检查；不能把同一个近似值冒充所有层的真实占用。
 - corrupted payload：记录 id 后隔离删除
 - claim order：priority DESC, timestamp ASC，由 v4 的 `idx_priority_desc_ts` 索引支撑；写事务覆盖 select + owner/expiry update；payload 解码在写事务提交后执行（含坏行删除的第二个小事务），缩短 WAL 写锁持有时间，claim/ACK/at-least-once 语义不变
-- `pendingCount()` 执行索引覆盖的 `COUNT(*)` 真值查询并校准行数缓存，不再附带 `SUM(LENGTH(payload))` 全表 BLOB 扫描（上传 worker 每轮循环调用）；payload 字节维度仍由写入周期 resync 与删除不匹配路径校准
+- `pendingCount()` 执行索引覆盖的 `COUNT(*)` 与轻量 `sqlite_sequence` 查询（上传 worker 每轮循环调用）；任一水位变化才以单条快照 SQL 校准 payload 字节，常规路径不附带 `SUM(LENGTH(payload))` 全表 BLOB 扫描
 - `pruneExpiredWithResult` 用一次 `GROUP BY priority` 扫描同时取得优先级计数与行/payload 字节统计，再执行删除，替代旧的同条件三趟全表扫描
 - prune/容量淘汰跳过尚未过期的活动 claim，因此可在 lease 释放/过期前临时超出逻辑预算
 

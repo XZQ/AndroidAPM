@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-08-23
+> 同步日期：2026-08-24
 
 ## 1. 职责
 
@@ -202,7 +202,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 
 `GrayReleaseController` 通过稳定 userId/sample rate 和 override 决定模块是否启用。`DynamicConfigProvider` 是接口，core 不绑定具体网络实现；`apm-remote-config` 提供生产实现。
 
-`DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。每个 (module, name) 流的六个插值键缓存在有界（256）并发 map 中并校验流身份，provider 查找仍逐事件执行；键按默认、模块、事件逐级覆盖：
+`DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。每个 (module, name) 流的六个插值键缓存在有界（256）并发 map 中并校验流身份；module/name 任一超过 128 字符时仍正常求值但不进入长期缓存，provider 查找仍逐事件执行。键按默认、模块、事件逐级覆盖：
 
 - `apm.sampling.default_basis_points`
 - `apm.sampling.<module>[.<event>].basis_points`
@@ -219,7 +219,7 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。归一化后的敏感判定按原始键名记入有界（256）并发缓存——字段名在每条事件上重复，接近全量命中；每条内置规则带各自的最短可命中长度快拒（手机号 11、邮箱 6、身份证 18、URL token 6、URL 密码 5），短于下限的值直接返回原引用。map 采用 copy-on-write：零命中的 fields/globalContext/extras 与输入共享冻结引用，有命中才物化保持迭代顺序的新 map。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。归一化后的敏感判定按原始键名记入有界（256）并发缓存，超过 128 字符的 host-controlled 键仍判定但不保留；每条内置规则带各自的最短可命中长度快拒（手机号 11、邮箱 6、身份证 18、URL token 6、URL 密码 5），短于下限的值直接返回原引用。map 采用 copy-on-write：公开 `sanitize` 对零命中 map 也返回独立快照，防止调用方后续修改重写脱敏结果；dispatcher 只对入队时已冻结所有权的 map 使用零分配共享快路径，有命中时物化保持迭代顺序的新 map，首个变化项复用探测结果以保证每条自定义规则每项仅执行一次。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
 
 ## 11. 自监控与降级
 

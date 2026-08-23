@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-08-02｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-08-24｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -9,6 +9,8 @@
 端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、真实外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；共享入口同时受 2048 条和默认 8 MiB 估算字节预算约束，75% 高水位后单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响，并可淘汰足够数量的旧低优事件满足双预算。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。IPC 另有 4 MiB pending、256 KiB raw event、1 MiB file、16 MiB ready-directory 预算；outbox stale 删除计数不降到 0 以下，Retry-After 秒数先饱和换算且最终等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
+
+2026-08-24 审查修复补齐两个所有权/并发边界：SQLite 除行数缓存外持久跟踪 `sqlite_sequence` 插入水位，因此另一 store 删除小行、插入大行且总行数不变时仍会重建 payload 字节真值；容量淘汰从事务内真值计算最终缓存，不从可能漂移的旧缓存扣减。公开 `PiiSanitizer.sanitize` 对 clean mutable map 也返回隔离快照，dispatcher 仅对入队时已冻结所有权的事件使用内部共享快路径；首个变化值不会被自定义规则执行两次，超长字段名和动态 module/name 只计算、不进入长期缓存。
 
 ## 事实源
 

@@ -865,7 +865,7 @@ internal class ApmDispatcher(
         // PII sanitization always precedes storage and upload.
         toPersist += if (piiSanitizer != null) {
             measureDispatcherStage(DispatcherStage.SANITIZE) {
-                piiSanitizer.sanitize(event)
+                piiSanitizer.sanitizeFrozen(event)
             }
         } else {
             event
