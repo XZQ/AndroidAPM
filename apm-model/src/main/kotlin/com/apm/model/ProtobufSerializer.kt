@@ -52,7 +52,8 @@ object ProtobufSerializer {
 
     /** Writes common event fields while selecting either legacy or versioned field semantics. */
     private fun serializeEvent(event: ApmEvent, typedFields: Boolean): ByteArray {
-        val buffer = ByteArrayOutputStream()
+        // 容量预估摊薄默认 32 字节缓冲的多次扩容；字符数下界足够作为增长提示
+        val buffer = ByteArrayOutputStream(estimateEventBytes(event))
         val writer = ProtobufWriter(buffer)
 
         // 按字段编号顺序写入，与 apm_event.proto 定义对应
@@ -70,8 +71,10 @@ object ProtobufSerializer {
 
         if (typedFields) {
             for ((key, value) in event.fields) {
-                // V2 uses a map entry whose value is an embedded discriminator/value message.
-                writer.writeMessage(FIELD_TYPED_FIELDS, serializeTypedFieldEntry(key, ApmTypedValue.from(value)))
+                // V2 uses a map entry whose value is an embedded discriminator/value message;
+                // writeTypedMapEntry streams it directly without intermediate buffers.
+                val typedValue = ApmTypedValue.from(value)
+                writer.writeTypedMapEntry(FIELD_TYPED_FIELDS, key, typedValue.type.name, typedValue.value)
             }
         } else {
             // Legacy standalone messages retain map<string,string> field 10 exactly.
@@ -99,26 +102,6 @@ object ProtobufSerializer {
         return buffer.toByteArray()
     }
 
-    /** Encodes one protobuf map entry: string key plus embedded [ApmTypedValue]. */
-    private fun serializeTypedFieldEntry(key: String, typedValue: ApmTypedValue): ByteArray {
-        val entryBuffer = ByteArrayOutputStream()
-        val entryWriter = ProtobufWriter(entryBuffer)
-        entryWriter.writeString(MAP_ENTRY_KEY, key)
-        entryWriter.writeMessage(MAP_ENTRY_VALUE, serializeTypedValue(typedValue))
-        entryWriter.flush()
-        return entryBuffer.toByteArray()
-    }
-
-    /** Encodes the stable discriminator and optional canonical scalar text. */
-    private fun serializeTypedValue(typedValue: ApmTypedValue): ByteArray {
-        val valueBuffer = ByteArrayOutputStream()
-        val valueWriter = ProtobufWriter(valueBuffer)
-        valueWriter.writeString(TYPED_VALUE_TYPE, typedValue.type.name)
-        typedValue.value?.let { valueWriter.writeString(TYPED_VALUE_TEXT, it) }
-        valueWriter.flush()
-        return valueBuffer.toByteArray()
-    }
-
     /**
      * 批量序列化：将多个事件编码为一个连续的字节数组。
      * 每个事件前添加 4 字节 big-endian 长度前缀。
@@ -129,7 +112,8 @@ object ProtobufSerializer {
      * @return 带长度前缀的连续字节数组
      */
     fun serializeBatch(events: List<ApmEvent>): ByteArray {
-        val buffer = ByteArrayOutputStream()
+        // 容量预估摊薄批量缓冲的多次扩容复制
+        val buffer = ByteArrayOutputStream(events.size * ESTIMATE_BATCH_EVENT_BYTES)
         for (event in events) {
             val eventBytes = serialize(event)
             // 写入 4 字节 big-endian 长度前缀
@@ -141,6 +125,28 @@ object ProtobufSerializer {
             buffer.write(eventBytes)
         }
         return buffer.toByteArray()
+    }
+
+    /**
+     * 单事件编码大小的字符数下界预估。
+     *
+     * 只统计键名与字符串值的长度，不对非字符串字段值调用宿主 `toString`
+     * （避免可观察的额外调用），偏小仅触发一次扩容。
+     */
+    private fun estimateEventBytes(event: ApmEvent): Int {
+        var total = ESTIMATE_EVENT_FIXED_BYTES
+        total += event.module.length + event.name.length + event.processName.length +
+            event.threadName.length + event.eventId.length + (event.scene?.length ?: 0)
+        for ((key, value) in event.fields) {
+            total += key.length + ((value as? String)?.length ?: ESTIMATE_NON_STRING_VALUE_BYTES)
+        }
+        for ((key, value) in event.globalContext) {
+            total += key.length + value.length
+        }
+        for ((key, value) in event.extras) {
+            total += key.length + value.length
+        }
+        return total
     }
 
     // --- Proto field numbers (must match apm_event.proto) ---
@@ -187,4 +193,13 @@ object ProtobufSerializer {
 
     /** 字节掩码。 */
     private const val BYTE_MASK = 0xFF
+
+    /** 批量序列化缓冲的每事件容量预估（长度前缀 + 典型事件大小的粗下界）。 */
+    private const val ESTIMATE_BATCH_EVENT_BYTES = 512
+
+    /** 单事件固定头部的容量预估（字段 tag、varint 前缀与标量字段）。 */
+    private const val ESTIMATE_EVENT_FIXED_BYTES = 64
+
+    /** 非字符串字段值不调用宿主 toString 时的固定保守字节估计。 */
+    private const val ESTIMATE_NON_STRING_VALUE_BYTES = 24
 }

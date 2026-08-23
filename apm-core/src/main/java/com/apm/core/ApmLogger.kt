@@ -32,6 +32,16 @@ internal class AndroidApmLogger(
     private val component: String = CORE_COMPONENT
 ) : ApmLogger {
 
+    /**
+     * Hot-path view of the [d] gate. Internal on purpose: expanding the public [ApmLogger]
+     * interface with a default member could break custom implementations compiled against
+     * the older interface at runtime linkage, so call sites inside `apm-core` instead detect
+     * the built-in logger with debug output disabled and skip message construction entirely
+     * (its [d] would be a provable no-op in that state).
+     */
+    internal val debugOutputEnabled: Boolean
+        get() = enabled
+
     override fun d(message: String) {
         // 仅在开启调试模式时输出，避免线上性能开销
         if (enabled) {
@@ -64,3 +74,13 @@ internal class AndroidApmLogger(
         private const val CORE_COMPONENT = "core"
     }
 }
+
+/**
+ * Returns true when debug-log call sites can skip message construction entirely.
+ *
+ * Only the built-in [AndroidApmLogger] with debug output disabled qualifies: its [ApmLogger.d]
+ * is a provable no-op in that state, so dropping the call is unobservable. Custom implementations
+ * always return false and keep receiving every call, preserving their existing behavior.
+ */
+internal fun canSkipDebugLogs(logger: ApmLogger?): Boolean =
+    logger is AndroidApmLogger && !logger.debugOutputEnabled

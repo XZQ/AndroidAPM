@@ -154,25 +154,26 @@ class SQLiteEventStore(
         // 单事务批量插入：一次 fsync 落盘整批事件
         var insertedCount = 0
         var insertedPayloadBytes = 0L
+        // 复用同一个 ContentValues：每行 clear 后重填，避免逐行分配 HashMap 支撑的容器
+        val values = ContentValues()
         db.beginTransaction()
         try {
             for (encodedEvent in encodedEvents) {
                 val event = encodedEvent.event
-                val values = ContentValues().apply {
-                    put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
-                    put(COLUMN_MODULE, event.module)
-                    put(COLUMN_NAME, event.name)
-                    put(COLUMN_SEVERITY, event.severity.name)
-                    // data 列不再冗余存储 line protocol（readRecent 从 payload 解码渲染），
-                    // 避免每条事件的双重序列化开销；保留列以免 schema 迁移
-                    put(COLUMN_DATA, EMPTY_DATA)
-                    put(COLUMN_PAYLOAD, encodedEvent.payload)
-                    put(COLUMN_EVENT_ID, event.eventId)
-                    put(COLUMN_TIMESTAMP, event.timestamp)
-                    put(COLUMN_RETRY_COUNT, 0)
-                    putNull(COLUMN_LEASE_OWNER)
-                    put(COLUMN_LEASE_EXPIRES_AT, NO_LEASE_EXPIRY)
-                }
+                values.clear()
+                values.put(COLUMN_PRIORITY, StoragePriorityMapper.priorityOf(event))
+                values.put(COLUMN_MODULE, event.module)
+                values.put(COLUMN_NAME, event.name)
+                values.put(COLUMN_SEVERITY, event.severity.name)
+                // data 列不再冗余存储 line protocol（readRecent 从 payload 解码渲染），
+                // 避免每条事件的双重序列化开销；保留列以免 schema 迁移
+                values.put(COLUMN_DATA, EMPTY_DATA)
+                values.put(COLUMN_PAYLOAD, encodedEvent.payload)
+                values.put(COLUMN_EVENT_ID, event.eventId)
+                values.put(COLUMN_TIMESTAMP, event.timestamp)
+                values.put(COLUMN_RETRY_COUNT, 0)
+                values.putNull(COLUMN_LEASE_OWNER)
+                values.put(COLUMN_LEASE_EXPIRES_AT, NO_LEASE_EXPIRY)
                 // Stable event identity makes local replay idempotent. Count
                 // only successful inserts so capacity accounting stays exact.
                 if (db.insertWithOnConflict(TABLE_NAME, null, values, SQLiteDatabase.CONFLICT_IGNORE) >= 0L) {
@@ -190,7 +191,15 @@ class SQLiteEventStore(
         cachedPayloadBytes.addAndGet(insertedPayloadBytes)
         appendsSinceResync += insertedCount
         if (appendsSinceResync >= STATISTICS_RESYNC_INTERVAL) {
-            resyncStatistics(db)
+            val freshRowCount = rowCountInternal(db)
+            if (freshRowCount != cachedRowCount.get()) {
+                // 行数漂移证明存在外部写入/删除：回读全部真值，同时校准 payload 字节维度，
+                // 终止跨实例插入造成的 stale-low 漂移（罕见路径才触发全表扫描）
+                resyncStatistics(db)
+            } else {
+                // 常规路径只取索引覆盖的行数真值，不在 dispatcher 线程做 BLOB 扫描
+                cachedRowCount.set(freshRowCount)
+            }
             appendsSinceResync = 0
         }
 
@@ -326,6 +335,7 @@ class SQLiteEventStore(
         val claimed = mutableListOf<PendingEvent>()
         val corruptedIds = mutableListOf<Long>()
         val leaseExpiresAt = safeAdd(nowMs, leaseDurationMs)
+        val rawRows = ArrayList<RawClaimedRow>(limit.coerceAtMost(RAW_ROW_PREALLOCATE_CAP))
         db.beginTransaction()
         try {
             // The write transaction is acquired before selecting candidates,
@@ -341,22 +351,19 @@ class SQLiteEventStore(
                 limit.toString()
             ).use { cursor ->
                 while (cursor.moveToNext()) {
-                    val id = cursor.getLong(0)
-                    val payload = cursor.getBlob(1)
-                    val retryCount = cursor.getInt(2)
-                    val storedEventId = cursor.getString(3)
-                    try {
-                        claimed += PendingEvent(id, decodeStoredEvent(payload, storedEventId), retryCount)
-                    } catch (_: Exception) {
-                        corruptedIds += id
-                    }
+                    // 只取原始元组：payload 解码推迟到事务提交后，缩短 WAL 写锁持有时间
+                    rawRows += RawClaimedRow(
+                        id = cursor.getLong(0),
+                        payload = cursor.getBlob(1),
+                        retryCount = cursor.getInt(2),
+                        storedEventId = cursor.getString(3)
+                    )
                 }
             }
-            if (corruptedIds.isNotEmpty()) {
-                deleteRows(db, corruptedIds)
-            }
-            if (claimed.isNotEmpty()) {
-                val claimedIds = claimed.map(PendingEvent::id)
+            if (rawRows.isNotEmpty()) {
+                // 全部选中行（含随后可能被判定损坏的行）在同一事务内完成租约；
+                // 损坏行在提交后的第二个小事务中删除，最终状态与旧实现一致
+                val claimedIds = rawRows.map(RawClaimedRow::id)
                 val placeholders = claimedIds.joinToString(",") { "?" }
                 val values = ContentValues().apply {
                     put(COLUMN_LEASE_OWNER, ownerId)
@@ -373,9 +380,30 @@ class SQLiteEventStore(
         } finally {
             db.endTransaction()
         }
+
+        // 事务提交后解码：单个坏行只影响自身，不影响已建立的租约
+        for (row in rawRows) {
+            try {
+                claimed += PendingEvent(row.id, decodeStoredEvent(row.payload, row.storedEventId), row.retryCount)
+            } catch (_: Exception) {
+                corruptedIds += row.id
+            }
+        }
         if (corruptedIds.isNotEmpty()) {
-            // 坏行删除发生在同一事务中，提交后以数据库真值校准两个缓存维度。
-            resyncStatistics(db)
+            try {
+                db.beginTransaction()
+                try {
+                    deleteRows(db, corruptedIds)
+                    db.setTransactionSuccessful()
+                } finally {
+                    db.endTransaction()
+                }
+                // 坏行删除提交后以数据库真值校准两个缓存维度。
+                resyncStatistics(db)
+            } catch (_: Exception) {
+                // 第二个事务失败不能丢弃已建立租约的健康行（租约事务已提交）：
+                // 坏行保持租约至过期，由下一轮 claim 重新选中并重试删除，最终仍被清除
+            }
         }
         return claimed
     }
@@ -481,16 +509,23 @@ class SQLiteEventStore(
 
     /**
      * 获取当前存储的事件总数。
-     * 低频调用，直接 COUNT(*) 并顺带校准缓存计数。
+     *
+     * 上传 worker 每轮循环都会调用本方法。返回值保持数据库 COUNT(*) 真值，但只执行
+     * 索引覆盖的 COUNT(*)，不再附带 SUM(LENGTH(payload)) 全表 BLOB 扫描。本实例的
+     * 增删路径维护精确缓存，因此行数不一致即是外部写入/删除的证据——此时回读全部
+     * 真值，一并校准 payload 字节维度，终止跨实例插入造成的 stale-low 漂移。
      */
     @Synchronized
     override fun pendingCount(): Int {
         val db = dbHelper.readableDatabase
-        val statistics = statisticsInternal(db)
-        // 低频查询顺带校准行数与 payload 字节缓存。
-        cachedRowCount.set(statistics.rowCount)
-        cachedPayloadBytes.set(statistics.payloadBytes)
-        return statistics.rowCount.toInt()
+        val rowCount = rowCountInternal(db)
+        if (rowCount != cachedRowCount.get()) {
+            // 外部活动（另一 store 实例/进程）已被证明：全量校准两个维度
+            resyncStatistics(db)
+            return cachedRowCount.get().toInt()
+        }
+        cachedRowCount.set(rowCount)
+        return rowCount.toInt()
     }
 
     /**
@@ -521,11 +556,25 @@ class SQLiteEventStore(
         var result = EventStorePruneResult(prunedEventCount = 0)
         db.beginTransaction()
         try {
-            val priorities = priorityCountsInternal(db, selection, selectionArgs)
-            val pruned = deleteAndAccount(db, selection, selectionArgs)
+            // 一次 GROUP BY 扫描同时取得优先级计数与行数/payload 字节统计，
+            // 替代旧实现的"GROUP BY + COUNT/SUM + DELETE"三趟同条件全表扫描
+            val selectionStats = priorityStatisticsInternal(db, selection, selectionArgs)
+            val pruned = db.delete(TABLE_NAME, selection, selectionArgs)
+            if (pruned.toLong() != selectionStats.rowCount) {
+                // 另一个进程可能在测量与删除之间改变了目标集合，回读数据库真值。
+                resyncStatistics(db)
+            } else {
+                decrementCachedStatistics(
+                    StoreStatistics(selectionStats.rowCount, selectionStats.payloadBytes)
+                )
+            }
             result = EventStorePruneResult(
                 prunedEventCount = pruned,
-                priorityCounts = if (priorities.values.sum() == pruned) priorities else emptyMap()
+                priorityCounts = if (selectionStats.validPriorityCounts.values.sum() == pruned) {
+                    selectionStats.validPriorityCounts
+                } else {
+                    emptyMap()
+                }
             )
             db.setTransactionSuccessful()
         } finally {
@@ -569,11 +618,13 @@ class SQLiteEventStore(
         val nowMs = System.currentTimeMillis()
         val idsToDelete = mutableListOf<Long>()
         val selectedPriorityCounts = mutableMapOf<ApmPriority, Int>()
+        var selectedPayloadBytes = 0L
         var deleted = 0
+        var actual = StoreStatistics(rowCount = 0L, payloadBytes = 0L)
         db.beginTransaction()
         try {
             // The write transaction makes candidate selection and deletion atomic against another claimant.
-            val actual = statisticsInternal(db)
+            actual = statisticsInternal(db)
             var projectedRows = actual.rowCount
             var projectedPayloadBytes = actual.payloadBytes
             if (isOverCapacity(projectedRows, projectedPayloadBytes)) {
@@ -588,6 +639,7 @@ class SQLiteEventStore(
                 ).use { cursor ->
                     while (cursor.moveToNext() && isOverCapacity(projectedRows, projectedPayloadBytes)) {
                         idsToDelete += cursor.getLong(0)
+                        selectedPayloadBytes += cursor.getLong(1)
                         StoragePriorityMapper.fromStoredValue(cursor.getInt(2))?.let { priority ->
                             selectedPriorityCounts[priority] =
                                 (selectedPriorityCounts[priority] ?: 0) + 1
@@ -616,28 +668,40 @@ class SQLiteEventStore(
 
         if (idsToDelete.isEmpty()) {
             // 活跃租约不允许为满足容量预算而删除，预算会在租约释放后的下一次写入重试。
-            resyncStatistics(db)
+            // 直接复用事务内已测得的数据库真值校准缓存，避免再执行一次全表统计查询。
+            cachedRowCount.set(actual.rowCount)
+            cachedPayloadBytes.set(actual.payloadBytes)
             return CapacityTrimResult.EMPTY
         }
 
-        // 容量淘汰是低频路径，删除后再次校准可覆盖跨实例并发变化。
-        resyncStatistics(db)
+        if (deleted == idsToDelete.size) {
+            // 全部候选删除成功：按已知的精确行数与逐行 LENGTH 字节扣减，等价于全表重同步
+            decrementCachedStatistics(StoreStatistics(idsToDelete.size.toLong(), selectedPayloadBytes))
+        } else {
+            // 容量淘汰是低频路径，删除不完整时回读数据库真值以覆盖跨实例并发变化。
+            resyncStatistics(db)
+        }
         return CapacityTrimResult(
             evictedEventCount = deleted,
             priorityCounts = if (deleted == idsToDelete.size) selectedPriorityCounts else emptyMap()
         )
     }
 
-    /** Counts selected rows by valid persisted priority without materializing event payloads. */
-    private fun priorityCountsInternal(
+    /**
+     * One-scan selection statistics: per-priority valid counts plus total row and payload-byte
+     * aggregates for the same selection, replacing separate GROUP BY and COUNT/SUM passes.
+     */
+    private fun priorityStatisticsInternal(
         db: SQLiteDatabase,
         selection: String,
         selectionArgs: Array<String>
-    ): Map<ApmPriority, Int> {
-        val counts = mutableMapOf<ApmPriority, Int>()
+    ): PrioritySelectionStats {
+        val validPriorityCounts = mutableMapOf<ApmPriority, Int>()
+        var rowCount = 0L
+        var payloadBytes = 0L
         db.query(
             TABLE_NAME,
-            arrayOf(COLUMN_PRIORITY, "COUNT(*)"),
+            arrayOf(COLUMN_PRIORITY, "COUNT(*)", "COALESCE(SUM(LENGTH($COLUMN_PAYLOAD)), 0)"),
             selection,
             selectionArgs,
             COLUMN_PRIORITY,
@@ -645,12 +709,32 @@ class SQLiteEventStore(
             null
         ).use { cursor ->
             while (cursor.moveToNext()) {
+                val groupRowCount = cursor.getLong(1)
+                rowCount += groupRowCount
+                payloadBytes += cursor.getLong(2)
+                // 无效持久化优先级不进入可归因计数，保持与旧两趟实现一致的保守语义
                 StoragePriorityMapper.fromStoredValue(cursor.getInt(0))?.let { priority ->
-                    counts[priority] = cursor.getInt(1)
+                    validPriorityCounts[priority] = groupRowCount.toInt()
                 }
             }
         }
-        return counts
+        return PrioritySelectionStats(rowCount, payloadBytes, validPriorityCounts)
+    }
+
+    /** Index-covered COUNT(*) without touching payload BLOB pages. */
+    private fun rowCountInternal(db: SQLiteDatabase): Long {
+        db.query(
+            TABLE_NAME,
+            arrayOf("COUNT(*)"),
+            null, null,
+            null, null,
+            null
+        ).use { cursor ->
+            if (cursor.moveToFirst()) {
+                return cursor.getLong(0)
+            }
+        }
+        return 0L
     }
 
     /** 查询指定范围的行数与 payload 总字节，不额外加锁。 */
@@ -777,6 +861,34 @@ class SQLiteEventStore(
         val payloadBytes: Long
     )
 
+    /**
+     * 同一选择条件的单趟聚合结果。
+     *
+     * @property rowCount 选择命中的总行数（含无效持久化优先级的行）
+     * @property payloadBytes 选择命中的 payload 字节总量
+     * @property validPriorityCounts 仅统计可映射持久化优先级的行数
+     */
+    private data class PrioritySelectionStats(
+        val rowCount: Long,
+        val payloadBytes: Long,
+        val validPriorityCounts: Map<ApmPriority, Int>
+    )
+
+    /**
+     * claimPending 写事务内取出的未解码候选行。
+     *
+     * @property id 行主键
+     * @property payload 可逆二进制事件负载
+     * @property retryCount 当前行重试次数
+     * @property storedEventId 迁移兜底的持久化事件身份
+     */
+    private class RawClaimedRow(
+        val id: Long,
+        val payload: ByteArray,
+        val retryCount: Int,
+        val storedEventId: String
+    )
+
     /** Adds a lease duration without overflowing into an already-expired value. */
     private fun safeAdd(nowMs: Long, durationMs: Long): Long =
         if (nowMs > Long.MAX_VALUE - durationMs) Long.MAX_VALUE else nowMs + durationMs
@@ -799,6 +911,9 @@ class SQLiteEventStore(
 
         /** 单次容量淘汰删除绑定的最大 ID 数，保守低于 Android SQLite 常见变量上限。 */
         private const val TRIM_DELETE_BATCH_SIZE = 500
+
+        /** claimPending 原始行预分配的上限，防止异常大的 limit 直接预分配过大列表。 */
+        private const val RAW_ROW_PREALLOCATE_CAP = 256
 
         /** data 列占位空串（line protocol 改为读取时从 payload 渲染）。 */
         private const val EMPTY_DATA = ""

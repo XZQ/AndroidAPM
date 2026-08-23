@@ -2,6 +2,7 @@ public final class com/apm/model/ApmBatchEnvelopeSerializer {
 	public static final field INSTANCE Lcom/apm/model/ApmBatchEnvelopeSerializer;
 	public final fun serialize (Ljava/util/List;Lcom/apm/model/ApmResourceContext;J)Lcom/apm/model/EncodedApmBatch;
 	public static synthetic fun serialize$default (Lcom/apm/model/ApmBatchEnvelopeSerializer;Ljava/util/List;Lcom/apm/model/ApmResourceContext;JILjava/lang/Object;)Lcom/apm/model/EncodedApmBatch;
+	public final fun serializeWithinBudget (Ljava/util/List;Lcom/apm/model/ApmResourceContext;IJ)Ljava/util/List;
 }
 
 public final class com/apm/model/ApmEvent {

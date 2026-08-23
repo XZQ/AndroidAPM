@@ -95,6 +95,62 @@ internal class ProtobufWriter(private val stream: ByteArrayOutputStream) {
         stream.write(valueBytes)
     }
 
+    /**
+     * 写入 typed-fields V2 的 map entry：string key + 嵌套 discriminator/value message。
+     *
+     * 与 [writeStringMapEntry] 相同的 size-then-write 模式：先解析计算 value message 与
+     * 整个 entry 的编码大小，再一次性顺序写入，避免每个字段两级中间缓冲与数组复制。
+     * 输出字节与"先编码嵌套 message 再 writeMessage"的实现逐字节一致。
+     *
+     * @param fieldNumber 外层 map 字段编号
+     * @param key map 键
+     * @param typeName 标量类型判别名（嵌套 message field 1）
+     * @param valueText 可选标量规范文本（嵌套 message field 2）
+     */
+    internal fun writeTypedMapEntry(
+        fieldNumber: Int,
+        key: String,
+        typeName: String,
+        valueText: String?
+    ) {
+        val keyBytes = key.toByteArray(Charsets.UTF_8)
+        val typeBytes = typeName.toByteArray(Charsets.UTF_8)
+        val textBytes = valueText?.toByteArray(Charsets.UTF_8)
+
+        // value message = tag(type) + varint(len) + typeBytes [+ tag(text) + varint(len) + textBytes]
+        var valueSize = tagEncodedSize(TYPED_VALUE_TYPE) +
+            varintEncodedSize(typeBytes.size) + typeBytes.size
+        if (textBytes != null) {
+            valueSize += tagEncodedSize(TYPED_VALUE_TEXT) +
+                varintEncodedSize(textBytes.size) + textBytes.size
+        }
+
+        // entry payload = key 段 + value 段
+        var entrySize = tagEncodedSize(MAP_ENTRY_KEY) +
+            varintEncodedSize(keyBytes.size) + keyBytes.size
+        entrySize += tagEncodedSize(MAP_ENTRY_VALUE) + varintEncodedSize(valueSize) + valueSize
+
+        // 外层：tag + length + entry payload
+        writeTag(fieldNumber, WIRE_TYPE_LENGTH_DELIMITED)
+        writeVarint32(entrySize)
+
+        // entry 内部：key (field 1) + value message (field 2: type + 可选 text)
+        writeTag(MAP_ENTRY_KEY, WIRE_TYPE_LENGTH_DELIMITED)
+        writeVarint32(keyBytes.size)
+        stream.write(keyBytes)
+
+        writeTag(MAP_ENTRY_VALUE, WIRE_TYPE_LENGTH_DELIMITED)
+        writeVarint32(valueSize)
+        writeTag(TYPED_VALUE_TYPE, WIRE_TYPE_LENGTH_DELIMITED)
+        writeVarint32(typeBytes.size)
+        stream.write(typeBytes)
+        if (textBytes != null) {
+            writeTag(TYPED_VALUE_TEXT, WIRE_TYPE_LENGTH_DELIMITED)
+            writeVarint32(textBytes.size)
+            stream.write(textBytes)
+        }
+    }
+
     /** 刷新底层输出流。 */
     fun flush() {
         stream.flush()
@@ -197,5 +253,13 @@ internal class ProtobufWriter(private val stream: ByteArrayOutputStream) {
 
         /** Map entry 内部 value 字段编号（proto 规范固定为 2）。 */
         private const val MAP_ENTRY_VALUE = 2
+
+        // --- Typed-fields V2 nested discriminator fields ---
+
+        /** Typed-value 嵌套 message 的类型判别字段编号。 */
+        private const val TYPED_VALUE_TYPE = 1
+
+        /** Typed-value 嵌套 message 的可选标量文本字段编号。 */
+        private const val TYPED_VALUE_TEXT = 2
     }
 }

@@ -5,6 +5,7 @@ import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlin.random.Random
 
@@ -211,7 +212,68 @@ class PiiSanitizerTest {
         }
     }
 
-    // --- 辅助方法 ---
+    // --- 性能优化回归 ---
+
+    /** Copy-on-write：零命中事件的 map 与输入共享引用，不做整表复制。 */
+    @Test
+    fun `clean event maps are shared not copied`() {
+        val fields = mapOf("fps" to 60, "module" to "render")
+        val extras = mapOf("version" to "1.0.0")
+        val globalContext = mapOf("channel" to "test")
+        val event = createEvent(fields = fields, extras = extras, globalContext = globalContext)
+
+        val result = sanitizer.sanitize(event)
+
+        // 未修改的 map 应原样共享，避免每事件三次 map 复制
+        assertTrue(result.fields === fields)
+        assertTrue(result.extras === extras)
+        assertTrue(result.globalContext === globalContext)
+    }
+
+    /** Copy-on-write：有命中的 map 才物化新副本，且保持原始迭代顺序。 */
+    @Test
+    fun `dirty map is copied and preserves iteration order`() {
+        val fields = LinkedHashMap<String, Any?>()
+        fields["alpha"] = 1
+        fields["message"] = "user 13812345678 called"
+        fields["omega"] = 2
+
+        val result = sanitizer.sanitize(createEvent(fields = fields))
+
+        assertFalse(result.fields === fields)
+        assertEquals(listOf("alpha", "message", "omega"), result.fields.keys.toList())
+        assertEquals(1, result.fields["alpha"])
+        assertEquals(2, result.fields["omega"])
+    }
+
+    /** 敏感键名判定缓存：重复键的判定结果与首次一致，混合敏感/非敏感键不串扰。 */
+    @Test
+    fun `repeated field name decisions stay consistent`() {
+        repeat(3) {
+            val dirty = sanitizer.sanitize(createEvent(fields = mapOf("session_id" to "abc")))
+            val clean = sanitizer.sanitize(createEvent(fields = mapOf("author" to "Ada")))
+            assertEquals("***", dirty.fields["session_id"])
+            assertEquals("Ada", clean.fields["author"])
+        }
+    }
+
+    /** 长度快拒边界：恰好达到最短命中长度的值仍被脱敏，差一字符的短值原样保留。 */
+    @Test
+    fun `length quick-reject boundary values behave identically`() {
+        // 各规则最短可命中形式
+        assertEquals("pwd=***", sanitizer.sanitize(createEvent(fields = mapOf("u" to "pwd=x"))).fields["u"])
+        assertEquals("auth=***", sanitizer.sanitize(createEvent(fields = mapOf("u" to "auth=x"))).fields["u"])
+        assertEquals("***@b.co", sanitizer.sanitize(createEvent(fields = mapOf("u" to "a@b.co"))).fields["u"])
+        assertEquals(
+            "138****5678",
+            sanitizer.sanitize(createEvent(fields = mapOf("u" to "13812345678"))).fields["u"]
+        )
+
+        // 低于最短命中长度的短值原样返回
+        for (short in listOf("true", "main", "1", "pwd=", "auth=")) {
+            assertEquals(short, sanitizer.sanitize(createEvent(fields = mapOf("u" to short))).fields["u"])
+        }
+    }
 
     /** 创建测试用 APM 事件。 */
     private fun createEvent(

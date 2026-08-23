@@ -18,6 +18,24 @@ import java.math.BigInteger
  */
 object ApmEventCodec {
 
+    /** Precomputed enum-name lookup avoiding per-decode enum array clones for kind. */
+    private val KIND_BY_NAME = ApmEventKind.entries.associateBy { it.name }
+
+    /** Precomputed enum-name lookup avoiding per-decode enum array clones for severity. */
+    private val SEVERITY_BY_NAME = ApmSeverity.entries.associateBy { it.name }
+
+    /** Precomputed enum-name lookup avoiding per-decode enum array clones for priority. */
+    private val PRIORITY_BY_NAME = ApmPriority.entries.associateBy { it.name }
+
+    /** Precomputed UTF-8 encodings of enum names in the encode path's closed sets. */
+    private val KIND_NAME_BYTES = ApmEventKind.entries.associate { it.name to it.name.toByteArray(Charsets.UTF_8) }
+
+    /** Precomputed UTF-8 encodings of severity names. */
+    private val SEVERITY_NAME_BYTES = ApmSeverity.entries.associate { it.name to it.name.toByteArray(Charsets.UTF_8) }
+
+    /** Precomputed UTF-8 encodings of priority names. */
+    private val PRIORITY_NAME_BYTES = ApmPriority.entries.associate { it.name to it.name.toByteArray(Charsets.UTF_8) }
+
     /**
      * Encodes an event into the durable storage format.
      *
@@ -25,15 +43,16 @@ object ApmEventCodec {
      * @return versioned binary payload
      */
     fun encode(event: ApmEvent): ByteArray {
-        val buffer = BoundedByteArrayOutputStream()
+        // 容量预估避免 32 字节默认缓冲的多次扩容复制；输出字节与无预估版本逐字节一致
+        val buffer = BoundedByteArrayOutputStream(estimateEncodedSize(event))
         DataOutputStream(buffer).use { output ->
             output.writeInt(FORMAT_VERSION)
             output.writeLong(event.timestamp)
             output.writeString(event.module)
             output.writeString(event.name)
-            output.writeString(event.kind.name)
-            output.writeString(event.severity.name)
-            output.writeString(event.priority.name)
+            output.writeEncodedString(KIND_NAME_BYTES.getValue(event.kind.name))
+            output.writeEncodedString(SEVERITY_NAME_BYTES.getValue(event.severity.name))
+            output.writeEncodedString(PRIORITY_NAME_BYTES.getValue(event.priority.name))
             output.writeString(event.processName)
             output.writeString(event.threadName)
             output.writeNullableString(event.scene)
@@ -68,9 +87,9 @@ object ApmEventCodec {
                     timestamp = input.readLong(),
                     module = input.readString(),
                     name = input.readString(),
-                    kind = enumValueOrDefault(input.readString(), ApmEventKind.METRIC),
-                    severity = enumValueOrDefault(input.readString(), ApmSeverity.INFO),
-                    priority = enumValueOrDefault(input.readString(), ApmPriority.NORMAL),
+                    kind = KIND_BY_NAME.getOrElse(input.readString()) { ApmEventKind.METRIC },
+                    severity = SEVERITY_BY_NAME.getOrElse(input.readString()) { ApmSeverity.INFO },
+                    priority = PRIORITY_BY_NAME.getOrElse(input.readString()) { ApmPriority.NORMAL },
                     processName = input.readString(),
                     threadName = input.readString(),
                     scene = input.readNullableString(),
@@ -95,14 +114,71 @@ object ApmEventCodec {
     }
 
     /**
-     * Parses an enum value while tolerating data written by a newer producer.
+     * Writes a pre-encoded UTF-8 string with a 32-bit length prefix.
      *
-     * @param name serialized enum name
-     * @param fallback value used when the name is unknown
-     * @return parsed or fallback value
+     * Used for enum names from closed sets whose encoding is precomputed once; output bytes are
+     * identical to [writeString].
+     *
+     * @param bytes precomputed UTF-8 bytes
      */
-    private inline fun <reified T : Enum<T>> enumValueOrDefault(name: String, fallback: T): T {
-        return enumValues<T>().firstOrNull { it.name == name } ?: fallback
+    private fun DataOutputStream.writeEncodedString(bytes: ByteArray) {
+        writeInt(bytes.size)
+        write(bytes)
+    }
+
+    /**
+     * Estimates the encoded size of one event so the output buffer starts near its final size.
+     *
+     * UTF-16 character counts are a conservative lower bound for UTF-8 byte length (non-ASCII
+     * content may need more), which is sufficient as a growth hint; the bounded output stream
+     * still enforces the exact payload budget.
+     */
+    private fun estimateEncodedSize(event: ApmEvent): Int {
+        var total = ESTIMATE_FIXED_HEADER_BYTES
+        total += estimateStringBytes(event.module)
+        total += estimateStringBytes(event.name)
+        // 枚举名来自封闭集合，长度已知很小
+        total += estimateStringBytes(event.kind.name)
+        total += estimateStringBytes(event.severity.name)
+        total += estimateStringBytes(event.priority.name)
+        total += estimateStringBytes(event.processName)
+        total += estimateStringBytes(event.threadName)
+        event.scene?.let { total += estimateStringBytes(it) }
+        for ((key, value) in event.fields) {
+            total += estimateStringBytes(key)
+            total += estimateValueBytes(value)
+        }
+        total += estimateStringMapBytes(event.globalContext)
+        total += estimateStringMapBytes(event.extras)
+        total += estimateStringBytes(event.eventId)
+        // 病态大集合求和溢出 Int 为负时钳回安全下界：容量只是增长提示，
+        // 真实上限仍由写入期的 2 MiB 预算强制
+        return total.coerceIn(ESTIMATE_FIXED_HEADER_BYTES, MAX_PAYLOAD_BYTES)
+    }
+
+    /** Estimates one length-prefixed string from its character count. */
+    private fun estimateStringBytes(value: String): Int {
+        return ESTIMATE_LENGTH_PREFIX_BYTES + value.length
+    }
+
+    /** Estimates one string map including its size prefix. */
+    private fun estimateStringMapBytes(values: Map<String, String>): Int {
+        var total = ESTIMATE_LENGTH_PREFIX_BYTES
+        for ((key, value) in values) {
+            total += estimateStringBytes(key)
+            total += estimateStringBytes(value)
+        }
+        return total
+    }
+
+    /** Estimates one typed field value from its most compact plausible encoding. */
+    private fun estimateValueBytes(value: Any?): Int {
+        return when (value) {
+            null -> ESTIMATE_LENGTH_PREFIX_BYTES
+            is String -> estimateStringBytes(value)
+            is BigInteger, is BigDecimal -> ESTIMATE_BIG_NUMBER_BYTES
+            else -> ESTIMATE_FIXED_SCALAR_BYTES
+        }
     }
 
     /**
@@ -133,7 +209,11 @@ object ApmEventCodec {
         require(size <= available()) { "Truncated APM event string" }
         val bytes = ByteArray(size)
         readFully(bytes)
-        require(bytes.isValidUtf8()) { "Invalid UTF-8 in APM event string" }
+        // ASCII 快路径：全 0x00-0x7F 的字节序列必然是合法 UTF-8，跳过完整验证器；
+        // 含非 ASCII 字节时仍执行严格验证，接受/拒绝行为不变
+        if (bytes.any { it.toInt() and BYTE_MASK > ASCII_MAX }) {
+            require(bytes.isValidUtf8()) { "Invalid UTF-8 in APM event string" }
+        }
         return bytes.toString(Charsets.UTF_8)
     }
 
@@ -456,7 +536,7 @@ object ApmEventCodec {
     }
 
     /** Byte-array output that rejects oversized payloads before expanding its backing buffer. */
-    private class BoundedByteArrayOutputStream : ByteArrayOutputStream() {
+    private class BoundedByteArrayOutputStream(initialCapacity: Int) : ByteArrayOutputStream(initialCapacity) {
         /** Writes one byte only while the durable payload budget has capacity. */
         override fun write(value: Int) {
             require(count < MAX_PAYLOAD_BYTES) {
@@ -476,6 +556,18 @@ object ApmEventCodec {
 
     /** Current durable payload format version. */
     private const val FORMAT_VERSION = 3
+
+    /** Fixed header bytes: version int + timestamp long + nullable foreground byte + two map size prefixes. */
+    private const val ESTIMATE_FIXED_HEADER_BYTES = 4 + 8 + 1 + 4 + 4
+
+    /** Estimated bytes of one 32-bit length prefix. */
+    private const val ESTIMATE_LENGTH_PREFIX_BYTES = 4
+
+    /** Conservative estimate for one fixed-width scalar value including its type tag. */
+    private const val ESTIMATE_FIXED_SCALAR_BYTES = 16
+
+    /** Conservative estimate for one bounded big-number value including its type tag. */
+    private const val ESTIMATE_BIG_NUMBER_BYTES = 32
 
     /** Oldest durable format still accepted. */
     private const val LEGACY_FORMAT_VERSION = 1

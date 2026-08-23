@@ -104,6 +104,13 @@ internal class ApmDispatcher(
     }
 
     /**
+     * 压力路径 debug 日志守卫：仅当内置 logger 关闭 debug 输出（生产默认）时为 true，
+     * 此时丢弃路径的 d() 是可证明的空操作，模板构串可以整体跳过；
+     * 自定义 logger 恒为 false，调用行为与历史完全一致。
+     */
+    private val skipDebugLogs = canSkipDebugLogs(logger)
+
+    /**
      * 队列元素：已构建事件或延迟构建工厂 + 是否已经过聚合处理。
      * 聚合器周期性刷出的聚合结果不能再次进入聚合器，需要打标跳过。
      * 延迟工厂用于把事件构建（上下文 map 合并等）从调用线程搬到 worker 线程。
@@ -245,7 +252,10 @@ internal class ApmDispatcher(
         selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件，避免关闭期间出现尾部写入。
         if (shutdown) {
-            logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
+            // 压力路径守卫：内置 logger 关闭 debug 时 d() 是可证明的空操作，跳过模板构串
+            if (!skipDebugLogs) {
+                logger.d("Dispatcher already shutdown, drop ${event.module}/${event.name}")
+            }
             selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
@@ -282,7 +292,9 @@ internal class ApmDispatcher(
         selfMonitor?.recordEmit()
         // stop 之后直接拒绝新事件
         if (shutdown) {
-            logger.d("Dispatcher already shutdown, drop lazy event")
+            if (!skipDebugLogs) {
+                logger.d("Dispatcher already shutdown, drop lazy event")
+            }
             selfMonitor?.recordDrop(priority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return
         }
@@ -307,17 +319,21 @@ internal class ApmDispatcher(
         // Producer contention drops immediately instead of delaying host work. Every producer
         // participates so no caller can steal the slot between a priority eviction and replace.
         if (!admissionLock.tryLock()) {
-            logger.d("Dispatcher admission busy, drop priority=${queued.priority}")
+            if (!skipDebugLogs) {
+                logger.d("Dispatcher admission busy, drop priority=${queued.priority}")
+            }
             selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_ADMISSION_BUSY)
             return
         }
         try {
             // A single event can never fit this queue regardless of priority or evictions.
             if (queued.estimatedBytes > effectiveMaxQueuedBytes) {
-                logger.d(
-                    "Dispatcher event exceeds byte budget, drop priority=${queued.priority} " +
-                        "estimatedBytes=${queued.estimatedBytes}"
-                )
+                if (!skipDebugLogs) {
+                    logger.d(
+                        "Dispatcher event exceeds byte budget, drop priority=${queued.priority} " +
+                            "estimatedBytes=${queued.estimatedBytes}"
+                    )
+                }
                 selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_BYTE_BUDGET)
                 return
             }
@@ -325,10 +341,12 @@ internal class ApmDispatcher(
             // Once the shared queue is pressured, preserve capacity for other modules without
             // weakening delivery of HIGH/CRITICAL signals from the noisy module.
             if (shouldIsolateModule(queued)) {
-                logger.d(
-                    "Dispatcher module isolated, drop module=${queued.sourceModule} " +
-                        "priority=${queued.priority}"
-                )
+                if (!skipDebugLogs) {
+                    logger.d(
+                        "Dispatcher module isolated, drop module=${queued.sourceModule} " +
+                            "priority=${queued.priority}"
+                    )
+                }
                 selfMonitor?.recordDispatcherModuleIsolationDrop(queued.priority)
                 return
             }
@@ -353,10 +371,12 @@ internal class ApmDispatcher(
             if (selectedVictims != null) {
                 for (victim in selectedVictims) {
                     if (removeTracked(victim)) {
-                        logger.d(
-                            "Dispatcher capacity eviction priority=${victim.priority} " +
-                                "for priority=${queued.priority}"
-                        )
+                        if (!skipDebugLogs) {
+                            logger.d(
+                                "Dispatcher capacity eviction priority=${victim.priority} " +
+                                    "for priority=${queued.priority}"
+                            )
+                        }
                         selfMonitor?.recordDrop(
                             victim.priority,
                             SdkDropReason.DISPATCHER_PRIORITY_EVICTION
@@ -373,7 +393,9 @@ internal class ApmDispatcher(
             } else {
                 SdkDropReason.DISPATCHER_QUEUE_FULL
             }
-            logger.d("Dispatcher capacity full, drop priority=${queued.priority} reason=$reason")
+            if (!skipDebugLogs) {
+                logger.d("Dispatcher capacity full, drop priority=${queued.priority} reason=$reason")
+            }
             selfMonitor?.recordDrop(queued.priority, reason)
         } finally {
             admissionLock.unlock()
@@ -480,7 +502,8 @@ internal class ApmDispatcher(
         if (!moduleIsolationEnabled) {
             return
         }
-        queuedModuleCounts[sourceModule] = (queuedModuleCounts[sourceModule] ?: 0) + 1
+        // merge 保持单次哈希查找，降低准入锁内的每事件开销
+        queuedModuleCounts.merge(sourceModule, 1, Int::plus)
     }
 
     /** Decrements one module occupancy and removes empty keys while [admissionLock] is held. */
@@ -548,6 +571,8 @@ internal class ApmDispatcher(
      */
     private fun workerLoop() {
         val drainBuffer = ArrayList<QueuedEvent>(MAX_BATCH_DRAIN)
+        // 复用的落盘缓冲：单 worker 串行使用，避免每批一次 ArrayList 分配
+        val persistBuffer = ArrayList<ApmEvent>(MAX_BATCH_DRAIN)
         // 关闭后仍需排空已接受的事件
         while (running || queue.isNotEmpty()) {
             val first = try {
@@ -563,7 +588,7 @@ internal class ApmDispatcher(
             queue.drainTo(drainBuffer, MAX_BATCH_DRAIN - 1)
             // Queue-share accounting covers queued work only, not the batch currently executing.
             releaseQueueOccupancy(drainBuffer)
-            processBatch(drainBuffer)
+            processBatch(drainBuffer, persistBuffer)
 
             // 更新队列积压快照供自监控上报
             selfMonitor?.updateQueuePressure(queue.size, queuedBytes)
@@ -574,10 +599,11 @@ internal class ApmDispatcher(
      * 在 worker 线程处理一批事件：聚合 → 限流 → 脱敏 → 批量存储 → 上传。
      *
      * @param batch 本轮取出的队列元素
+     * @param toPersist 复用的落盘缓冲，方法入口清空；调用方保证单线程串行使用
      */
-    private fun processBatch(batch: List<QueuedEvent>) {
+    private fun processBatch(batch: List<QueuedEvent>, toPersist: ArrayList<ApmEvent>) {
+        toPersist.clear()
         // 聚合与限流在此线程执行，调用线程零开销
-        val toPersist = ArrayList<ApmEvent>(batch.size)
         for (queued in batch) {
             try {
                 // 延迟构建的事件在此线程完成构建（上下文合并等）
@@ -682,7 +708,9 @@ internal class ApmDispatcher(
         if (rateLimiter.tryAcquire(key, dynamicLimit.eventsPerWindow, dynamicLimit.windowMs)) {
             return true
         }
-        logger.d("Rate limited: $key")
+        if (!skipDebugLogs) {
+            logger.d("Rate limited: $key")
+        }
         // 记录事件丢弃
         selfMonitor?.recordDrop(event.priority, SdkDropReason.RATE_LIMIT)
         return false
@@ -693,7 +721,9 @@ internal class ApmDispatcher(
         if (dynamicEventPolicy.shouldSample(event)) {
             return true
         }
-        logger.d("Sampled out: ${event.module}/${event.name}")
+        if (!skipDebugLogs) {
+            logger.d("Sampled out: ${event.module}/${event.name}")
+        }
         selfMonitor?.recordDrop(event.priority, SdkDropReason.DYNAMIC_SAMPLING)
         return false
     }

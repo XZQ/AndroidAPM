@@ -35,6 +35,8 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
      * 数据库升级。
      * Version 2 durable rows are migrated additively so pending telemetry is
      * never discarded when event identity and claim ownership are introduced.
+     * Version 4 only adds the claim-order index; rows and existing columns are
+     * untouched.
      */
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (oldVersion < DATABASE_VERSION_OUTBOX) {
@@ -53,6 +55,11 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
             db.execSQL(SQL_BACKFILL_EVENT_ID)
             createIndexes(db)
         }
+        if (oldVersion < DATABASE_VERSION_CLAIM_ORDER && newVersion >= DATABASE_VERSION_CLAIM_ORDER) {
+            // 纯加性索引升级：v2 直升 v4 时上面的 createIndexes 已用 IF NOT EXISTS
+            // 创建过全部索引，这里对 v3 升 v4 的安装单独补建 claim 排序索引。
+            db.execSQL(SQL_CREATE_CLAIM_ORDER_INDEX)
+        }
     }
 
     /** Creates all indexes required by upload ordering and lease lookup. */
@@ -60,6 +67,7 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
         db.execSQL(SQL_CREATE_PRIORITY_INDEX)
         db.execSQL(SQL_CREATE_EVENT_ID_INDEX)
         db.execSQL(SQL_CREATE_AVAILABILITY_INDEX)
+        db.execSQL(SQL_CREATE_CLAIM_ORDER_INDEX)
     }
 
 
@@ -68,13 +76,16 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
         private const val DATABASE_NAME = "apm_events.db"
 
         /** 数据库版本。 */
-        private const val DATABASE_VERSION = 3
+        private const val DATABASE_VERSION = 4
 
         /** First schema version that contains the durable payload column. */
         private const val DATABASE_VERSION_OUTBOX = 2
 
         /** First schema version that supports claim ownership and expiry. */
         private const val DATABASE_VERSION_LEASES = 3
+
+        /** First schema version with the dedicated claim/read ordering index. */
+        private const val DATABASE_VERSION_CLAIM_ORDER = 4
 
         /** 创建 events 表。 */
         private const val SQL_CREATE_TABLE = """
@@ -110,6 +121,18 @@ class EventDbHelper(context: Context, name: String = DATABASE_NAME, version: Int
         private const val SQL_CREATE_AVAILABILITY_INDEX = """
             CREATE INDEX IF NOT EXISTS idx_lease_expiry_priority_ts
             ON events(lease_expires_at, priority DESC, timestamp ASC)
+        """
+
+        /**
+         * Claim/readPending 的精确排序索引。
+         * `ORDER BY priority DESC, timestamp ASC` 是混合方向排序，既不是
+         * idx_priority_ts(ASC,ASC) 的正向也不是其反向扫描，历史上只能全表扫描
+         * 加临时 B-tree 排序；该索引让 claim 每轮循环沿索引顺序扫描并在满足
+         * limit 时提前停止。
+         */
+        private const val SQL_CREATE_CLAIM_ORDER_INDEX = """
+            CREATE INDEX IF NOT EXISTS idx_priority_desc_ts
+            ON events(priority DESC, timestamp ASC)
         """
 
         /** Adds stable event identity to schema version 2. */

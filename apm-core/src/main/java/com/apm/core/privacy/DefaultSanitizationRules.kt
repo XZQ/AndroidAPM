@@ -25,6 +25,27 @@ object DefaultSanitizationRules {
         urlPasswordRule()
     )
 
+    // --- 长度快拒阈值 ---
+    // 每条规则的最短可能命中长度：短于该长度的输入在数学上不可能命中模式，
+    // 直接返回原值可跳过正则执行。绝大多数 metric 短值（"true"/"main"/数字文本）命中此路径。
+
+    /** 手机号模式最少 11 位数字。 */
+    private const val MIN_PHONE_INPUT_LENGTH = 11
+
+    /** 邮箱模式最短形式为 `a@b.co`（6 字符）。 */
+    private const val MIN_EMAIL_INPUT_LENGTH = 6
+
+    /** 身份证模式固定 18 字符。 */
+    private const val MIN_ID_CARD_INPUT_LENGTH = 18
+
+    /** URL token 模式最短形式为 `auth=x`（6 字符）。 */
+    private const val MIN_URL_TOKEN_INPUT_LENGTH = 6
+
+    /** URL 密码模式最短形式为 `pwd=x`（5 字符）。 */
+    private const val MIN_URL_PASSWORD_INPUT_LENGTH = 5
+
+    // --- 规则实现 ---
+
     /**
      * 手机号脱敏规则。
      *
@@ -34,7 +55,8 @@ object DefaultSanitizationRules {
      * 示例：13812345678 → 138****5678
      */
     fun phoneRule(): SanitizationRule = SanitizationRule { input ->
-        PHONE_REGEX.replace(input) { match ->
+        // 长度快拒：不足 11 字符的输入不可能包含 11 位手机号。
+        if (input.length < MIN_PHONE_INPUT_LENGTH) input else PHONE_REGEX.replace(input) { match ->
             val phone = match.value
             "${phone.substring(0, 3)}****${phone.substring(7)}"
         }
@@ -49,7 +71,8 @@ object DefaultSanitizationRules {
      * 示例：user@example.com → u***@example.com
      */
     fun emailRule(): SanitizationRule = SanitizationRule { input ->
-        EMAIL_REGEX.replace(input) { match ->
+        // 长度快拒：短于最短合法邮箱形式 `a@b.co` 的输入无需进入正则。
+        if (input.length < MIN_EMAIL_INPUT_LENGTH) input else EMAIL_REGEX.replace(input) { match ->
             val email = match.value
             val atIndex = email.indexOf('@')
             if (atIndex > 1) {
@@ -69,7 +92,8 @@ object DefaultSanitizationRules {
      * 示例：330102199001011234 → 3301************1234
      */
     fun idCardRule(): SanitizationRule = SanitizationRule { input ->
-        ID_CARD_REGEX.replace(input) { match ->
+        // 长度快拒：身份证模式固定 18 字符。
+        if (input.length < MIN_ID_CARD_INPUT_LENGTH) input else ID_CARD_REGEX.replace(input) { match ->
             val id = match.value
             "${id.substring(0, 4)}**********${id.substring(14)}"
         }
@@ -84,7 +108,8 @@ object DefaultSanitizationRules {
      * 示例：?token=abc123&user=test → ?token=***&user=test
      */
     fun urlTokenRule(): SanitizationRule = SanitizationRule { input ->
-        URL_TOKEN_REGEX.replace(input) { match ->
+        // 长度快拒：最短命中形式是 `auth=x`（最短参数名 + 等号 + 至少 1 个值字符）。
+        if (input.length < MIN_URL_TOKEN_INPUT_LENGTH) input else URL_TOKEN_REGEX.replace(input) { match ->
             // 保留参数名，替换值
             val group = match.value
             val eqIndex = group.indexOf('=')
@@ -105,7 +130,8 @@ object DefaultSanitizationRules {
      * 示例：?password=secret123 → ?password=***
      */
     fun urlPasswordRule(): SanitizationRule = SanitizationRule { input ->
-        URL_PASSWORD_REGEX.replace(input) { match ->
+        // 长度快拒：最短命中形式是 `pwd=x`。
+        if (input.length < MIN_URL_PASSWORD_INPUT_LENGTH) input else URL_PASSWORD_REGEX.replace(input) { match ->
             val group = match.value
             val eqIndex = group.indexOf('=')
             if (eqIndex >= 0) {

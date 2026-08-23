@@ -475,6 +475,54 @@ class SQLiteEventStoreTest {
         }
     }
 
+    /**
+     * 跨实例大 payload 插入后，第一实例的 pendingCount 必须通过行数漂移检测
+     * 校准 payload 字节缓存，使下一次写入正确触发字节预算淘汰。
+     */
+    @Test
+    fun `cross instance large inserts heal payload byte cache via pending count`() {
+        val context = RuntimeEnvironment.getApplication()
+        val databaseName = "byte-heal-${System.nanoTime()}.db"
+        // 第一实例：行数宽裕但字节预算低，使字节维度成为唯一会触发的门禁
+        val tightStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = BYTE_HEAL_MAX_EVENTS,
+            maxPayloadBytes = BYTE_HEAL_TIGHT_BYTE_BUDGET,
+            maxEventPayloadBytes = BYTE_HEAL_EVENT_SOFT_LIMIT
+        )
+        // 第二实例：字节预算宽裕，插入后自身不触发淘汰
+        val roomyStore = SQLiteEventStore(
+            EventDbHelper(context, databaseName),
+            maxEvents = BYTE_HEAL_MAX_EVENTS,
+            maxPayloadBytes = BYTE_HEAL_ROOMY_BYTE_BUDGET
+        )
+        try {
+            // 初始化第一实例缓存（此时行数与字节均正确）
+            tightStore.append(event("seed"))
+            val beforeExternal = tightStore.pendingCount()
+
+            // 第二实例写入超过第一实例字节预算的大 payload，行数仍远低于上限
+            roomyStore.appendBatch((0 until BYTE_HEAL_LARGE_EVENTS).map { index ->
+                event("large-$index").copy(fields = mapOf("blob" to "x".repeat(LARGE_FIELD_CHARS)))
+            })
+
+            // 第一实例的 pendingCount 检测到行数漂移，必须顺带校准字节缓存
+            val afterHeal = tightStore.pendingCount()
+            assertEquals(beforeExternal + BYTE_HEAL_LARGE_EVENTS, afterHeal)
+
+            // 下一次写入应看到真实字节水位并淘汰低优先级旧行
+            val appendResult = tightStore.appendBatchWithResult(listOf(event("post-heal")))
+            assertTrue(
+                "byte budget trim must run after cache healing",
+                appendResult.capacityEvictedEventCount > 0
+            )
+            assertTrue(tightStore.pendingCount() < afterHeal + 1)
+        } finally {
+            tightStore.close()
+            roomyStore.close()
+        }
+    }
+
     companion object {
         /** 测试用容量上限。 */
         private const val TEST_MAX_EVENTS = 20
@@ -484,6 +532,21 @@ class SQLiteEventStoreTest {
 
         /** Replacement rows that must trigger one capacity eviction. */
         private const val COUNT_TEST_APPEND_SIZE = 11
+
+        /** Row cap for the byte-cache healing scenario; far above the rows used. */
+        private const val BYTE_HEAL_MAX_EVENTS = 100
+
+        /** Tight byte budget only the first instance enforces. */
+        private const val BYTE_HEAL_TIGHT_BYTE_BUDGET = 16L * 1024L
+
+        /** Roomy byte budget so the second instance never trims its own inserts. */
+        private const val BYTE_HEAL_ROOMY_BYTE_BUDGET = 64L * 1024L * 1024L
+
+        /** Large-payload rows the second instance inserts past the tight budget. */
+        private const val BYTE_HEAL_LARGE_EVENTS = 8
+
+        /** Per-event soft limit above one large payload but below the tight byte budget. */
+        private const val BYTE_HEAL_EVENT_SOFT_LIMIT = 8 * 1024
 
         /** Distance from Long.MAX_VALUE used to force saturated lease addition. */
         private const val LEASE_OVERFLOW_DELTA_MS = 5L

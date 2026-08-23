@@ -115,6 +115,97 @@ class ApmBatchEnvelopeSerializerTest {
         }
     }
 
+    /** Budget splitting matches a naive greedy full-reserialize reference on varied events. */
+    @Test
+    fun `budget splitting matches naive greedy reference`() {
+        val events = buildList {
+            repeat(BUDGET_CORPUS_SIZE) { index ->
+                add(
+                    ApmEvent(
+                        module = "budget",
+                        name = "event-$index",
+                        eventId = "budget-event-$index",
+                        // 变长 payload 使各预算下的拆分边界落在不同位置
+                        fields = mapOf(
+                            "payload" to "x".repeat((index * PRIME_STRIDE) % MAX_FILL_LENGTH),
+                            "index" to index
+                        )
+                    )
+                )
+            }
+        }
+        for (budget in BUDGET_CASES) {
+            val actual = ApmBatchEnvelopeSerializer.serializeWithinBudget(
+                events = events,
+                resource = resource(),
+                maxBatchBytes = budget,
+                sentAtMs = FIXED_SENT_AT_MS
+            )
+            val expected = naiveGreedySplit(events, budget)
+            if (expected == null || actual == null) {
+                // 两种实现必须对"单事件超预算"做出一致的 null 判定
+                assertTrue(
+                    "oversize agreement required for budget=$budget",
+                    expected == null && actual == null
+                )
+                continue
+            }
+            // 拆分点、batchId、eventCount 与 payload 必须与朴素参考实现完全一致
+            assertEquals(expected.size, actual.size)
+            for (index in expected.indices) {
+                assertEquals(expected[index].batchId, actual[index].batchId)
+                assertEquals(expected[index].eventCount, actual[index].eventCount)
+                assertTrue(expected[index].payload.contentEquals(actual[index].payload))
+                assertTrue("sub-batch must fit budget=$budget", actual[index].payload.size <= budget)
+            }
+            // 全部事件按原顺序进入某个子批
+            assertEquals(events.size, actual.sumOf { it.eventCount })
+        }
+    }
+
+    /** Empty input yields an empty split result rather than an ACK unit. */
+    @Test
+    fun `budget splitting accepts empty input`() {
+        val result = ApmBatchEnvelopeSerializer.serializeWithinBudget(
+            events = emptyList(),
+            resource = resource(),
+            maxBatchBytes = 1024,
+            sentAtMs = FIXED_SENT_AT_MS
+        )
+        assertTrue(result != null && result.isEmpty())
+    }
+
+    /**
+     * Reference implementation of the historical algorithm: serialize the accumulated candidate
+     * after every append and commit the last fitting candidate on overflow.
+     */
+    private fun naiveGreedySplit(events: List<ApmEvent>, maxBatchBytes: Int): List<EncodedApmBatch>? {
+        val encodedBatches = ArrayList<EncodedApmBatch>()
+        val currentEvents = ArrayList<ApmEvent>()
+        var currentEncoded: EncodedApmBatch? = null
+        for (event in events) {
+            currentEvents += event
+            val candidate = ApmBatchEnvelopeSerializer.serialize(currentEvents, resource(), FIXED_SENT_AT_MS)
+            if (candidate.payload.size <= maxBatchBytes) {
+                currentEncoded = candidate
+                continue
+            }
+            currentEvents.removeAt(currentEvents.lastIndex)
+            if (currentEncoded == null) {
+                return null
+            }
+            encodedBatches += currentEncoded
+            currentEvents.clear()
+            currentEvents += event
+            currentEncoded = ApmBatchEnvelopeSerializer.serialize(currentEvents, resource(), FIXED_SENT_AT_MS)
+            if (currentEncoded.payload.size > maxBatchBytes) {
+                return null
+            }
+        }
+        currentEncoded?.let(encodedBatches::add)
+        return encodedBatches
+    }
+
     /** Creates one event with a caller-selected stable identity. */
     private fun event(identity: String): ApmEvent = ApmEvent(
         module = "test",
@@ -194,6 +285,14 @@ class ApmBatchEnvelopeSerializerTest {
         private const val LEGACY_FIELDS_NUMBER = 10
         /** Versioned typed fields number. */
         private const val TYPED_FIELDS_NUMBER = 15
+        /** Budget-split corpus size covering single, multi, and overflow sub-batches. */
+        private const val BUDGET_CORPUS_SIZE = 24
+        /** Prime stride producing varied payload lengths across the corpus. */
+        private const val PRIME_STRIDE = 37
+        /** Upper bound for the varying fill length inside one corpus event. */
+        private const val MAX_FILL_LENGTH = 211
+        /** Budget cases spanning single-batch, multi-batch, and oversize-single outcomes. */
+        private val BUDGET_CASES = listOf(512, 1024, 2048, 4096, 8192)
         /** Protobuf tag field-number shift. */
         private const val TAG_SHIFT = 3
         /** Protobuf tag wire-type mask. */

@@ -172,16 +172,30 @@ class RetryingApmUploader(
     /**
      * Evicts one lower-priority event when the queue is full.
      *
+     * 单趟手工扫描替代 filter + minWithOrNull 的两个中间 list 分配：
+     * 维护最优候选引用即可完成同样的 (priority, timestamp) 最小值选择。
+     *
      * @param incoming event competing for capacity
      * @return true when an event was removed
      */
     private fun evictLowerPriority(incoming: ApmEvent): Boolean {
         synchronized(queue) {
-            val candidate = queue
-                .filter { it.priority.value < incoming.priority.value }
-                .minWithOrNull(compareBy<ApmEvent> { it.priority.value }.thenBy { it.timestamp })
-                ?: return false
-            if (queue.remove(candidate)) {
+            var candidate: ApmEvent? = null
+            for (event in queue) {
+                if (event.priority.value >= incoming.priority.value) {
+                    // 只逐出严格更低优先级的候选
+                    continue
+                }
+                val current = candidate
+                if (current == null ||
+                    event.priority.value < current.priority.value ||
+                    (event.priority.value == current.priority.value && event.timestamp < current.timestamp)
+                ) {
+                    candidate = event
+                }
+            }
+            val victim = candidate ?: return false
+            if (queue.remove(victim)) {
                 capacityPermits.release()
                 return true
             }

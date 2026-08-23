@@ -324,7 +324,12 @@ object Apm {
             dispatcher = dispatcher,
             processCoordinator = processCoordinator,
             selfMonitorExecutor = monitoringExecutor,
-            bizContextSource = bizContextSource
+            bizContextSource = bizContextSource,
+            // processName 与冻结 defaultContext 在运行期不变，其保留字节估算只需计算一次
+            retentionBaseBytes = ApmEventSizeEstimator.constantRetentionBytes(
+                processName = context.processName,
+                defaultContext = context.config.defaultContext
+            )
         )
         state = newState
 
@@ -454,14 +459,15 @@ object Apm {
         // before handing it to a lazy worker so later mutation cannot rewrite the captured event.
         val fieldSnapshot = snapshotEventFields(fields)
         val extrasSnapshot = snapshotEventExtras(extras)
+        // 进程级常量（基础开销 + processName + 冻结 defaultContext）已在 init 时预计算，
+        // 发射线程只累加每次变化的部分
         val estimatedBytes = ApmEventSizeEstimator.estimate(
             module = module,
             name = name,
-            processName = currentState.context.processName,
             threadName = threadName,
             scene = scene,
             fields = fieldSnapshot,
-            primaryContext = currentState.context.config.defaultContext,
+            constantBaseBytes = currentState.retentionBaseBytes,
             secondaryContext = bizContext,
             extras = extrasSnapshot
         )
@@ -855,8 +861,10 @@ object Apm {
         bizContext: Map<String, String>
     ): ApmEvent {
         val config = currentState.context.config
-        // 默认上下文与业务上下文合并（在 worker 线程执行）
-        val mergedContext = config.defaultContext + bizContext
+        // 默认上下文与业务上下文合并（在 worker 线程执行）。
+        // bizContext 为空（默认）时直接共享冻结的 defaultContext，避免整表复制；
+        // SDK 在异步边界冻结 map，下游只读取，共享引用不可被观察
+        val mergedContext = if (bizContext.isEmpty()) config.defaultContext else config.defaultContext + bizContext
         return ApmEvent(
             module = module,
             name = name,
@@ -1011,6 +1019,8 @@ object Apm {
         val selfMonitorExecutor: ScheduledExecutorService?,
         /** Business-context caller or asynchronous-cache source. */
         val bizContextSource: BizContextSnapshotSource,
+        /** Precomputed constant retention estimate: base overhead + processName + frozen default context. */
+        val retentionBaseBytes: Long,
         /** Modules that completed initialization and start successfully. */
         val startedModules: CopyOnWriteArraySet<ApmModule> = CopyOnWriteArraySet(),
         /** Module names held stopped by auto-throttle; guarded by [initLock]. */

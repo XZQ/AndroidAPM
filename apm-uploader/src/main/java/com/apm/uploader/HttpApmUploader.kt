@@ -132,35 +132,23 @@ class HttpApmUploader(
         return true
     }
 
-    /** Builds deterministic sub-batches whose uncompressed protobuf payload stays within budget. */
+    /**
+     * Builds deterministic sub-batches whose uncompressed protobuf payload stays within budget.
+     *
+     * 拆分与编码算法由 [ApmBatchEnvelopeSerializer.serializeWithinBudget] 提供：每事件只编码
+     * 一次、候选批尺寸用精确增量求和判定，消除逐候选全量重序列化的 O(N^2) 行为。
+     * 单事件超出预算时返回 null 并记录失败。
+     */
     private fun encodeWithinBudget(events: List<ApmEvent>): List<EncodedApmBatch>? {
-        val encodedBatches = ArrayList<EncodedApmBatch>()
-        val currentEvents = ArrayList<ApmEvent>()
-        var currentEncoded: EncodedApmBatch? = null
-        val sentAtMs = System.currentTimeMillis()
-        for (event in events) {
-            currentEvents += event
-            val candidate = ApmBatchEnvelopeSerializer.serialize(currentEvents, resourceContext, sentAtMs)
-            if (candidate.payload.size <= maxBatchBytes) {
-                currentEncoded = candidate
-                continue
-            }
-            // Remove the overflowing event and commit the preceding non-empty candidate.
-            currentEvents.removeAt(currentEvents.lastIndex)
-            if (currentEncoded == null) {
-                logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
-                return null
-            }
-            encodedBatches += currentEncoded
-            currentEvents.clear()
-            currentEvents += event
-            currentEncoded = ApmBatchEnvelopeSerializer.serialize(currentEvents, resourceContext, sentAtMs)
-            if (currentEncoded.payload.size > maxBatchBytes) {
-                logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
-                return null
-            }
+        val encodedBatches = ApmBatchEnvelopeSerializer.serializeWithinBudget(
+            events = events,
+            resource = resourceContext,
+            maxBatchBytes = maxBatchBytes,
+            sentAtMs = System.currentTimeMillis()
+        )
+        if (encodedBatches == null) {
+            logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
         }
-        currentEncoded?.let(encodedBatches::add)
         return encodedBatches
     }
 
@@ -221,8 +209,8 @@ class HttpApmUploader(
             // 写入请求体（可选 Gzip 压缩）
             val outputStream: OutputStream = connection.outputStream
             if (enableGzip) {
-                // Gzip 压缩模式
-                val gzipStream = GZIPOutputStream(outputStream)
+                // Gzip 压缩模式；8 KiB 内部缓冲避免默认 512 字节对 socket 流的频繁小写入
+                val gzipStream = GZIPOutputStream(outputStream, GZIP_BUFFER_SIZE)
                 gzipStream.use { gos ->
                     gos.write(payload)
                     gos.finish()
@@ -492,6 +480,9 @@ class HttpApmUploader(
 
         /** 响应排空缓冲区大小（字节）。 */
         private const val DRAIN_BUFFER_SIZE = 4096
+
+        /** Gzip 压缩内部缓冲大小（字节），覆盖已驻内存 payload 的单次写出。 */
+        private const val GZIP_BUFFER_SIZE = 8 * 1024
 
         /** 每秒毫秒数。 */
         private const val MILLIS_PER_SECOND = 1000L

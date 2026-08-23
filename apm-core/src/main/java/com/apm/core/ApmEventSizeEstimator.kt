@@ -57,6 +57,49 @@ internal object ApmEventSizeEstimator {
         return total
     }
 
+    /**
+     * Precomputes the per-process constant portion of [estimate]: base event overhead, the fixed
+     * process name, and the frozen init-time default context. Both inputs are stable for the
+     * lifetime of one [com.apm.core.Apm] runtime, so the emit hot path can add this cached value
+     * instead of re-walking the default-context map on every call.
+     */
+    fun constantRetentionBytes(
+        processName: String,
+        defaultContext: Map<String, String>
+    ): Long {
+        var total = MIN_EVENT_ESTIMATE_BYTES
+        total = add(total, stringBytes(processName))
+        total = add(total, stringMapBytes(defaultContext))
+        return total
+    }
+
+    /**
+     * Estimates a lazy event from a precomputed [constantRetentionBytes] base plus the per-emit
+     * variable parts. The numeric result is identical to the full [estimate] overload.
+     */
+    fun estimate(
+        module: String,
+        name: String,
+        threadName: String,
+        scene: String?,
+        fields: Map<String, Any?>,
+        constantBaseBytes: Long,
+        secondaryContext: Map<String, String>,
+        extras: Map<String, String>
+    ): Long {
+        var total = constantBaseBytes
+        total = add(total, stringBytes(module))
+        total = add(total, stringBytes(name))
+        total = add(total, stringBytes(threadName))
+        if (scene != null) {
+            total = add(total, stringBytes(scene))
+        }
+        total = add(total, typedMapBytes(fields))
+        total = add(total, stringMapBytes(secondaryContext))
+        total = add(total, stringMapBytes(extras))
+        return total
+    }
+
     /** Estimates one typed field map without calling arbitrary host `toString()` methods. */
     private fun typedMapBytes(values: Map<String, Any?>): Long {
         var total = MAP_HEADER_BYTES

@@ -1,6 +1,7 @@
 package com.apm.core.aggregation
 
 import com.apm.core.ApmClock
+import com.apm.core.canSkipDebugLogs
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
@@ -32,6 +33,12 @@ class EventAggregator(
 ) {
     /** 栈指纹去重器，用于 ALERT 类事件去重。 */
     private val stackFingerprinter = StackFingerprinter()
+
+    /**
+     * 高频路径 debug 日志守卫：内置 logger 关闭 debug 输出时跳过模板构串
+     * （此时 d() 是可证明的空操作）；自定义 logger 恒为 false，行为不变。
+     */
+    private val skipDebugLogs = canSkipDebugLogs(logger)
 
     /**
      * 活跃的聚合桶。
@@ -126,7 +133,13 @@ class EventAggregator(
         val bucketKey = "${event.module}/${event.name}"
         val nowElapsedMs = ApmClock.monotonicTimeMillis()
         val nowTimestampMs = ApmClock.wallTimeMillis()
-        val output = mutableListOf<ApmEvent>()
+        // 常见路径是事件被吞入桶且无桶到期，惰性分配避免每事件一次 ArrayList
+        var output: MutableList<ApmEvent>? = null
+
+        fun emitAggregated(aggregated: ApmEvent) {
+            val target = output ?: mutableListOf<ApmEvent>().also { output = it }
+            target += aggregated
+        }
 
         // 获取或创建聚合桶
         var bucket = buckets[bucketKey]
@@ -136,7 +149,7 @@ class EventAggregator(
                 if (eldest != null) {
                     buckets.remove(eldest.key)
                     if (eldest.value.eventCount > 0) {
-                        output += eldest.value.toAggregatedEvent(nowTimestampMs).toApmEvent()
+                        emitAggregated(eldest.value.toAggregatedEvent(nowTimestampMs).toApmEvent())
                     }
                 }
             }
@@ -158,14 +171,15 @@ class EventAggregator(
             // 窗口到期，输出聚合结果
             buckets.remove(bucketKey)
             if (bucket.eventCount > 0) {
-                val aggregated = bucket.toAggregatedEvent(nowTimestampMs)
-                logger?.d("Aggregation window expired for $bucketKey: ${bucket.eventCount} events")
-                output += aggregated.toApmEvent()
+                if (!skipDebugLogs) {
+                    logger?.d("Aggregation window expired for $bucketKey: ${bucket.eventCount} events")
+                }
+                emitAggregated(bucket.toAggregatedEvent(nowTimestampMs).toApmEvent())
             }
         }
 
         // The current event is swallowed, but an evicted or expired bucket may be emitted.
-        return output
+        return output ?: emptyList()
     }
 
     /**
@@ -180,7 +194,9 @@ class EventAggregator(
             }
             is StackFingerprinter.DedupResult.Duplicate -> {
                 // 重复事件，在 extras 中记录重复次数但不上报
-                logger?.d("Deduplicated ${event.module}/${event.name}, count=${result.totalCount}")
+                if (!skipDebugLogs) {
+                    logger?.d("Deduplicated ${event.module}/${event.name}, count=${result.totalCount}")
+                }
                 emptyList()
             }
         }
