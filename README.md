@@ -6,7 +6,7 @@
 
 ## 当前基线
 
-- 同步日期：2026-07-31
+- 同步日期：2026-08-02
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 165 个主源码文件：160 Kotlin + 4 C + 1 proto
 - 107 个测试/benchmark 文件
@@ -25,7 +25,7 @@ APM 客户端必须同时满足三件事：采集结果可信、监控开销受�
   -> 有界队列 2048 条 / 8 MiB 估算保留内存（75% 高水位后，NORMAL/LOW 单模块默认最多占总容量 50%；高优事件可替换足够数量的最低优先级事件；生产者永不等待）
   -> 可选聚合 -> 限流 -> 默认 PII 脱敏
   -> appendBatch（单轮最多 32 条）
-  -> SQLite durable outbox v3（50,000 行 / 64 MiB 活跃 payload，单事件软上限 256 KiB，eventId 唯一）
+  -> SQLite durable outbox v4（50,000 行 / 64 MiB 活跃 payload，单事件软上限 256 KiB，eventId 唯一，v4 新增 claim 排序索引）
   -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> BatchApmUploader / HttpApmUploader / 自定义 uploader
   -> 接入方 Collector
@@ -460,6 +460,8 @@ ApmDiagnostics.clearAllProcesses()
 ## 构建与验证
 
 仓库根目录的 `.java-version` 固定推荐 JDK 17；Gradle/AGP 兼容的更新 JDK 也可以启动构建，编译和测试任务仍通过 toolchain 固定使用 Java 17。`settings.gradle.kts` 会在项目配置前拒绝低于 17 的 Gradle runtime，并给出 `JAVA_HOME` 修复提示。
+
+Android Studio Sync 还会下载 Gradle、AGP、Kotlin 插件及其传递依赖的 source artifact；这些 IDE 专用 classifier 同样受严格 SHA-256 verification 保护。2026-08-02 已对三个参与 Sync 的 build root 做缓存穷举覆盖：root / `apm-plugin` / `build-logic` 分别登记 `298` / `154` / `176` 个源码制品，并补齐缓存内 POM/module 及此前不存在的 BOM/Groovy component。所有条目均与 Google Maven、Maven Central、Gradle Libs/Plugin Portal 或官方 Gradle metadata 交叉核验，没有关闭 verification 或扩大 trusted group。
 
 任意 CI 平台的标准客户端门禁只有一个入口；它检查当前 Java，验证 24 个发布制品的已提交 ABI 基线、四个 Gradle build root 的依赖 checksum 元数据和发布候选，强制重跑根 Android/model、included plugin，并验证文档：
 

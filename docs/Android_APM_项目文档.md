@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-07-31｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜107 个测试/benchmark 文件
+> 文档同步：2026-08-02｜27 个构建单元｜165 个主源码文件（160 Kotlin + 4 C + 1 proto）｜107 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -14,7 +14,7 @@ monitor module
   -> priority-aware bounded queue (2048 events / 8 MiB estimated retained bytes; default 75% high-water / 50% per-module NORMAL/LOW share)
   -> signed dynamic sampling / optional aggregation / dynamic rate limit / default PII sanitization
   -> appendBatch (up to 32)
-  -> SQLite durable outbox v3 (50,000 rows / 64 MiB live payload, 256 KiB per event, unique eventId)
+  -> SQLite durable outbox v4 (50,000 rows / 64 MiB live payload, 256 KiB per event, unique eventId; v4 additive claim-order index)
   -> claim(owner, lease, expiry) -> PersistentUploadWorker
   -> batch/custom uploader
   -> integrator-owned collector
@@ -153,6 +153,8 @@ worker 单轮 drain 最多 32 条：
 6. `appendBatch` 单事务落盘
 7. 唤醒 persistent uploader
 
+热路径分配已按行为保持原则收敛：worker 复用每批落盘缓冲，聚合吞没路径不再分配输出 list，动态策略键与敏感字段名判定各有有界缓存，脱敏 map 采用零命中共享冻结引用的 copy-on-write，内置脱敏规则带可证明的最短命中长度快拒，bizContext 为空时直接共享冻结 defaultContext；V2 上传拆批每事件只编码一次（`ApmBatchEnvelopeSerializer.serializeWithinBudget` 增量公共 API，与逐候选全量序列化的拆分点/batchId/payload 逐字节一致并有等价性测试），SQLite `pendingCount` 用索引覆盖 `COUNT(*)` 替代全表 BLOB 扫描，prune 用单次 GROUP BY 替代三趟同条件扫描，claim 的 payload 解码移到租约事务提交之后。所有改动均有等价性/回归测试，wire、durable codec 与 at-least-once 语义不变。
+
 正常停止顺序：先切断新事件入口，再停止模块，排空 dispatcher，处理聚合残留，停止 uploader，关闭 store。排空均有超时上限。
 
 同意撤回采用不同的隐私顺序：设置进程内 sticky gate 并切断新 emit，停止配置/模块/IPC producer，丢弃 dispatcher queue 且不 flush 聚合残留，停止 uploader 后清理 store。`Apm.revokeCollectionConsent(application)` 还会清理上一会话的 SQLite、File 兼容存储和 `.ipc/.tmp` artifacts，适合冷启动/已停止状态；无参版本未初始化且无法定位 app-private 目录时明确返回未清理。重新同意必须先调用 `grantCollectionConsent()` 再显式 `init`，不会自动复活。多进程宿主必须把撤回传播到每个 SDK 进程以关闭各自内存 producer。
@@ -161,11 +163,11 @@ worker 单轮 drain 最多 32 条：
 
 默认 `SQLiteEventStore`：
 
-- schema v3，v2 通过 additive migration 保留所有 pending 行并补 `legacy-<rowId>`；WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
+- schema v4，v2/v3 均通过 additive migration 保留全部 pending 行（v2 补 `legacy-<rowId>`，v3 只加 claim 排序索引 `idx_priority_desc_ts`，支撑 `priority DESC, timestamp ASC` 的 claim/read 排序）；WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 - 默认容量同时受 50,000 行与 64 MiB 活跃 payload 逻辑预算约束；逻辑预算不等于 SQLite page/WAL 物理文件大小
 - 默认单事件 durable payload 软上限 256 KiB；编码/超限失败只拒绝该事件，同批有效事件仍在一个事务中落盘
 - 批量事务写入
-- 缓存行数与 payload 字节，每 64 条成功 insert 重同步；跨 store 陈旧统计会在超限路径回读数据库真值
+- 缓存行数与 payload 字节；每 64 条 insert 与每次 `pendingCount()` 执行索引覆盖的 `COUNT(*)` 并与精确本地缓存比对，检测到外部写入/删除才回读一次全量真值——常规路径零 BLOB 扫描，跨实例漂移在一个 worker 循环内被检测终止
 - `event_id` 唯一约束，本地重复追加幂等
 - `lease_owner` + `lease_expires_at`；SQLite 写事务保证跨 store/进程 read-and-claim 原子性
 - 高优先级先上传；超行数/字节预算时低优先级、旧事件先淘汰，拒绝和淘汰数量进入 SDK drop 健康计数
@@ -270,6 +272,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 ## 十一、构建与发布
 
 根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。仓库以 `.java-version` 声明推荐 JDK 17，`settings.gradle.kts` 在项目配置前拒绝低于 17 的 Gradle runtime；`python tools/verify_ci.py` 是平台无关的完整客户端门禁，会检查 Java、23 个根发布制品与 included `apm-plugin` 的公开 ABI、四个 Gradle build root 的依赖 SHA-256 元数据、25 坐标发布候选、device-lab plan 和 benchmark host tests，并强制重跑根 Android/model、included plugin 和文档校验。Kotlin binary-compatibility-validator 0.18.1 从 Android Release/JVM 产物生成已提交基线；24 个制品中除不承载实现类的 `apm-bundle` 外均要求非空，sample/benchmark 明确排除。版本、基线更新和门禁边界见 [API 兼容策略](API_COMPATIBILITY.md)，制品签名、SBOM、凭据和外部仓库边界见 [发布与供应链门禁](RELEASE_PROCESS.md)。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`verifyReleasePerformanceBudgets` 把 connected microbenchmark 与 fail-closed verifier 串联；`run_device_soak.py` 生成显式物理机工件，`verifyDeviceSoakFromResults` 只验证显式 profile/result，不搜索旧文件；`verifyDeviceLabMatrix` 只验证计划，`verifyDeviceLabCoverageFromResults` 才验证全部显式 schema-v3 工件、exact provenance 和完整矩阵。`apm-plugin` 现在既作为 included build 独立测试，也独立发布实现坐标和 `com.apm.slow-method` marker。
+
+2026-08-02 的 Android Studio Sync 修复保持上述严格依赖校验不变：IDE model import 会额外解析命令行 CI 不需要的 Gradle、AGP、Kotlin 插件、Gradle Libs 及其传递依赖 source/POM/module artifact，原元数据因而在多个 build root fail closed。连续 Sync 首先暴露根构建的 `28`、`121`、`7` 项以及 `build-logic` 的 `23` 项；随后改为对三个 Sync build root 的共享缓存做穷举，不再依赖下一轮错误报告。当前 root / `apm-plugin` / `build-logic` 分别登记 `298` / `154` / `176` 个源码制品，覆盖 Kotlin 标准 `sources` 与 `gradle813-sources` 双文件名、AndroidX samples、Gradle 8.13 及完整缓存 Groovy 3.0.22 源码族；缓存内 POM/module 缺项和此前不存在的 BOM/Groovy components 也已补齐。全部本机值与 Google Maven、Maven Central、Gradle Libs/Plugin Portal、Gradle module 内置 SHA-256 或官方分发源交叉核对，没有增加 trusted group、正则信任或关闭 verification。四份 metadata 当前 component 数为 `569` / `239` / `240` / `409`（root / `apm-plugin` / `build-logic` / consumer）；供应链策略检查及 root、两个 included build 各自带 `--refresh-dependencies` 的 `:prepareKotlinBuildScriptModel` 均通过。这是构建元数据定向验证，不替代 2026-07-31 的全量测试基线。
 
 2026-07-16 在 JDK 17.0.14 执行的开发验证：
 

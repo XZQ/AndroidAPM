@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-07-23
+> 同步日期：2026-08-23
 
 ## 1. 分层关系
 
@@ -39,7 +39,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - 人可读、Logcat/HTTP text payload
 - 单行 `key=value|...`
 - `eventId` 为独立字段
-- 对 `|`, `,`, newline 做替换
+- 对 `|`, `,`, newline 做替换；单趟扫描实现，不含保留字符时返回原引用，输出与链式三趟 replace 逐字节一致
 - Map 按 key 排序
 - 不是完整可逆 parser 协议
 
@@ -49,6 +49,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - 单事件/批量序列化
 - field 13 保存 priority enum name
 - field 14 保存稳定 eventId
+- V2 typed fields（field 15）的 map entry 由 writer 以 size-then-write 单趟写入，无两级中间缓冲；枚举名 UTF-8 编码按封闭集合预计算，输出字节与嵌套缓冲实现逐字节一致
 - 适合 HTTP binary payload
 
 ### ApmEventCodec durable payload
@@ -59,13 +60,14 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - string 最大 1 MiB
 - 每个 Map 最大 4096 项
 - BigInteger/BigDecimal decimal text 最大 4096 字符，先检查再进入大数 parser
-- enum 未知值回退默认
+- enum 未知值回退默认；解码侧枚举名查找使用预建的 name→value map，不再逐次克隆枚举数组
 - version 3 每个 field 带类型 tag，原样恢复 null、String、Boolean、Byte、Short、Int、Long、Float、Double、Char、BigInteger、BigDecimal
 - 其他 arbitrary object 不做对象序列化，继续通过 `toString()` 降级成 bounded String
 - version 1/2 的 field 值按历史契约读取为 String；version 2 起保存 eventId，version 1 迁移行由 SQLite `event_id` 回填
 - 未知 version-3 type tag 使单个损坏 payload 解码失败，由 storage 隔离坏行，不猜测长度或类型
-- 解码只接受最短形式的合法 Unicode scalar UTF-8，拒绝 overlong、surrogate、越界 code point、截断和尾随字节
-- length/map count 必须能由剩余 payload 的最小编码承载后才分配；编码缓冲区在超过 2 MiB 前立即拒绝
+- 解码只接受最短形式的合法 Unicode scalar UTF-8，拒绝 overlong、surrogate、越界 code point、截断和尾随字节；全 ASCII 字节序列跳过完整验证器（ASCII 必然是合法 UTF-8），接受/拒绝行为不变
+- length/map count 必须能由剩余 payload 的最小编码承载后才分配；编码缓冲区在超过 2 MiB 前立即拒绝，且初始容量按事件字符数下限预估，避免默认 32 字节缓冲的多次扩容复制
+- `stableBatchId` 的 16 字节摘要以查表方式转为小写 hex，替代逐字节 `String.format`；输出与 `%02x` 逐字符一致
 
 因此客户端 durable round-trip 对受支持标量类型保真，同时避免 Java/Kotlin 任意对象反序列化。legacy Line Protocol 与 standalone Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format v3 不改变旧 Collector 契约。独立 `PROTOBUF_ENVELOPE_V2` 在 event field 15 写 `map<string,ApmTypedValue>`，是显式新协议而非 durable tag 的复用。
 
@@ -104,7 +106,7 @@ interface EventStore {
 
 ### Schema
 
-`EventDbHelper` 数据库版本 3：
+`EventDbHelper` 数据库版本 4：
 
 ```text
 events(
@@ -123,7 +125,7 @@ events(
 )
 ```
 
-v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全参加 acknowledged replay。v2 到 v3 使用 additive migration，保留 pending payload 并补 `legacy-<rowId>` eventId、空 owner 和 0 expiry。
+v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全参加 acknowledged replay。v2 到 v3 使用 additive migration，保留 pending payload 并补 `legacy-<rowId>` eventId、空 owner 和 0 expiry。v3 到 v4 同样 additive：只补 `idx_priority_desc_ts(priority DESC, timestamp ASC)` claim 排序索引，行与列不变；该混合方向排序此前既不能正向也不能反向利用 `idx_priority_ts(ASC, ASC)`，claim/readPending 每轮只能全表扫描加临时 B-tree 排序，新索引允许沿索引序扫描并在满足 limit 后提前停止。
 
 ### 写入
 
@@ -131,8 +133,9 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - 编码/codec 硬上限/256 KiB 软上限按单事件检查，坏事件加入 rejected，其余有效事件在单个 SQLite transaction 中 insert
 - `event_id` UNIQUE + conflict-ignore 使重复追加幂等，缓存计数只增加真实 insert
 - `data` 对新行写空串，避免与 payload 双序列化
+- 批量插入复用单个 `ContentValues`，逐行 clear 重填，避免每行分配 HashMap 支撑的容器
 - cached row count 与 live payload bytes 随增删维护；跨 store 删除造成的 stale delta 下限为 0
-- 每 64 条成功 insert 重同步 `COUNT(*) + SUM(LENGTH(payload))`；缓存判断超限时先回读数据库真值，避免陈旧高估误删
+- 每 64 条成功 insert 与每次 `pendingCount()` 都只执行索引覆盖的 `COUNT(*)`，并与本实例精确维护的行数缓存比对：不一致即证明存在外部写入/删除，此时才回读一次全量真值（行数 + payload 字节）；常规路径不做 BLOB 扫描，跨实例插入造成的 stale-low 字节漂移在下一个 worker 循环被检测并终止。缓存判断超限时先回读数据库真值，避免陈旧高估误删；容量淘汰后按已知精确行数与逐行 LENGTH 字节扣减，删除不完整时才回读全量
 - WAL 通过 `setWriteAheadLoggingEnabled(true)` 开启
 
 ### 读取与淘汰
@@ -144,7 +147,9 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 
 这两项 SQLite 字节限制是 durable 层的最后一道预算，不替代 core 的 8 MiB dispatcher estimated-retained budget 或 multi-process IPC 的 4 MiB pending / 256 KiB raw event / 1 MiB file / 16 MiB directory 限制。各层使用自己的实际资源度量：dispatcher 估算 retained memory，IPC 对 encoded/file bytes 做精确检查，SQLite 对 codec payload bytes 做事务内精确检查；不能把同一个近似值冒充所有层的真实占用。
 - corrupted payload：记录 id 后隔离删除
-- claim order：priority DESC, timestamp ASC；写事务覆盖 select + owner/expiry update
+- claim order：priority DESC, timestamp ASC，由 v4 的 `idx_priority_desc_ts` 索引支撑；写事务覆盖 select + owner/expiry update；payload 解码在写事务提交后执行（含坏行删除的第二个小事务），缩短 WAL 写锁持有时间，claim/ACK/at-least-once 语义不变
+- `pendingCount()` 执行索引覆盖的 `COUNT(*)` 真值查询并校准行数缓存，不再附带 `SUM(LENGTH(payload))` 全表 BLOB 扫描（上传 worker 每轮循环调用）；payload 字节维度仍由写入周期 resync 与删除不匹配路径校准
+- `pruneExpiredWithResult` 用一次 `GROUP BY priority` 扫描同时取得优先级计数与行/payload 字节统计，再执行删除，替代旧的同条件三趟全表扫描
 - prune/容量淘汰跳过尚未过期的活动 claim，因此可在 lease 释放/过期前临时超出逻辑预算
 
 ### 清理
@@ -199,7 +204,7 @@ interface BatchApmUploader : ApmUploader {
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-legacy 每个序列化事件包含 eventId，但没有 batch ID，HTTP 2xx 是整批唯一确认信号。V2 body 是 `ApmBatchEnvelope`：包含 schema/SDK、固定 resource、retry-stable batchId、repeated events 和 field-15 typed values；gzip 前完整 envelope 默认限制 1 MiB、绝对 4 MiB，按实际编码拆分，单事件超预算不打开连接。transport 拥有 `X-Apm-Schema-Version` / `Sdk-Version` / `Batch-Id` / `Event-Count`，宿主 Header 不能覆盖；response schema/batchId/eventCount 全匹配才成功，不支持 partial ACK。schema/eventCount 只接受正整数的规范无符号十进制，拒绝前导零、正号、负号和溢出；batchId 逐字节匹配。前一物理 batch 已 ACK、后一批失败时逻辑 claim 返回失败并可能整组重发，Collector 继续按 eventId 去重。规范见 [Collector Wire Protocol V2](../protocol/COLLECTOR_WIRE_V2.md)。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict built-in HTTP 在 factory 之前要求 HTTPS/V2/resource/batch headroom（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
+legacy 每个序列化事件包含 eventId，但没有 batch ID，HTTP 2xx 是整批唯一确认信号。V2 body 是 `ApmBatchEnvelope`：包含 schema/SDK、固定 resource、retry-stable batchId、repeated events 和 field-15 typed values；gzip 前完整 envelope 默认限制 1 MiB、绝对 4 MiB，按实际编码拆分（`ApmBatchEnvelopeSerializer.serializeWithinBudget` 每事件只编码一次，用一次单事件探针锚定固定组件大小后以精确增量字节判定拆分边界，拆分点与逐候选全量序列化一致），单事件超预算不打开连接。transport 拥有 `X-Apm-Schema-Version` / `Sdk-Version` / `Batch-Id` / `Event-Count`，宿主 Header 不能覆盖；response schema/batchId/eventCount 全匹配才成功，不支持 partial ACK。schema/eventCount 只接受正整数的规范无符号十进制，拒绝前导零、正号、负号和溢出；batchId 逐字节匹配。前一物理 batch 已 ACK、后一批失败时逻辑 claim 返回失败并可能整组重发，Collector 继续按 eventId 去重。规范见 [Collector Wire Protocol V2](../protocol/COLLECTOR_WIRE_V2.md)。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict built-in HTTP 在 factory 之前要求 HTTPS/V2/resource/batch headroom（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
 
 ## 9. Durable retry
 

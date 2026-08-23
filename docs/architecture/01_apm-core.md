@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-07-22
+> 同步日期：2026-08-23
 
 ## 1. 职责
 
@@ -79,10 +79,10 @@ Apm.init(application, config)
 - 捕获 `Thread.currentThread().name`
 - 按 `BizContextCaptureMode` 现场调用 provider 或 O(1) 读取异步 LKG，并取得不可变快照
 - 复制顶层 `fields` / `extras`，冻结本次发生时刻的 payload map
-- 用 `ApmEventSizeEstimator` 对已冻结字符串、标量和 map 做保守 retained-memory 估算，不执行 durable 编码
+- 用 `ApmEventSizeEstimator` 对已冻结字符串、标量和 map 做保守 retained-memory 估算，不执行 durable 编码；进程级常量部分（基础开销 + processName + 冻结 `defaultContext`）在 init 时由 `constantRetentionBytes` 预计算并缓存在 state，emit 只累加每次变化的部分，数值与全量估算逐值相等
 - 创建 lazy event factory 并非阻塞入队
 
-event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。
+event 的 map 合并和对象构建延迟到 dispatcher worker。宿主 context provider 的运行时异常不会传播到业务路径。子进程 IPC 需要完整 payload，因此会立即执行 factory。worker 侧 `buildEvent` 在 bizContext 为空（默认）时直接共享冻结的 `defaultContext`，不再整表复制。
 
 ### 业务上下文延迟边界
 
@@ -129,7 +129,7 @@ resolve lazy event
 
 单个 queued event 的 lazy factory、聚合、限流或脱敏出现 recoverable `Exception` 时只丢弃该事件并记录 internal error，后续事件继续；批量存储的 recoverable 异常会把整批计入 drop，但不会让 worker 退出。`VirtualMachineError` 等 fatal VM error 不转换为 drop。
 
-默认关闭聚合或处理 pre-aggregated 事件时，worker 直接把单个 resolved event 送入限流/脱敏，不再为每条事件创建 `listOf(event)`；非 durable store 在存储没有拒绝项时也不再创建空的 rejected-id `HashSet`。只有真实聚合扩展或真实拒绝集合才承担对应 collection 分配。
+默认关闭聚合或处理 pre-aggregated 事件时，worker 直接把单个 resolved event 送入限流/脱敏，不再为每条事件创建 `listOf(event)`；非 durable store 在存储没有拒绝项时也不再创建空的 rejected-id `HashSet`。只有真实聚合扩展或真实拒绝集合才承担对应 collection 分配。每批落盘缓冲在 worker 循环中复用（入口清空）；模块占用计数递增使用 `merge` 单次哈希查找；聚合吞没路径（事件入桶且无桶到期）不再分配输出 list。
 
 启用 self-monitor 时，worker 用单调纳秒测量 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize` 和 `storeHandoff`。每阶段维护固定 22 桶直方图及 count/sum/max，记录路径无逐样本对象分配；周期 snapshot 通过短同步区间取得一致 count、向上取整平均微秒、保守 P95 桶上界和最大微秒后清零。`storeHandoff` 是 batch append，因此其 count 与按 event/expanded-event 运行的其他阶段不应直接比较；聚合/脱敏禁用或 pre-aggregated bypass 时相应阶段可以为零。关闭 self-monitor 时计时 helper 直接执行原 block，不读取单调时钟。这些字段不改变 worker 顺序、采样、限流或 AutoThrottle 决策。
 
@@ -202,7 +202,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 
 `GrayReleaseController` 通过稳定 userId/sample rate 和 override 决定模块是否启用。`DynamicConfigProvider` 是接口，core 不绑定具体网络实现；`apm-remote-config` 提供生产实现。
 
-`DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。键按默认、模块、事件逐级覆盖：
+`DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。每个 (module, name) 流的六个插值键缓存在有界（256）并发 map 中并校验流身份，provider 查找仍逐事件执行；键按默认、模块、事件逐级覆盖：
 
 - `apm.sampling.default_basis_points`
 - `apm.sampling.<module>[.<event>].basis_points`
@@ -219,7 +219,7 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。归一化后的敏感判定按原始键名记入有界（256）并发缓存——字段名在每条事件上重复，接近全量命中；每条内置规则带各自的最短可命中长度快拒（手机号 11、邮箱 6、身份证 18、URL token 6、URL 密码 5），短于下限的值直接返回原引用。map 采用 copy-on-write：零命中的 fields/globalContext/extras 与输入共享冻结引用，有命中才物化保持迭代顺序的新 map。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
 
 ## 11. 自监控与降级
 
