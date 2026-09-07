@@ -3,6 +3,7 @@ package com.apm.uploader
 import com.apm.model.ApmEvent
 import com.apm.model.ApmBatchEnvelopeSerializer
 import com.apm.model.ApmResourceContext
+import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmWireProtocol
 import com.apm.model.SerializationFormat
 import org.junit.Assert.assertEquals
@@ -12,6 +13,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.BufferedInputStream
 import java.net.ServerSocket
+import java.net.SocketTimeoutException
+import java.io.IOException
 import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -24,6 +27,111 @@ import java.util.zip.GZIPInputStream
  */
 class HttpApmUploaderTest {
 
+    /** Shutdown during a blocked response forbids subsequent physical batches and new admissions. */
+    @Test
+    fun `shutdown cancels active response and prevents next split request`() {
+        ServerSocket(0).use { server ->
+            server.soTimeout = 500
+            val events = listOf(event("cancel-a"), event("cancel-b"))
+            val first = ApmBatchEnvelopeSerializer.serialize(listOf(events.first()), RESOURCE)
+            val received = CountDownLatch(1)
+            val releaseResponse = CountDownLatch(1)
+            val requestCount = AtomicInteger()
+            val result = AtomicReference<Boolean>()
+            val serverThread = Thread {
+                try {
+                    server.accept().use { socket ->
+                        val input = BufferedInputStream(socket.getInputStream())
+                        val headers = readHeaders(input)
+                        input.readNBytes(headers.getValue("content-length").toInt())
+                        requestCount.incrementAndGet()
+                        received.countDown()
+                        releaseResponse.await(3, TimeUnit.SECONDS)
+                        try {
+                            socket.getOutputStream().write(("HTTP/1.1 200 OK\r\n" +
+                                "${ApmWireProtocol.HEADER_SCHEMA_VERSION}: 2\r\n" +
+                                "${ApmWireProtocol.HEADER_BATCH_ID}: ${first.batchId}\r\n" +
+                                "${ApmWireProtocol.HEADER_EVENT_COUNT}: 1\r\n" +
+                                "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray())
+                        } catch (_: IOException) { /* cancellation may already have closed the socket */ }
+                    }
+                    server.accept().use { requestCount.incrementAndGet() }
+                } catch (_: SocketTimeoutException) { /* no second POST is the expected outcome */ }
+                catch (_: IOException) { /* test cleanup closes the listener */ }
+            }.apply { isDaemon = true; name = "http-cancel-test-server"; start() }
+            val uploader = versionedUploader("http://127.0.0.1:${server.localPort}/events", first.payload.size)
+            val client = Thread { result.set(uploader.uploadBatch(events)) }.apply {
+                isDaemon = true; name = "http-cancel-test-client"; start()
+            }
+            try {
+                assertTrue(received.await(3, TimeUnit.SECONDS))
+                val stopped = CountDownLatch(1)
+                Thread { uploader.shutdown(); stopped.countDown() }.apply { isDaemon = true; start() }
+                assertTrue("shutdown must not wait on the blocked platform disconnect lock", stopped.await(1, TimeUnit.SECONDS))
+                assertFalse(uploader.uploadBatch(events))
+                releaseResponse.countDown()
+                client.join(3_000L)
+                serverThread.join(3_000L)
+                assertFalse(client.isAlive)
+                assertEquals(false, result.get())
+                assertEquals(1, requestCount.get())
+                assertTrue(uploader.isShutdownComplete())
+            } finally {
+                releaseResponse.countDown()
+                uploader.shutdown()
+                server.close()
+                client.join(3_000L)
+                serverThread.join(3_000L)
+            }
+        }
+    }
+
+    /** Shutdown racing credential resolution cannot admit a new connection after the provider returns. */
+    @Test
+    fun `shutdown before connection registration blocks late provider result`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        ServerSocket(0).use { server ->
+            server.soTimeout = 200
+            val uploader = HttpApmUploader("http://127.0.0.1:${server.localPort}",
+                headerProvider = HttpHeaderProvider {
+                    entered.countDown()
+                    release.await(3, TimeUnit.SECONDS)
+                    emptyMap()
+                }, logger = SILENT_LOGGER)
+            val result = AtomicReference<Boolean>()
+            val client = Thread { result.set(uploader.uploadBatch(listOf(event("provider")))) }.apply {
+                isDaemon = true; start()
+            }
+            try {
+                assertTrue(entered.await(3, TimeUnit.SECONDS))
+                uploader.shutdown()
+                release.countDown()
+                client.join(3_000L)
+                assertFalse(client.isAlive)
+                assertEquals(false, result.get())
+                try {
+                    server.accept().use { throw AssertionError("Unexpected HTTP connection after shutdown") }
+                } catch (_: SocketTimeoutException) { /* expected: no connection */ }
+            } finally { release.countDown(); uploader.shutdown(); client.join(3_000L) }
+        }
+    }
+
+    /** Preflight classifies only permanent identity incompatibility and never invents an occurrence. */
+    @Test
+    fun `v3 preflight rejects legacy and invalid occurrences independently`() {
+        val uploader = v3Uploader("http://127.0.0.1:1/events")
+        val legacy = event("legacy")
+        assertEquals(UploadRejectionReason.OCCURRENCE_REQUIRED, uploader.rejectionReason(legacy))
+        assertEquals(UploadRejectionReason.OCCURRENCE_INVALID,
+            uploader.rejectionReason(legacy.withOccurrenceContext(OCCURRENCE.copy(versionCode = "01"))))
+        assertEquals(UploadRejectionReason.OCCURRENCE_INVALID,
+            uploader.rejectionReason(legacy.withOccurrenceContext(OCCURRENCE.copy(versionCode = "\u0661\u0662"))))
+        assertNull(uploader.rejectionReason(legacy.withOccurrenceContext(OCCURRENCE)))
+        assertFalse(uploader.uploadBatch(listOf(legacy, legacy.withOccurrenceContext(OCCURRENCE))))
+        assertNull(legacy.occurrence)
+    }
+
     /** Versioned 2xx is accepted only when schema, stable batch ID, and event count all match. */
     @Test
     fun `versioned batch requires exact whole batch ack`() {
@@ -31,7 +139,7 @@ class HttpApmUploaderTest {
         val expected = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
         val requestHeaders = AtomicReference<Map<String, String>>()
         val ackHeaders = mapOf(
-            ApmWireProtocol.HEADER_SCHEMA_VERSION to ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+            ApmWireProtocol.HEADER_SCHEMA_VERSION to ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2.toString(),
             ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
             ApmWireProtocol.HEADER_EVENT_COUNT to events.size.toString()
         )
@@ -43,7 +151,7 @@ class HttpApmUploaderTest {
             assertTrue(uploader.uploadBatch(events))
             assertEquals(1, requestCount.get())
             assertEquals(
-                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2.toString(),
                 requestHeaders.get()[ApmWireProtocol.HEADER_SCHEMA_VERSION.lowercase(Locale.US)]
             )
             assertEquals(
@@ -73,7 +181,7 @@ class HttpApmUploaderTest {
                     HTTP_OK,
                     mapOf(
                         ApmWireProtocol.HEADER_SCHEMA_VERSION to
-                            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2.toString(),
                         ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
                         ApmWireProtocol.HEADER_EVENT_COUNT to "2"
                     )
@@ -94,7 +202,7 @@ class HttpApmUploaderTest {
         val expected = ApmBatchEnvelopeSerializer.serialize(events, RESOURCE)
         val valid = mapOf(
             ApmWireProtocol.HEADER_SCHEMA_VERSION to
-                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2.toString(),
             ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
             ApmWireProtocol.HEADER_EVENT_COUNT to "1"
         )
@@ -125,7 +233,7 @@ class HttpApmUploaderTest {
                 HTTP_OK,
                 mapOf(
                     ApmWireProtocol.HEADER_SCHEMA_VERSION to
-                        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString(),
+                        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2.toString(),
                     ApmWireProtocol.HEADER_BATCH_ID to batch.batchId,
                     ApmWireProtocol.HEADER_EVENT_COUNT to "1"
                 )
@@ -148,6 +256,34 @@ class HttpApmUploaderTest {
         val uploader = versionedUploader("http://127.0.0.1:1/events", maxBatchBytes = 1)
 
         assertFalse(uploader.uploadBatch(listOf(event("oversized"))))
+    }
+
+    /** Schema V3 sends occurrence identity with its own media type, batch prefix, and exact ACK. */
+    @Test
+    fun `v3 batch requires exact v3 ack`() {
+        val events = listOf(event("v3-event").withOccurrenceContext(OCCURRENCE))
+        val expected = ApmBatchEnvelopeSerializer.serializeV3(events, RESOURCE)
+        val requestHeaders = AtomicReference<Map<String, String>>()
+        withRawHttpServer(
+            responses = listOf(
+                RawResponse(
+                    HTTP_OK,
+                    mapOf(
+                        ApmWireProtocol.HEADER_SCHEMA_VERSION to "3",
+                        ApmWireProtocol.HEADER_BATCH_ID to expected.batchId,
+                        ApmWireProtocol.HEADER_EVENT_COUNT to "1"
+                    )
+                )
+            ),
+            createUploader = { endpoint -> v3Uploader(endpoint) },
+            requestHeaderSink = requestHeaders::set
+        ) { uploader, requestCount ->
+            assertTrue(uploader.uploadBatch(events))
+            assertEquals(1, requestCount.get())
+            assertEquals("3", requestHeaders.get()[ApmWireProtocol.HEADER_SCHEMA_VERSION.lowercase(Locale.US)])
+            assertEquals(ApmWireProtocol.CONTENT_TYPE_ENVELOPE_V3, requestHeaders.get()["content-type"])
+            assertTrue(expected.batchId.startsWith("b3-"))
+        }
     }
 
     /** A gzip batch is transmitted as one request with a matching header. */
@@ -460,6 +596,14 @@ class HttpApmUploaderTest {
         logger = SILENT_LOGGER
     )
 
+    /** Creates a schema-V3 uploader for occurrence-bound delivery tests. */
+    private fun v3Uploader(endpoint: String): HttpApmUploader = HttpApmUploader(
+        endpoint = endpoint,
+        serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3,
+        resourceContext = RESOURCE,
+        logger = SILENT_LOGGER
+    )
+
     companion object {
         /** CRLF sequence ending an HTTP header block. */
         private val HEADER_TERMINATOR = byteArrayOf(13, 10, 13, 10)
@@ -495,6 +639,15 @@ class HttpApmUploaderTest {
             serviceName = "wallet",
             serviceVersion = "1.0.0",
             deploymentEnvironment = "test",
+            installationId = "install-http-test"
+        )
+
+        /** Complete occurrence-bound identity attached to every V3 fixture event. */
+        private val OCCURRENCE = ApmOccurrenceContext(
+            serviceVersion = "1.0.0",
+            versionCode = "100",
+            appBuild = "build-http-test",
+            variant = "release",
             installationId = "install-http-test"
         )
 

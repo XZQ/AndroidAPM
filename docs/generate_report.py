@@ -79,9 +79,9 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "165", "160 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "107", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
-        ("当前完整测试", "103 suites / 714 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("主源码", "166", "161 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "109", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
+        ("当前完整测试", "106 suites / 757 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 34 / min 24", "targetSdk 34"),
         ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
@@ -109,7 +109,7 @@ def add_capability_table(document: Document) -> None:
     """Describe capabilities without presenting configured flags as implementations."""
     rows = [
         ("生产安全入口", "Strict profile、显式 consent、撤回清理", "初始化前 fail closed；停止 delivery 后清理 queue/outbox/IPC"),
-        ("Collector Wire V2", "Typed fields、standard resource、batch ID、size、exact ACK", "Legacy wire 不变；V2 独立 schema 与 endpoint"),
+        ("Collector Wire V2/V3", "Typed fields、occurrence、standard resource、batch ID、size、exact ACK", "V3 为 strict；V2/legacy 保留兼容"),
         ("关键事件与损失证据", "Crash/ANR sync hand-off、drop reason/priority", "CRITICAL IPC 仅在同步存储接受后删除；失败保留重试且宿主 crash handler 始终委托"),
         ("自动生命周期接入", "Memory、Crash、ANR、Launch、FPS、GC、Render、Thread", "SDK 初始化后可运行；仍受权限、API 和设备限制"),
         ("时间与快照语义", "epoch collector 时间 + 单调 duration/window；异步事件 map 冻结", "避免系统时间跳变和宿主后续修改污染已发生事件"),
@@ -206,7 +206,7 @@ def build_status_report() -> Document:
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
             "SQLite 写事务提供多消费者 claim/lease/expiry、owner-aware ACK/failure 和 shutdown release。",
-            "持久化 codec v3 为常用标量写类型标签并兼容读取 v1/v2；任意对象仍安全降级为字符串。",
+            "持久化 codec V4 保留 V3 typed scalar、append occurrence，并兼容读取 V1/V2/V3；任意对象仍安全降级为字符串。",
             "安全边界在分配、递归和验签前生效：durable 拒绝非法 UTF-8、截断和尾随字节，remote-config 限制 bytes/depth/nodes 并拒绝重复 key，V2 ACK 仅接受规范正十进制；"
             "固定种子语料覆盖协议与 PII 变体，但不替代生产渗透测试。",
             "apm-uploader 保持底层依赖方向，同时以模块内命名工厂显式治理 worker/scheduler 的 daemon 与 MIN_PRIORITY。",

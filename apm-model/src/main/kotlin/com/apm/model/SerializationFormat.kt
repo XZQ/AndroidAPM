@@ -26,5 +26,11 @@ enum class SerializationFormat {
      * Versioned protobuf batch envelope with typed fields, standard resource context, stable batch
      * identity, explicit SDK/schema versions, encoded-size bounds, and whole-batch ACK semantics.
      */
-    PROTOBUF_ENVELOPE_V2
+    PROTOBUF_ENVELOPE_V2,
+
+    /**
+     * Versioned protobuf batch envelope requiring an occurrence-bound identity on every event.
+     * Uses a `b3-` batch identity and exact schema/batch/count acknowledgement.
+     */
+    PROTOBUF_ENVELOPE_V3
 }

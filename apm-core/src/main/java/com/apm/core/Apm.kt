@@ -3,8 +3,10 @@ package com.apm.core
 import android.app.Application
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
+import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import com.apm.model.SerializationFormat
 import com.apm.storage.EventDbHelper
 import com.apm.storage.EventStore
 import com.apm.storage.FileEventStore
@@ -12,6 +14,7 @@ import com.apm.storage.SQLiteEventStore
 import com.apm.core.aggregation.EventAggregator
 import com.apm.core.privacy.DefaultSanitizationRules
 import com.apm.core.privacy.PiiSanitizer
+import com.apm.core.privacy.freezeEventField
 import com.apm.core.throttle.RateLimiter
 import com.apm.core.throttle.ManagedDynamicConfigProvider
 import com.apm.core.selfmonitor.AutoThrottleController
@@ -63,18 +66,20 @@ internal inline fun captureBizContextSafely(
 }
 
 /** Freezes host-owned event fields before a lazy dispatcher observes them. */
-internal fun snapshotEventFields(fields: Map<String, Any?>): Map<String, Any?> = fields.toMap()
+internal fun snapshotEventFields(fields: Map<String, Any?>): Map<String, Any?> =
+    fields.mapValues { (_, value) -> freezeEventField(value) }
 
 /** Freezes host-owned event extras before a lazy dispatcher observes them. */
 internal fun snapshotEventExtras(extras: Map<String, String>): Map<String, String> = extras.toMap()
 
 /** Freezes every host-owned event map before an asynchronous hand-off. */
 internal fun snapshotEvent(event: ApmEvent): ApmEvent {
-    return event.copy(
-        fields = event.fields.toMap(),
+    val snapshot = event.copy(
+        fields = snapshotEventFields(event.fields),
         globalContext = event.globalContext.toMap(),
         extras = event.extras.toMap()
     )
+    return event.occurrence?.let(snapshot::withOccurrenceContext) ?: snapshot
 }
 
 /** Runs one recoverable lifecycle phase and leaves fatal VM errors visible. */
@@ -134,6 +139,30 @@ object Apm {
      * @param config 全局配置
      */
     fun init(application: Application, config: ApmConfig) {
+        initInternal(application, config, occurrenceContext = null)
+    }
+
+    /**
+     * Initializes schema-V3 delivery with an occurrence identity frozen before durable hand-off.
+     *
+     * This additive overload keeps [ApmConfig]'s published data-class constructor/copy ABI intact.
+     * [occurrenceContext] is snapshotted during initialization; later host mutations cannot rewrite
+     * events already queued in the outbox.
+     */
+    fun init(
+        application: Application,
+        config: ApmConfig,
+        occurrenceContext: ApmOccurrenceContext
+    ) {
+        initInternal(application, config, occurrenceContext)
+    }
+
+    /** Shared initialization path for the compatibility and occurrence-aware public overloads. */
+    private fun initInternal(
+        application: Application,
+        config: ApmConfig,
+        occurrenceContext: ApmOccurrenceContext?
+    ) {
         synchronized(initLock) {
             if (state != null) {
                 return
@@ -141,9 +170,9 @@ object Apm {
             check(!collectionConsentRevoked) {
                 "APM collection consent is revoked; call grantCollectionConsent after host consent"
             }
-            config.validateForRuntime()
+            config.validateForRuntime(occurrenceContext)
             try {
-                doInit(application, config)
+                doInit(application, config, occurrenceContext)
             } catch (error: Exception) {
                 // Preserve partial-init evidence locally, then close only the diagnostics writer thread.
                 ApmDiagnostics.record(
@@ -163,9 +192,16 @@ object Apm {
     /**
      * 实际初始化逻辑。已由外部 synchronized 保证线程安全。
      */
-    private fun doInit(application: Application, inputConfig: ApmConfig) {
+    private fun doInit(
+        application: Application,
+        inputConfig: ApmConfig,
+        inputOccurrenceContext: ApmOccurrenceContext?
+    ) {
         // Freeze host-owned collections once so background work observes one immutable runtime view.
         val config = inputConfig.snapshotForRuntime()
+        val occurrenceContext = inputOccurrenceContext?.copy(
+            nativeFrames = inputOccurrenceContext.nativeFrames.toList()
+        )
         val processName = application.currentProcessNameCompat()
         // Diagnostics starts before event storage and upload so their initialization failures remain inspectable.
         val diagnostics = ApmDiagnostics.initialize(application, config.diagnostics, processName)
@@ -313,7 +349,8 @@ object Apm {
             logger = logger,
             dispatcher = dispatcher,
             processCoordinator = processCoordinator,
-            isUploaderProcess = isUploaderProcess
+            isUploaderProcess = isUploaderProcess,
+            occurrenceContext = occurrenceContext
         )
         context.selfMonitor = selfMonitor
         val monitoringExecutor = createSelfMonitoringExecutor(config, selfMonitor)
@@ -328,7 +365,8 @@ object Apm {
             // processName 与冻结 defaultContext 在运行期不变，其保留字节估算只需计算一次
             retentionBaseBytes = ApmEventSizeEstimator.constantRetentionBytes(
                 processName = context.processName,
-                defaultContext = context.config.defaultContext
+                defaultContext = context.config.defaultContext,
+                occurrence = occurrenceContext
             )
         )
         state = newState
@@ -745,7 +783,7 @@ object Apm {
                 (dormantCleanup?.ipcFilesCleared ?: true),
             storageCleared = storageCleanup.storageCleared &&
                 (dormantCleanup?.storageCleared ?: true)
-        )
+        ).withUploadWorkerStopped(storageCleanup.uploadWorkerStopped)
     }
 
     /** Clears every supported persisted event path when no active runtime owns the stores. */

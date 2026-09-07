@@ -58,7 +58,26 @@ data class ApmEvent(
     val extras: Map<String, String> = emptyMap(),
     /** Stable opaque identity retained across storage, forwarding, and upload retry. */
     val eventId: String = ApmEventIdGenerator.next()
-)
+) {
+    /** Backing field kept outside the primary constructor to preserve the published data-class ABI. */
+    private var occurrenceSnapshot: ApmOccurrenceContext? = null
+
+    /** Occurrence-bound release/installation/native identity for schema V3 delivery. */
+    val occurrence: ApmOccurrenceContext?
+        get() = occurrenceSnapshot
+
+    /**
+     * Returns a new event carrying an immutable occurrence snapshot.
+     *
+     * Keeping this additive method outside the primary constructor preserves the existing JVM
+     * constructor, generated `copy`, `copy$default`, and component signatures for 0.1.x callers.
+     */
+    fun withOccurrenceContext(value: ApmOccurrenceContext): ApmEvent {
+        return copy().also { event ->
+            event.occurrenceSnapshot = value.copy(nativeFrames = value.nativeFrames.toList())
+        }
+    }
+}
 
 /**
  * 将事件序列化为 line protocol 格式。

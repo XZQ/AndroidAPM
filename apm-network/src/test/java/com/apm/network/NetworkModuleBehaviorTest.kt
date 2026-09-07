@@ -10,9 +10,61 @@ import org.junit.Test
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
+import java.net.InetSocketAddress
+import java.net.Proxy
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.Protocol
 
 /** Behavioral tests for request classification, aggregation, and phase reporting. */
 class NetworkModuleBehaviorTest {
+    /** A failed route followed by success must not contaminate either phase or summary outcome. */
+    @Test
+    fun `listener successful route retry reports final success`() {
+        for (summary in listOf(false, true)) {
+            val sink = RecordingNetworkSink()
+            val module = NetworkModule(NetworkConfig(slowThresholdMs = 0), sink)
+            module.onStart()
+            val call = OkHttpClient().newCall(Request.Builder().url("https://example.test/retry").build())
+            val listener = ApmEventListener(module, 0, summary)
+            val address = InetSocketAddress("127.0.0.1", 443)
+            listener.callStart(call)
+            listener.connectStart(call, address, Proxy.NO_PROXY)
+            listener.connectFailed(call, address, Proxy.NO_PROXY, null, IOException("route failed"))
+            listener.connectStart(call, address, Proxy.NO_PROXY)
+            listener.connectEnd(call, address, Proxy.NO_PROXY, Protocol.HTTP_1_1)
+            listener.responseHeadersEnd(call, Response.Builder().request(call.request())
+                .protocol(Protocol.HTTP_1_1).code(200).message("OK").build())
+            listener.callEnd(call)
+            assertTrue(sink.reports.none { it.name == "network_error" })
+            assertEquals(200, sink.reports.last().fields["statusCode"])
+            assertEquals(if (summary) 1L else 0L, module.getStats().totalRequests)
+        }
+    }
+
+    /** Reused connections and redirects produce one final summary, while terminal body failure wins. */
+    @Test
+    fun `listener follows final outcome for reuse redirects and body failure`() {
+        for (bodyFailure in listOf(false, true)) {
+            val sink = RecordingNetworkSink()
+            val module = NetworkModule(NetworkConfig(slowThresholdMs = 0), sink)
+            module.onStart()
+            val call = OkHttpClient().newCall(Request.Builder().url("https://example.test/reused").build())
+            val listener = ApmEventListener(module, 0, true)
+            listener.callStart(call)
+            for (code in listOf(302, 200)) {
+                listener.responseHeadersEnd(call, Response.Builder().request(call.request())
+                    .protocol(Protocol.HTTP_1_1).code(code).message("response").build())
+            }
+            listener.responseBodyStart(call)
+            if (bodyFailure) listener.callFailed(call, IOException("body failed")) else listener.callEnd(call)
+            val summaries = sink.reports.filter { it.name == "network_error" || it.name == "network_request" }
+            assertEquals(1, summaries.size)
+            assertEquals(if (bodyFailure) "network_error" else "network_request", summaries.single().name)
+            assertEquals(if (bodyFailure) -1 else 200, sink.reports.last().fields["statusCode"])
+        }
+    }
     /** A stopped module ignores host callbacks and preserves empty statistics. */
     @Test
     fun `stopped module ignores request callbacks`() {

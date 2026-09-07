@@ -1,16 +1,20 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-08-24｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-09-07｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
-端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、typed durable codec v3/legacy 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 Collector、查询/告警后台、服务端幂等、真实外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
+端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、V2 batch-declared 兼容和 V3 occurrence-bound typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、durable codec V4 与 V1/V2/V3 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload/occurrence 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 PostgreSQL/TLS/SigNoz、真实通知/符号化工具、外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
 
 生产可靠性以宿主安全优先：dispatcher 单事件 recoverable failure 不终止共享 worker，fatal VM error 不伪装成 drop/retry；共享入口同时受 2048 条和默认 8 MiB 估算字节预算约束，75% 高水位后单一 NORMAL/LOW 模块默认最多占总队列容量 50%，HIGH/CRITICAL 不受该隔离门禁影响，并可淘汰足够数量的旧低优事件满足双预算。dispatcher 仍是单 worker，该措施隔离入口容量而非增加并行吞吐。IPC 另有 4 MiB pending、256 KiB raw event、1 MiB file、16 MiB ready-directory 预算；outbox stale 删除计数不降到 0 以下，Retry-After 秒数先饱和换算且最终等待上限 60 秒，自定义同步 uploader 的阻塞终止由宿主负责；diagnostics 显式导出失败返回结果数据而不抛回支持流程。
 
 2026-08-24 审查修复补齐两个所有权/并发边界：SQLite 除行数缓存外持久跟踪 `sqlite_sequence` 插入水位，因此另一 store 删除小行、插入大行且总行数不变时仍会重建 payload 字节真值；容量淘汰从事务内真值计算最终缓存，不从可能漂移的旧缓存扣减。公开 `PiiSanitizer.sanitize` 对 clean mutable map 也返回隔离快照，dispatcher 仅对入队时已冻结所有权的事件使用内部共享快路径；首个变化值不会被自定义规则执行两次，超长字段名和动态 module/name 只计算、不进入长期缓存。
+
+2026-09-07 审查修复已覆盖上传取消/退出证据、不可被 signal 打断的退避、V3 不兼容行单独处置、不可变字段快照/未知对象拒绝、邮箱线性扫描、保留发生身份与维度的数值聚合、FrameMetrics idle 误报和 OkHttp route 重试最终状态。升级策略明确：无 occurrence 的历史行在内置 SQLite + strict V3 路径按 owner discard 并计数，不补当前身份、不降级协议；自定义旧 store 保留拒绝行自己的 retry/TTL 策略。详见 `docs/Android_APM_项目文档.md` 的本轮修复说明。
+
+本轮最终验证（2026-09-07，JDK 17.0.14）：`python tools/verify_ci.py` 完整通过；强制重跑 Android 101 suites / 700 tests、model 5 suites / 57 tests、独立 plugin 1 suite / 18 tests，全部 0 failures/errors/skipped。根与 plugin API check、24 份基线、4 组严格依赖元数据、5 项发布候选 verifier 测试、41 项 benchmark/device-lab host 测试通过；本地候选验证 25 坐标 / 22 AAR / 26 JAR / 25 POM，独立 Maven consumer 使用 `--refresh-dependencies` 完成 clean assembleDebug 和 ASM transformation。core/storage/uploader/network/fps lint 均无问题，sample debug、benchmark release 与 AndroidTest Kotlin 编译通过。`verify_collector_e2e.py` 对参考服务端实际工作树完成真实 V2/V3 Gzip HTTP、exact ACK、typed/occurrence 持久化、installation HMAC 和重放去重验证。候选来自尚未提交的工作树，manifest 的 sourceDirty=true；这不是外部 Maven 发布或真机/生产 PostgreSQL/TLS/SigNoz 验收。
 
 ## 事实源
 
@@ -34,8 +38,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 165：160 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 107 |
+| 主源码 | 166：161 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 109 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
@@ -107,9 +111,10 @@ Apm.emit
 - runtime profile：默认 `COMPATIBILITY` 保持源兼容；生产显式选择 `PRODUCTION_STRICT`
 - consent：默认 `UNSPECIFIED`；strict 初始化必须显式 `GRANTED`，`DENIED` 在所有 profile 下拒绝
 - endpoint 空/未知 scheme：仅兼容模式安全确认后丢弃；strict 要求 HTTPS 或非 Logcat 自定义 uploader
-- serialization：默认 legacy `LINE_PROTOCOL`；strict built-in HTTP 要求 `PROTOBUF_ENVELOPE_V2`
-- V2 resource：service/version/environment/匿名 installation 四项固定字段；strict 必须完整且有界
-- V2 request bytes：gzip 前默认 1 MiB、绝对上限 4 MiB；按实际编码拆分，每个物理 batch 独立 exact ACK
+- serialization：默认 legacy `LINE_PROTOCOL`；strict built-in HTTP 要求 `PROTOBUF_ENVELOPE_V3`
+- V3 occurrence：三参数 `Apm.init` 提供完整 occurrence；当前自动 Provider 仅调用二参数 overload，不支持 V3
+- V2/V3 resource：service/version/environment/匿名 installation 四项固定字段；strict 必须完整且有界，但版本归因以 V3 occurrence 为准
+- V2/V3 request bytes：gzip 前默认 1 MiB、绝对上限 4 MiB；按实际编码拆分，每个物理 batch 独立 exact ACK
 - dynamic HTTP endpoint：默认关闭；开启也只接受无凭据 HTTPS URL
 - static HTTP headers / per-request header provider：默认空；长期密钥不能打进 APK
 - SQLite durable storage：开启
@@ -217,6 +222,10 @@ AutoThrottle 退化立即生效；只有连续 3 个周期满足 drop rate <= 20
 
 同日 Collector V2 跨仓闭环完成：独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）通过 57 tests、ruff、mypy 和文档校验。客户端 `tools/verify_collector_e2e.py` 以 JDK 17 构建真实 `HttpApmUploader`，启动实际 FastAPI/uvicorn Gateway，经 Gzip HTTP 两次发送相同 2-event V2 batch；两次均取得精确 schema/batch/count ACK，测试用 SQLite inbox 最终仅有 2 个 eventId，12 种 typed scalar、`NaN/Infinity` 的 JSON-safe typed text、resource 和协议元数据均经数据库复核。该脚本不输出一次性 ingest key。Docker 本机不可用，因此不能把这一 SQLite 兼容闭环外推为 PostgreSQL、TLS、Compose、SigNoz 或生产 durability 验收。
 
+2026-08-28 将该脚本扩展为同一真实 Java probe 的 V2/V3 双协议闭环：分别发送并重放两个 2-event batch，测试数据库迁移到 server head 后仅有 4 个 eventId。验证独立核对 V2 typed scalar、V3 occurrence 的 `serviceVersion=3.1.4/versionCode=314/appBuild=build-314/variant=release`、Native ABI/build-id/module/relative-PC/load-bias、低质量 request/batch 声明不覆盖 occurrence、tenant-scoped HMAC/key version、installation 明文不入 `payload_json` 和 exact replay dedupe。HMAC secret 每次随机生成，只通过环境变量传递且不输出。`apiCheck` 与 24 份公开 ABI 基线检查同时证明原 `ApmEvent/ApmConfig` constructor/copy/component 签名未改变，新增面限于 occurrence/V3 类型和三参数 init overload。该结果仍是 loopback + test-only SQLite 证据，不能外推为 PostgreSQL/TLS/SigNoz 或生产 durability 验收。
+
+同一当前 V3 工作树随后以 JDK `17.0.14` 完整执行 `python tools/verify_ci.py` 并最终 `PASSED`。强制重跑报告为 Android 99 suites / 679 tests、model 5 / 57、included plugin 1 / 18，全部 0 failures/errors/skips；root/plugin `apiCheck`、24 份 ABI 基线、四份 dependency-verification metadata、5 个 release-candidate verifier tests、41 个 benchmark/device-lab host tests 全部通过。候选仓库再次验证 25 coordinates / 22 AAR / 26 JAR / 25 POM；隔离 consumer 使用 `--refresh-dependencies` 解析 Bundle 与 Gradle plugin、执行 ASM transformation 并在 3m06s 完成 `assembleDebug`。文档门禁为 46 Markdown / 70 links，`git diff --check` 通过。plan-only 设备矩阵明确未评估物理工件；本次成功也不代表外部 Maven promotion、真机 24h/72h 或生产服务端部署。
+
 同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件；smoke/24h/72h 分别要求 3/2/1 台设备，smoke/24h 分别要求 3/2 个厂商，smoke 还必须覆盖 `pm-clear` 与 `uninstall-reinstall`。result schema v3 绑定 exact APK、clean source revision、matrix/budget/runner hash、lane/UTC/device identity；aggregate verifier 逐工件执行原预算后再检查完整性、多样性和单 APK/source。40 个 host tests、Python 编译、plan gate 和 504 个 benchmark/sample Gradle 动作通过；plan 输出明确没有评估真机证据。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证通过 44 Markdown / 55 links，两份 DOCX 通过 OOXML 结构和关键文本检查；本机仍缺 LibreOffice/`soffice`，不声明页面渲染验收。当前没有 schema-v3 的 24h/72h 工件。
 
 同日发布与供应链门禁完成：四个 Gradle build root 提交严格 SHA-256 dependency verification metadata，策略检查覆盖 554 / 238 / 239 / 409 个 component；consumer 仅信任由候选校验器逐文件复核的内部坐标。独立候选仓库包含 25 坐标、22 AAR、26 JAR、25 POM，Bundle 精确暴露 22 个运行时制品，`com.apm.slow-method` marker 精确指向 `com.apm:apm-plugin`。校验器检查 POM/Gradle metadata/sources/固定版本/Java 17/ZIP 安全与签名完整性，生成 SHA-256 manifest 和 SPDX 2.3 SBOM；5 个 host tests 覆盖完整与篡改分支，隔离 consumer 从候选仓库解析 Bundle/插件并完成 ASM transformation 与 Debug 构建。外部 URL 强制 HTTPS，缺凭据或 PGP key 在上传前失败；仓库没有真实外部 staging/promotion 证据。
@@ -261,7 +270,7 @@ python tools/verify_release_candidate.py
 
 ## 后续优先级
 
-客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、typed wire V2、typed durable codec v3 与 legacy 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。受控设备实验室准入已固化为 3 个不重叠 API lane、6 个 lane/profile 工件、OEM/设备/reset 多样性和 schema-v3 exact provenance 汇总门禁；plan-only 校验不会冒充真机执行。参考 Collector 已完成本地 V2/认证/幂等联调；后续仍需平台凭据、生产 PostgreSQL/TLS、CI 管理员、符号服务或真实设备，按 [Collector Wire Protocol V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的 P0/P1/P2、协议及验收条件推进。生产 Collector 必须保留独立 V2 endpoint、exact whole-batch ACK 和 eventId 去重，不能把本地 codec tag 或 legacy wire 误解释成 V2；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用矩阵 plan、短 smoke、host tests 或模拟器 parser 证据冒充已完成。
+客户端代码可独立完成的既定功能缺口已经收口，包括 strict production profile/显式 consent/撤回清理、V2 batch-declared compatibility、V3 occurrence-bound wire、durable codec V4 与 V1/V2/V3 读取、动态短期 Token、签名配置、LKG、全局/模块 kill switch、动态采样/限流、HTTPS endpoint 轮换、优先级感知入口背压、单模块高水位容量隔离、dispatcher 固定阶段尾延迟证据、默认隐私保护、固定 time/allocation microbenchmark，以及 fail-closed 的 A/B/离线/重启 smoke、24h、72h 物理设备 gate。受控设备实验室准入已固化为 3 个不重叠 API lane、6 个 lane/profile 工件、OEM/设备/reset 多样性和 schema-v3 exact provenance 汇总门禁；plan-only 校验不会冒充真机执行。参考 Collector 已完成本地 V2/V3、认证、HMAC 与幂等联调；后续仍需平台凭据、生产 PostgreSQL/TLS/SigNoz、CI 管理员、符号服务或真实设备，按当前 [Collector Wire Protocol V3](protocol/COLLECTOR_WIRE_V3.md)、兼容 [V2](protocol/COLLECTOR_WIRE_V2.md) 和独立 `AndroidAPM-Server` 仓库中 `docs/云端待建设清单.md` 的协议及验收条件推进。生产 Collector 必须保留 exact whole-batch ACK、eventId 去重与冲突检测，不能把本地 codec tag、V2 batch resource 或 legacy wire 误解释成 occurrence；dispatcher 多 worker/分区吞吐若后续推进，必须先用新增阶段字段取得真实负载分布，再证明 aggregator、rate limiter、sanitizer 与 SQLite 顺序语义和线程安全。物理 smoke 的 CPU 根因已修复并在原 `20%` 上限下连续两次通过；24h/72h 与长稳功耗保留为预生产准入门槛，延期到受控设备实验室执行，不阻塞当前客户端迭代，也不能用矩阵 plan、短 smoke、host tests 或模拟器 parser 证据冒充已完成。
 
 ## Git 与文档策略
 

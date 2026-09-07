@@ -693,7 +693,8 @@ class ProcessEventCoordinator internal constructor(
             "IPC event payload exceeds byte budget"
         }
         val event = ApmEventCodec.decode(payload)
-        return event.copy(extras = event.extras + ("ipc_source" to "remote_process"))
+        val annotated = event.copy(extras = event.extras + ("ipc_source" to "remote_process"))
+        return event.occurrence?.let(annotated::withOccurrenceContext) ?: annotated
     }
 
     /**

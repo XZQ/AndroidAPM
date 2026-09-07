@@ -20,12 +20,14 @@ public final class com/apm/uploader/BatchApmUploader$DefaultImpls {
 	public static fun upload (Lcom/apm/uploader/BatchApmUploader;Lcom/apm/model/ApmEvent;)Z
 }
 
-public final class com/apm/uploader/HttpApmUploader : com/apm/uploader/BatchApmUploader {
+public final class com/apm/uploader/HttpApmUploader : com/apm/uploader/BatchApmUploader, com/apm/uploader/ValidatingApmUploader {
 	public static final field Companion Lcom/apm/uploader/HttpApmUploader$Companion;
 	public static final field DEFAULT_MAX_BATCH_BYTES I
 	public static final field MAX_BATCH_BYTES I
 	public fun <init> (Ljava/lang/String;Lcom/apm/uploader/HttpEndpointProvider;Ljava/util/Map;Lcom/apm/uploader/HttpHeaderProvider;IIZLcom/apm/model/SerializationFormat;Lcom/apm/uploader/UploaderLogger;Lcom/apm/model/ApmResourceContext;I)V
 	public synthetic fun <init> (Ljava/lang/String;Lcom/apm/uploader/HttpEndpointProvider;Ljava/util/Map;Lcom/apm/uploader/HttpHeaderProvider;IIZLcom/apm/model/SerializationFormat;Lcom/apm/uploader/UploaderLogger;Lcom/apm/model/ApmResourceContext;IILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun isShutdownComplete ()Z
+	public fun rejectionReason (Lcom/apm/model/ApmEvent;)Lcom/apm/uploader/UploadRejectionReason;
 	public fun retryAfterHintMs ()Ljava/lang/Long;
 	public fun shutdown ()V
 	public fun upload (Lcom/apm/model/ApmEvent;)Z
@@ -103,6 +105,15 @@ public final class com/apm/uploader/RetryingApmUploader : com/apm/uploader/ApmUp
 public final class com/apm/uploader/RetryingApmUploader$Companion {
 }
 
+public final class com/apm/uploader/UploadRejectionReason : java/lang/Enum {
+	public static final field OCCURRENCE_INVALID Lcom/apm/uploader/UploadRejectionReason;
+	public static final field OCCURRENCE_REQUIRED Lcom/apm/uploader/UploadRejectionReason;
+	public static final field OCCURRENCE_UNSUPPORTED Lcom/apm/uploader/UploadRejectionReason;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lcom/apm/uploader/UploadRejectionReason;
+	public static fun values ()[Lcom/apm/uploader/UploadRejectionReason;
+}
+
 public abstract interface class com/apm/uploader/UploaderLogger {
 	public static final field Companion Lcom/apm/uploader/UploaderLogger$Companion;
 	public abstract fun d (Ljava/lang/String;)V
@@ -117,5 +128,14 @@ public final class com/apm/uploader/UploaderLogger$Companion {
 
 public final class com/apm/uploader/UploaderLogger$DefaultImpls {
 	public static synthetic fun e$default (Lcom/apm/uploader/UploaderLogger;Ljava/lang/String;Ljava/lang/Throwable;ILjava/lang/Object;)V
+}
+
+public abstract interface class com/apm/uploader/ValidatingApmUploader : com/apm/uploader/ApmUploader {
+	public abstract fun rejectionReason (Lcom/apm/model/ApmEvent;)Lcom/apm/uploader/UploadRejectionReason;
+}
+
+public final class com/apm/uploader/ValidatingApmUploader$DefaultImpls {
+	public static fun retryAfterHintMs (Lcom/apm/uploader/ValidatingApmUploader;)Ljava/lang/Long;
+	public static fun shutdown (Lcom/apm/uploader/ValidatingApmUploader;)V
 }
 

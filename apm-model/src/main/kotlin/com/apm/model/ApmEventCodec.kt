@@ -11,8 +11,9 @@ import java.math.BigInteger
 /**
  * Reversible binary codec used by the persistent event outbox.
  *
- * Version 3 preserves supported scalar field types across durable storage while
- * legacy version 1/2 payloads remain readable with their original string semantics.
+ * Version 4 appends the occurrence-bound release/installation/native snapshot. Version 3
+ * preserves supported scalar field types, while legacy version 1/2 payloads remain readable with
+ * their original string semantics.
  * Unsupported arbitrary objects are still reduced to [Any.toString] instead of
  * introducing unsafe object serialization into the SDK contract.
  */
@@ -62,6 +63,8 @@ object ApmEventCodec {
             output.writeStringMap(event.extras)
             // Version 2+ appends identity so every version-1 field keeps its original order.
             output.writeString(event.eventId)
+            // Version 4 appends occurrence identity so all v1-v3 bytes keep their historical order.
+            output.writeOccurrence(event.occurrence)
         }
         return buffer.toByteArray()
     }
@@ -105,8 +108,14 @@ object ApmEventCodec {
                     // Legacy rows receive a deterministic ID from their SQLite row during schema migration.
                     eventId = if (version >= FORMAT_VERSION_WITH_EVENT_ID) input.readString() else ""
                 )
+                val occurrence = if (version >= FORMAT_VERSION_WITH_OCCURRENCE) {
+                    input.readOccurrence()
+                } else {
+                    null
+                }
+                val decoded = occurrence?.let(event::withOccurrenceContext) ?: event
                 require(input.available() == 0) { "Trailing bytes in APM event payload" }
-                event
+                decoded
             }
         } catch (error: IOException) {
             throw IllegalArgumentException("Malformed APM event payload", error)
@@ -151,6 +160,19 @@ object ApmEventCodec {
         total += estimateStringMapBytes(event.globalContext)
         total += estimateStringMapBytes(event.extras)
         total += estimateStringBytes(event.eventId)
+        event.occurrence?.let { occurrence ->
+            total += estimateStringBytes(occurrence.serviceVersion)
+            total += estimateStringBytes(occurrence.versionCode)
+            total += estimateStringBytes(occurrence.appBuild)
+            total += estimateStringBytes(occurrence.variant)
+            total += estimateStringBytes(occurrence.installationId)
+            for (frame in occurrence.nativeFrames) {
+                total += estimateStringBytes(frame.abi)
+                total += estimateStringBytes(frame.moduleBuildId)
+                total += estimateStringBytes(frame.moduleName)
+                total += ESTIMATE_NATIVE_FRAME_FIXED_BYTES
+            }
+        }
         // 病态大集合求和溢出 Int 为负时钳回安全下界：容量只是增长提示，
         // 真实上限仍由写入期的 2 MiB 预算强制
         return total.coerceIn(ESTIMATE_FIXED_HEADER_BYTES, MAX_PAYLOAD_BYTES)
@@ -265,6 +287,83 @@ object ApmEventCodec {
             BOOLEAN_TRUE -> true
             else -> throw IllegalArgumentException("Invalid nullable boolean value: $value")
         }
+    }
+
+    /** Writes the optional occurrence snapshot and bounded native-frame list. */
+    private fun DataOutputStream.writeOccurrence(value: ApmOccurrenceContext?) {
+        writeBoolean(value != null)
+        if (value == null) {
+            return
+        }
+        writeString(value.serviceVersion)
+        writeString(value.versionCode)
+        writeString(value.appBuild)
+        writeString(value.variant)
+        writeString(value.installationId)
+        require(value.nativeFrames.size <= MAX_NATIVE_FRAMES) {
+            "APM occurrence exceeds $MAX_NATIVE_FRAMES native frames"
+        }
+        writeInt(value.nativeFrames.size)
+        for (frame in value.nativeFrames) {
+            require(frame.moduleRelativePc >= 0L) { "Native moduleRelativePc must be non-negative" }
+            require(frame.loadBias == null || frame.loadBias >= 0L) {
+                "Native loadBias must be non-negative"
+            }
+            writeString(frame.abi)
+            writeString(frame.moduleBuildId)
+            writeString(frame.moduleName)
+            writeLong(frame.moduleRelativePc)
+            writeBoolean(frame.loadBias != null)
+            frame.loadBias?.let(::writeLong)
+        }
+    }
+
+    /** Reads the optional occurrence snapshot without accepting unbounded frame allocation. */
+    private fun DataInputStream.readOccurrence(): ApmOccurrenceContext? {
+        if (!readBoolean()) {
+            return null
+        }
+        val serviceVersion = readString()
+        val versionCode = readString()
+        val appBuild = readString()
+        val variant = readString()
+        val installationId = readString()
+        val frameCount = readInt()
+        require(frameCount in 0..MAX_NATIVE_FRAMES) {
+            "Invalid APM occurrence native frame count: $frameCount"
+        }
+        require(frameCount <= available() / MIN_NATIVE_FRAME_BYTES) {
+            "Truncated APM occurrence native frames"
+        }
+        val frames = buildList(frameCount) {
+            repeat(frameCount) {
+                val abi = readString()
+                val moduleBuildId = readString()
+                val moduleName = readString()
+                val moduleRelativePc = readLong()
+                require(moduleRelativePc >= 0L) { "Native moduleRelativePc must be non-negative" }
+                val hasLoadBias = readBoolean()
+                val loadBias = if (hasLoadBias) readLong() else null
+                require(loadBias == null || loadBias >= 0L) { "Native loadBias must be non-negative" }
+                add(
+                    ApmNativeFrameIdentity(
+                        abi = abi,
+                        moduleBuildId = moduleBuildId,
+                        moduleName = moduleName,
+                        moduleRelativePc = moduleRelativePc,
+                        loadBias = loadBias
+                    )
+                )
+            }
+        }
+        return ApmOccurrenceContext(
+            serviceVersion = serviceVersion,
+            versionCode = versionCode,
+            appBuild = appBuild,
+            variant = variant,
+            installationId = installationId,
+            nativeFrames = frames
+        )
     }
 
     /**
@@ -555,7 +654,7 @@ object ApmEventCodec {
     }
 
     /** Current durable payload format version. */
-    private const val FORMAT_VERSION = 3
+    private const val FORMAT_VERSION = 4
 
     /** Fixed header bytes: version int + timestamp long + nullable foreground byte + two map size prefixes. */
     private const val ESTIMATE_FIXED_HEADER_BYTES = 4 + 8 + 1 + 4 + 4
@@ -569,6 +668,9 @@ object ApmEventCodec {
     /** Conservative estimate for one bounded big-number value including its type tag. */
     private const val ESTIMATE_BIG_NUMBER_BYTES = 32
 
+    /** Fixed-width estimate for one native frame's addresses, flags, and list overhead. */
+    private const val ESTIMATE_NATIVE_FRAME_FIXED_BYTES = 24
+
     /** Oldest durable format still accepted. */
     private const val LEGACY_FORMAT_VERSION = 1
 
@@ -577,6 +679,9 @@ object ApmEventCodec {
 
     /** First durable format preserving supported scalar field types. */
     private const val FORMAT_VERSION_WITH_TYPED_FIELDS = 3
+
+    /** First durable format carrying occurrence-bound identity. */
+    private const val FORMAT_VERSION_WITH_OCCURRENCE = 4
 
     /** Maximum accepted encoded event size. */
     private const val MAX_PAYLOAD_BYTES = 2 * 1024 * 1024
@@ -590,11 +695,17 @@ object ApmEventCodec {
     /** Maximum entries accepted in each event map. */
     private const val MAX_MAP_ENTRIES = 4096
 
+    /** Maximum native frames retained in one durable event. */
+    private const val MAX_NATIVE_FRAMES = 256
+
     /** Minimum encoded bytes for one string-map key/value pair: two empty length prefixes. */
     private const val MIN_STRING_MAP_ENTRY_BYTES = 8
 
     /** Minimum encoded bytes for one typed-map entry: empty key prefix plus null tag. */
     private const val MIN_TYPED_MAP_ENTRY_BYTES = 5
+
+    /** Three empty string prefixes, one relative PC, and one load-bias-presence byte. */
+    private const val MIN_NATIVE_FRAME_BYTES = 3 * ESTIMATE_LENGTH_PREFIX_BYTES + 8 + 1
 
     /** Unsigned-byte and strict UTF-8 validation constants. */
     private const val BYTE_MASK = 0xFF

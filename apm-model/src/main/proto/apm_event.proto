@@ -61,6 +61,10 @@ message ApmEventMessage {
 
   // Versioned-envelope typed fields. Legacy field 10 remains for old standalone messages only.
   map<string, ApmTypedValue> typed_fields = 15;
+
+  // Schema V3 occurrence-bound release, installation, and optional native identity.
+  // V2 messages MUST NOT set this field.
+  ApmOccurrenceContext occurrence = 16;
 }
 
 // Explicit scalar value used by schema version 2; `value` is absent only for NULL.
@@ -80,7 +84,26 @@ message ApmResource {
   string installation_id = 4;
 }
 
-// Collector request schema for SerializationFormat.PROTOBUF_ENVELOPE_V2.
+// Identity frozen into the durable event before an outbox write.
+message ApmOccurrenceContext {
+  string service_version = 1;
+  string version_code = 2;
+  string app_build = 3;
+  string variant = 4;
+  string installation_id = 5;
+  repeated ApmNativeFrameIdentity native_frames = 6;
+}
+
+// Build-relative native frame identity; absolute process addresses are not part of the contract.
+message ApmNativeFrameIdentity {
+  string abi = 1;
+  string module_build_id = 2;
+  string module_name = 3;
+  uint64 module_relative_pc = 4;
+  optional uint64 load_bias = 5;
+}
+
+// Collector request schema shared by explicit V2 and V3 media types.
 message ApmBatchEnvelope {
   uint32 schema_version = 1;
   string sdk_name = 2;

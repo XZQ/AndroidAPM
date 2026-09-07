@@ -2,7 +2,10 @@ public final class com/apm/model/ApmBatchEnvelopeSerializer {
 	public static final field INSTANCE Lcom/apm/model/ApmBatchEnvelopeSerializer;
 	public final fun serialize (Ljava/util/List;Lcom/apm/model/ApmResourceContext;J)Lcom/apm/model/EncodedApmBatch;
 	public static synthetic fun serialize$default (Lcom/apm/model/ApmBatchEnvelopeSerializer;Ljava/util/List;Lcom/apm/model/ApmResourceContext;JILjava/lang/Object;)Lcom/apm/model/EncodedApmBatch;
+	public final fun serializeV3 (Ljava/util/List;Lcom/apm/model/ApmResourceContext;J)Lcom/apm/model/EncodedApmBatch;
+	public static synthetic fun serializeV3$default (Lcom/apm/model/ApmBatchEnvelopeSerializer;Ljava/util/List;Lcom/apm/model/ApmResourceContext;JILjava/lang/Object;)Lcom/apm/model/EncodedApmBatch;
 	public final fun serializeWithinBudget (Ljava/util/List;Lcom/apm/model/ApmResourceContext;IJ)Ljava/util/List;
+	public final fun serializeWithinBudgetV3 (Ljava/util/List;Lcom/apm/model/ApmResourceContext;IJ)Ljava/util/List;
 }
 
 public final class com/apm/model/ApmEvent {
@@ -33,6 +36,7 @@ public final class com/apm/model/ApmEvent {
 	public final fun getKind ()Lcom/apm/model/ApmEventKind;
 	public final fun getModule ()Ljava/lang/String;
 	public final fun getName ()Ljava/lang/String;
+	public final fun getOccurrence ()Lcom/apm/model/ApmOccurrenceContext;
 	public final fun getPriority ()Lcom/apm/model/ApmPriority;
 	public final fun getProcessName ()Ljava/lang/String;
 	public final fun getScene ()Ljava/lang/String;
@@ -41,6 +45,7 @@ public final class com/apm/model/ApmEvent {
 	public final fun getTimestamp ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
+	public final fun withOccurrenceContext (Lcom/apm/model/ApmOccurrenceContext;)Lcom/apm/model/ApmEvent;
 }
 
 public final class com/apm/model/ApmEventCodec {
@@ -60,6 +65,49 @@ public final class com/apm/model/ApmEventKind : java/lang/Enum {
 
 public final class com/apm/model/ApmEventKt {
 	public static final fun toLineProtocol (Lcom/apm/model/ApmEvent;)Ljava/lang/String;
+}
+
+public final class com/apm/model/ApmNativeFrameIdentity {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/Long;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/Long;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()J
+	public final fun component5 ()Ljava/lang/Long;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/Long;)Lcom/apm/model/ApmNativeFrameIdentity;
+	public static synthetic fun copy$default (Lcom/apm/model/ApmNativeFrameIdentity;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JLjava/lang/Long;ILjava/lang/Object;)Lcom/apm/model/ApmNativeFrameIdentity;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAbi ()Ljava/lang/String;
+	public final fun getLoadBias ()Ljava/lang/Long;
+	public final fun getModuleBuildId ()Ljava/lang/String;
+	public final fun getModuleName ()Ljava/lang/String;
+	public final fun getModuleRelativePc ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class com/apm/model/ApmOccurrenceContext {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)Lcom/apm/model/ApmOccurrenceContext;
+	public static synthetic fun copy$default (Lcom/apm/model/ApmOccurrenceContext;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILjava/lang/Object;)Lcom/apm/model/ApmOccurrenceContext;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAppBuild ()Ljava/lang/String;
+	public final fun getInstallationId ()Ljava/lang/String;
+	public final fun getNativeFrames ()Ljava/util/List;
+	public final fun getServiceVersion ()Ljava/lang/String;
+	public final fun getVariant ()Ljava/lang/String;
+	public final fun getVersionCode ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class com/apm/model/ApmPriority : java/lang/Enum {
@@ -141,7 +189,10 @@ public final class com/apm/model/ApmTypedValue$Companion {
 
 public final class com/apm/model/ApmWireProtocol {
 	public static final field CONTENT_TYPE_ENVELOPE_V2 Ljava/lang/String;
+	public static final field CONTENT_TYPE_ENVELOPE_V3 Ljava/lang/String;
 	public static final field ENVELOPE_SCHEMA_VERSION I
+	public static final field ENVELOPE_SCHEMA_VERSION_V2 I
+	public static final field ENVELOPE_SCHEMA_VERSION_V3 I
 	public static final field HEADER_BATCH_ID Ljava/lang/String;
 	public static final field HEADER_EVENT_COUNT Ljava/lang/String;
 	public static final field HEADER_SCHEMA_VERSION Ljava/lang/String;
@@ -170,12 +221,14 @@ public final class com/apm/model/ProtobufSerializer {
 	public static final field INSTANCE Lcom/apm/model/ProtobufSerializer;
 	public final fun serialize (Lcom/apm/model/ApmEvent;)[B
 	public final fun serializeBatch (Ljava/util/List;)[B
+	public final fun validateOccurrence (Lcom/apm/model/ApmOccurrenceContext;)V
 }
 
 public final class com/apm/model/SerializationFormat : java/lang/Enum {
 	public static final field LINE_PROTOCOL Lcom/apm/model/SerializationFormat;
 	public static final field PROTOBUF Lcom/apm/model/SerializationFormat;
 	public static final field PROTOBUF_ENVELOPE_V2 Lcom/apm/model/SerializationFormat;
+	public static final field PROTOBUF_ENVELOPE_V3 Lcom/apm/model/SerializationFormat;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lcom/apm/model/SerializationFormat;
 	public static fun values ()[Lcom/apm/model/SerializationFormat;

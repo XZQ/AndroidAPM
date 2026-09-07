@@ -1,6 +1,7 @@
 package com.apm.core
 
 import com.apm.model.ApmEvent
+import com.apm.model.ApmOccurrenceContext
 import java.math.BigDecimal
 import java.math.BigInteger
 
@@ -24,7 +25,8 @@ internal object ApmEventSizeEstimator {
             fields = event.fields,
             primaryContext = event.globalContext,
             secondaryContext = emptyMap(),
-            extras = event.extras
+            extras = event.extras,
+            occurrence = event.occurrence
         )
     }
 
@@ -40,7 +42,8 @@ internal object ApmEventSizeEstimator {
         fields: Map<String, Any?>,
         primaryContext: Map<String, String>,
         secondaryContext: Map<String, String>,
-        extras: Map<String, String>
+        extras: Map<String, String>,
+        occurrence: ApmOccurrenceContext? = null
     ): Long {
         var total = MIN_EVENT_ESTIMATE_BYTES
         total = add(total, stringBytes(module))
@@ -54,6 +57,7 @@ internal object ApmEventSizeEstimator {
         total = add(total, stringMapBytes(primaryContext))
         total = add(total, stringMapBytes(secondaryContext))
         total = add(total, stringMapBytes(extras))
+        total = add(total, occurrenceBytes(occurrence))
         return total
     }
 
@@ -65,11 +69,13 @@ internal object ApmEventSizeEstimator {
      */
     fun constantRetentionBytes(
         processName: String,
-        defaultContext: Map<String, String>
+        defaultContext: Map<String, String>,
+        occurrence: ApmOccurrenceContext? = null
     ): Long {
         var total = MIN_EVENT_ESTIMATE_BYTES
         total = add(total, stringBytes(processName))
         total = add(total, stringMapBytes(defaultContext))
+        total = add(total, occurrenceBytes(occurrence))
         return total
     }
 
@@ -118,6 +124,26 @@ internal object ApmEventSizeEstimator {
             total = add(total, MAP_ENTRY_BYTES)
             total = add(total, stringBytes(key))
             total = add(total, stringBytes(value))
+        }
+        return total
+    }
+
+    /** Estimates the immutable occurrence snapshot and optional native-frame identities. */
+    private fun occurrenceBytes(value: ApmOccurrenceContext?): Long {
+        if (value == null) {
+            return 0L
+        }
+        var total = OCCURRENCE_HEADER_BYTES
+        total = add(total, stringBytes(value.serviceVersion))
+        total = add(total, stringBytes(value.versionCode))
+        total = add(total, stringBytes(value.appBuild))
+        total = add(total, stringBytes(value.variant))
+        total = add(total, stringBytes(value.installationId))
+        for (frame in value.nativeFrames) {
+            total = add(total, NATIVE_FRAME_HEADER_BYTES)
+            total = add(total, stringBytes(frame.abi))
+            total = add(total, stringBytes(frame.moduleBuildId))
+            total = add(total, stringBytes(frame.moduleName))
         }
         return total
     }
@@ -178,4 +204,10 @@ internal object ApmEventSizeEstimator {
 
     /** Defensive charge for a host object whose transitive graph cannot be inspected safely. */
     private const val UNKNOWN_OBJECT_BYTES = 256L
+
+    /** Retained occurrence object/list/reference overhead. */
+    private const val OCCURRENCE_HEADER_BYTES = 128L
+
+    /** Retained native-frame object plus two boxed address values. */
+    private const val NATIVE_FRAME_HEADER_BYTES = 128L
 }

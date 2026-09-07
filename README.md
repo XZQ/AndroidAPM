@@ -4,12 +4,18 @@
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
+本轮完整客户端门禁通过：Android/model/plugin 共 775 项测试零失败，ABI、依赖校验、Maven 候选与独立消费、文档和真实 V2/V3 Collector 联调均通过；本地证据不替代真机及生产验收。
+
+本轮可靠性修复（2026-09-07）：HTTP 支持活动请求取消，撤回结果通过 `uploadWorkerStopped` 报告退出证据；上传退避不会被新事件通知打断。V3 聚合保留发生身份与维度，统计值为数值类型。旧 outbox 缺失发生身份的行在内置 SQLite/V3 路径单独拒绝并计数，避免阻塞新事件。
+
+事件字段接受不可变标量；可变文本在入口有界复制并脱敏，其他任意对象以 `[unsupported]` 替换。FrameMetrics 的空闲绘制间隔不再被计为卡顿，OkHttp 成功的连接重试按最终成功统计。详细行为和验证边界见项目文档。
+
 ## 当前基线
 
-- 同步日期：2026-08-24
+- 同步日期：2026-09-07
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 165 个主源码文件：160 Kotlin + 4 C + 1 proto
-- 107 个测试/benchmark 文件
+- 166 个主源码文件：161 Kotlin + 4 C + 1 proto
+- 109 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -35,7 +41,7 @@ Crash 与 ANR 通过 `Apm.emitCriticalSync` 绕过共享 dispatcher 队列、采
 
 每个事件创建时获得稳定 `eventId`，Line Protocol、Protobuf、durable codec、SQLite 和多进程文件交接全程保留。上传 Worker 先原子 claim，只有当前 owner 能 ACK/失败释放；租约过期后其他进程或 Worker 可安全重领。上传成功后才删除，失败保留并指数退避；`maxRetries` 表示首次尝试后的重试次数，达到 `maxRetries + 1` 次失败后立即清理，超过 7 天的行也会清理。这仍是至少一次语义：网络响应丢失时可能重传，服务端必须按 `eventId` 幂等去重。
 
-本地 durable codec 当前写 version 3，并继续读取 version 1/2。v3 为 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char、BigInteger 和 BigDecimal 写入显式类型标签，SQLite/IPC 重放后恢复原标量类型；任意其他对象保持历史 `toString()` 降级，不引入 Java 对象反序列化。解码严格拒绝非法 UTF-8、截断内容、无法由剩余字节承载的 Map/string 和尾随字节；编码在扩展缓冲区前执行 2 MiB 总预算。legacy Line Protocol 与 standalone Protobuf 的 `fields` 继续是字符串 map；生产 Collector 使用显式 `PROTOBUF_ENVELOPE_V2` 获得 append-only field 15 typed values，不静默改写旧协议。
+本地 durable codec 当前写 version 4，并继续读取 version 1/2/3。V3 typed scalar 语义保持不变；V4 在其后 append 发生时 release/installation/native snapshot，SQLite/IPC 重放后不会用升级后的当前进程身份覆盖旧事件。任意其他 field 对象保持历史 `toString()` 降级，不引入 Java 对象反序列化。解码严格拒绝非法 UTF-8、截断内容、无法由剩余字节承载的 Map/string/frame list 和尾随字节；编码在扩展缓冲区前执行 2 MiB 总预算。legacy Line Protocol 与 standalone Protobuf 的 `fields` 继续是字符串 map；V2 保留 batch-declared typed 兼容，strict built-in HTTP 使用显式 `PROTOBUF_ENVELOPE_V3` 与 event field 16 occurrence。协议见 [V3](docs/protocol/COLLECTOR_WIRE_V3.md) 和 [V2](docs/protocol/COLLECTOR_WIRE_V2.md)。
 
 生产可靠性优先级固定为“宿主安全 > telemetry durability > diagnostic completeness”。dispatcher 仍是单 worker 顺序执行聚合、限流、脱敏和 SQLite hand-off；模块高水位隔离解决的是共享入口的 noisy-neighbor 容量挤占，不虚称提升该 worker 的并行吞吐。开启自监控时，worker 会按固定 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize`、`storeHandoff` 阶段记录有界延迟证据，用于先定位 head-of-line blocking 再决定是否分区或并行；这些字段本身不会改变调度策略。单个 lazy event/聚合/脱敏异常不会杀死共享 worker；recoverable `Exception` 会降级并记录，`OutOfMemoryError` 等 fatal VM error 不会被伪装成普通丢包或重试。每次真实丢弃同时累计总数、稳定 `SdkDropReason` 和 LOW/NORMAL/HIGH/CRITICAL 优先级；旧存储实现若只能返回总数，会显式进入 `UNATTRIBUTED`，不会伪造优先级。SQLite 编码会隔离单个超限/非法 payload，使同批正常事件继续落盘；行数/活跃 payload 淘汰及 retry/age prune 也进入上述分类。V2 ACK 的 schema/eventCount 只接受无符号十进制规范形式，batchId 必须逐字节等值；超大 `Retry-After` 秒数饱和到 `Long.MAX_VALUE`，再与本地退避合并并限制为 10 ms–60 s，不会整数溢出成热重试。自定义同步 uploader 必须自行保证网络调用有界，SDK 无法安全终止任意宿主代码，进程恢复仍以 claim expiry 为准。
 
@@ -145,7 +151,7 @@ class MyApmConfigProvider : ApmConfigProvider {
 }
 ```
 
-没有该 metadata 时 Provider 只做 no-op，不会把手动模式记为告警。两种模式不要同时使用。
+没有该 metadata 时 Provider 只做 no-op，不会把手动模式记为告警。两种模式不要同时使用。当前自动 Provider 只能调用二参数 `Apm.init(application, config)`，无法提供 occurrence snapshot；`PROTOBUF_ENVELOPE_V3` 会因此 fail closed，V3/strict built-in HTTP 必须使用下面的手动三参数初始化并移除 Provider。
 
 ### 手动初始化并注册
 
@@ -183,20 +189,27 @@ Apm.init(
         endpoint = "https://collector.example.com/v1/events",
         runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
         initialCollectionConsent = CollectionConsent.GRANTED,
-        serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+        serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3,
         resourceContext = ApmResourceContext(
             serviceName = packageName,
             serviceVersion = BuildConfig.VERSION_NAME,
             deploymentEnvironment = "production",
             installationId = installationIdStore.anonymousId()
         )
+    ),
+    ApmOccurrenceContext(
+        serviceVersion = BuildConfig.VERSION_NAME,
+        versionCode = BuildConfig.VERSION_CODE.toString(),
+        appBuild = BuildConfig.GIT_SHA,
+        variant = BuildConfig.BUILD_TYPE,
+        installationId = installationIdStore.anonymousId()
     )
 )
 ```
 
-`PRODUCTION_STRICT` 在创建诊断、存储或线程前校验：必须显式 `GRANTED`，必须启用 PII 脱敏、关闭 debug logging、使用 SQLite durable outbox，并提供无内嵌凭据的 HTTPS endpoint；built-in HTTP 还必须选择 `PROTOBUF_ENVELOPE_V2`，提供完整的 service/version/environment/匿名 installation resource，并给单事件上限预留 envelope 字节空间。显式非 Logcat 自定义 uploader 可替代 built-in endpoint/protocol。空地址、HTTP、`logcat://`、`StorageType.FILE` 或 `CollectionConsent.UNSPECIFIED/DENIED` 都会拒绝初始化。
+`PRODUCTION_STRICT` 在创建诊断、存储或线程前校验：必须显式 `GRANTED`，必须启用 PII 脱敏、关闭 debug logging、使用 SQLite durable outbox，并提供无内嵌凭据的 HTTPS endpoint；built-in HTTP 还必须选择 `PROTOBUF_ENVELOPE_V3`，提供完整的 service/version/environment/匿名 installation resource、三参数 `Apm.init` 的发生时 versionCode/build/variant/installation snapshot，并给单事件上限预留 envelope 字节空间。显式非 Logcat 自定义 uploader 可替代 built-in endpoint/protocol。空地址、HTTP、`logcat://`、`StorageType.FILE`、V2 或 `CollectionConsent.UNSPECIFIED/DENIED` 都会拒绝 strict built-in 初始化。
 
-V2 的 typed fields、batch ID、1 MiB 默认/4 MiB 绝对大小预算和“2xx + 精确整批 ACK”规则见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)。缺失或不匹配 ACK 时 SQLite 行不会删除。
+V3 的 occurrence、typed fields、`b3-` batch ID、1 MiB 默认/4 MiB 绝对大小预算和“2xx + 精确整批 ACK”规则见 [Collector Wire Protocol V3](docs/protocol/COLLECTOR_WIRE_V3.md)。V2 兼容契约见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)。缺失或不匹配 ACK 时 SQLite 行不会删除。
 
 用户撤回同意时，活动进程可调用无参 API；冷启动或 SDK 已停止时必须传 `Application`，才能定位上一会话的持久数据。带 `Application` 的清理会同步访问 app-private SQLite/文件，应在工作线程调用：
 
@@ -206,7 +219,7 @@ check(result.storageCleared && result.ipcFilesCleared)
 
 // 后续重新取得同意后，不会自动重启；显式授权并重新初始化。
 Apm.grantCollectionConsent()
-Apm.init(this, strictConfig)
+Apm.init(this, strictConfig, occurrenceContext)
 ```
 
 撤回是隐私关闭而非优雅关闭：先切断新事件并停止 uploader，再丢弃 dispatcher 队列，不 flush 聚合残留，最后清理 SQLite、File 兼容存储和 `.ipc/.tmp` hand-off 文件。使用多进程时，每个可能初始化 SDK 的进程都必须收到撤回通知，以先关闭各自内存生产者；磁盘清理结果通过 `ConsentRevocationResult` 返回，不把无法定位存储误报为成功。
@@ -368,9 +381,9 @@ apmSlowMethod {
 | `runtimeProfile` | `COMPATIBILITY` | 保留历史行为；正式接入显式选择 `PRODUCTION_STRICT` |
 | `initialCollectionConsent` | `UNSPECIFIED` | strict 模式必须由宿主显式传 `GRANTED` |
 | `endpoint` | 空 | 仅兼容模式安全丢弃且不输出 payload；strict 要求 HTTPS 或非 Logcat 自定义 uploader |
-| `serializationFormat` | `LINE_PROTOCOL` | compatibility 保留旧格式；strict built-in HTTP 要求 `PROTOBUF_ENVELOPE_V2` |
-| `resourceContext` | 空 | V2 standard resource；strict built-in HTTP 要求四个固定匿名字段完整 |
-| `maxUploadBatchBytes` | `1048576` | V2 gzip 前 envelope 预算；绝对上限 4 MiB，按实际编码拆批 |
+| `serializationFormat` | `LINE_PROTOCOL` | compatibility 保留旧格式；strict built-in HTTP 要求 `PROTOBUF_ENVELOPE_V3` |
+| `resourceContext` | 空 | V2/V3 batch resource；strict built-in HTTP 要求四个固定匿名字段完整，但发生版本以 V3 occurrence 为准 |
+| `maxUploadBatchBytes` | `1048576` | V2/V3 gzip 前 envelope 预算；绝对上限 4 MiB，按实际编码拆批 |
 | `storageType` | `SQLITE` | 使用 durable outbox |
 | `maxEventPayloadBytes` | `262144` | 单事件 durable payload 软上限；超限事件单独拒绝 |
 | `maxStoredPayloadBytes` | `67108864` | SQLite 活跃 payload 逻辑预算；不含 page/WAL 开销 |
@@ -529,9 +542,9 @@ python tools/verify_release_candidate.py
 
 ## 客户端完成边界
 
-仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、版本化 protobuf V2 typed/resource/batch/size/ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v4 无损迁移、typed durable codec v3 与 v1/v2 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、dispatcher 固定阶段的有界尾延迟证据、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断、固定 microbenchmark 预算，以及 fail-closed 的物理设备 A/B/离线/重启 smoke、24h、72h campaign 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考。
+仓库内可实现的客户端缺口已经收口：单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、V2 batch-declared compatibility、V3 occurrence-bound typed/resource/batch/size/ACK、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 `eventId`、SQLite v4 无损迁移、durable codec V4 与 V1/V2/V3 兼容读取、本地去重、并发 claim/lease/expiry、owner-aware ACK、dispatcher/IPC/SQLite 跨层条数与字节预算、dispatcher 固定阶段的有界尾延迟证据、动态短期鉴权、签名配置/LKG/kill switch/采样/限流/endpoint、优先级感知入口背压与单模块高水位隔离、带迟滞恢复的 AutoThrottle、默认隐私保护、运行时配置/payload/occurrence 快照、异步直接事件 map 冻结、epoch/单调时钟职责分离、OkHttp/HttpURLConnection/Binder/WebView/线程池显式公共 API、按实际回调区间定义的 FPS、无逐帧对象分配的 FrameMetrics 滚动累计、`sdk_health` 双通道、SDK 自诊断、固定 microbenchmark 预算，以及 fail-closed 的物理设备 A/B/离线/重启 smoke、24h、72h campaign 均有源码与测试/构建入口。Sample 还实际接线 IO stream wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册和 Battery 回调，可直接作为宿主接入参考；V3 宿主必须手动使用三参数 init。
 
-仍需外部系统或真实设备的工作不伪装成“客户端未完成”：参考 Collector 的本地 V2/认证/幂等闭环和外部 Maven 的签名候选/凭据边界已经固化，但生产 PostgreSQL/TLS 部署、并发与 ACK 丢失故障注入、查询/聚合/告警/Dashboard、Native 后台符号化、真实外部仓库 staging/promotion、云端 runner 接线仍待完成；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。客户端 wire 规范见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
+仍需外部系统或真实设备的工作不伪装成“客户端未完成”：参考 Collector 的本地 V2/V3、认证、HMAC 与幂等闭环和外部 Maven 的签名候选/凭据边界已经固化，但生产 PostgreSQL/TLS 部署、并发与 ACK 丢失故障注入、真实 SigNoz/通知、Native 后台符号化、真实外部仓库 staging/promotion、云端 runner 接线仍待现场完成；`24h`/`72h` 与校准功耗证据作为预生产发布门槛，延期到受控设备实验室执行，不阻塞当前客户端 SDK 迭代。当前 strict wire 见 [Collector Wire Protocol V3](docs/protocol/COLLECTOR_WIRE_V3.md)，兼容 wire 见 [Collector Wire Protocol V2](docs/protocol/COLLECTOR_WIRE_V2.md)，外部建设清单见独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md`。
 
 ## License
 

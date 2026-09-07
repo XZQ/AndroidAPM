@@ -1,10 +1,14 @@
-"""Run the real Android V2 uploader against a live local Collector process."""
+"""Run the real Android V2/V3 uploader against a live local Collector process."""
 
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import hmac
 import json
 import os
+import secrets
 import socket
 import sqlite3
 import subprocess
@@ -21,7 +25,15 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PROBE_SOURCE = REPOSITORY_ROOT / "tools" / "collector_e2e" / "CollectorE2eProbe.java"
 SERVER_MARKER = Path("src/androidapm_server/main.py")
-EXPECTED_EVENT_IDS = {"collector-e2e-event-1", "collector-e2e-event-2"}
+EXPECTED_V2_EVENT_IDS = {"collector-e2e-event-1", "collector-e2e-event-2"}
+EXPECTED_V3_EVENT_IDS = {
+    "collector-e2e-v3-event-1",
+    "collector-e2e-v3-event-2",
+}
+EXPECTED_EVENT_IDS = EXPECTED_V2_EVENT_IDS | EXPECTED_V3_EVENT_IDS
+INSTALLATION_HMAC_DOMAIN = b"androidapm:installation:v1"
+INSTALLATION_HMAC_KEY_VERSION = "e2e-v1"
+TENANT_ID = "collector-e2e"
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -31,7 +43,7 @@ def parse_arguments() -> argparse.Namespace:
         "--server-repo",
         type=Path,
         required=True,
-        help="AndroidAPM-Server checkout containing Collector V2 support",
+        help="AndroidAPM-Server checkout containing Collector V2/V3 support",
     )
     return parser.parse_args()
 
@@ -126,27 +138,54 @@ def wait_until_ready(port: int, process: subprocess.Popen[str], log_path: Path) 
     raise RuntimeError(f"Collector did not become ready.\n{log}")
 
 
-def validate_database(database: Path) -> None:
-    """Prove typed persistence and tenant-scoped deduplication after replay."""
+def installation_hmac(secret: bytes, installation_id: str) -> str:
+    """Recompute the documented tenant/domain-separated pseudonym independently."""
+    message = b"\x00".join(
+        (
+            INSTALLATION_HMAC_DOMAIN,
+            TENANT_ID.encode("utf-8"),
+            installation_id.encode("utf-8"),
+        )
+    )
+    return hmac.new(secret, message, hashlib.sha256).hexdigest()
+
+
+def validate_database(database: Path, hmac_secret: bytes) -> None:
+    """Prove V2/V3 persistence, occurrence identity, pseudonymization, and replay dedupe."""
     with closing(sqlite3.connect(database)) as connection:
         rows = connection.execute(
             """
-            SELECT event_id, protocol, schema_version, app_version, payload_json
+            SELECT event_id, protocol, schema_version, app_version, app_build,
+                   version_code, variant, release_identity_quality,
+                   installation_identity_quality, installation_hmac,
+                   installation_hmac_key_version, native_identity_json, payload_json
             FROM inbox_events
             ORDER BY event_id
             """
         ).fetchall()
-    if len(rows) != 2 or {row[0] for row in rows} != EXPECTED_EVENT_IDS:
-        raise RuntimeError(f"Expected two unique durable events after replay, found {rows}")
-    for _, protocol, schema_version, app_version, _ in rows:
-        if (protocol, schema_version, app_version) != (
-            "protobuf_envelope_v2",
-            "2",
-            "2.4.1",
-        ):
-            raise RuntimeError("Durable Collector metadata does not match the V2 request")
+    if len(rows) != len(EXPECTED_EVENT_IDS) or {row[0] for row in rows} != EXPECTED_EVENT_IDS:
+        raise RuntimeError(
+            f"Expected {len(EXPECTED_EVENT_IDS)} unique durable events after replay, found {rows}"
+        )
+    by_event_id = {str(row[0]): row for row in rows}
 
-    payload = json.loads(rows[0][4])
+    expected_v2_hmac = installation_hmac(hmac_secret, "anonymous-e2e-installation")
+    for event_id in EXPECTED_V2_EVENT_IDS:
+        row = by_event_id[event_id]
+        if (row[1], row[2], row[3]) != ("protobuf_envelope_v2", "2", "2.4.1"):
+            raise RuntimeError("Durable Collector metadata does not match the V2 request")
+        if row[7:11] != (
+            "BATCH_DECLARED",
+            "BATCH_DECLARED",
+            expected_v2_hmac,
+            INSTALLATION_HMAC_KEY_VERSION,
+        ):
+            raise RuntimeError("V2 batch installation identity was not pseudonymized exactly")
+        if "anonymous-e2e-installation" in str(row[12]):
+            raise RuntimeError("V2 installation plaintext was retained in payload_json")
+
+    typed_row = by_event_id["collector-e2e-event-1"]
+    payload = json.loads(typed_row[12])
     fields = payload["fields"]
     field_types = payload["field_types"]
     expected_types = {
@@ -177,11 +216,49 @@ def validate_database(database: Path) -> None:
         raise RuntimeError("Arbitrary-precision integer was not retained as exact text")
     if fields["bigDecimalValue"] != "1234567890.0000000001":
         raise RuntimeError("Arbitrary-precision decimal was not retained as exact text")
-    if (
-        payload["unknown"]["resource.installationId"]
-        != "anonymous-e2e-installation"
-    ):
-        raise RuntimeError("Standard resource context was not durably retained")
+    if "resource.installationId" in payload["unknown"]:
+        raise RuntimeError("V2 installation plaintext survived in the raw unknown map")
+
+    expected_v3_hmac = installation_hmac(hmac_secret, "occurrence-e2e-installation")
+    for event_id in EXPECTED_V3_EVENT_IDS:
+        row = by_event_id[event_id]
+        if row[1:7] != (
+            "protobuf_envelope_v3",
+            "3",
+            "3.1.4",
+            "build-314",
+            "314",
+            "release",
+        ):
+            raise RuntimeError("Occurrence identity did not override lower-quality V3 declarations")
+        if row[7:11] != (
+            "OCCURRENCE_BOUND",
+            "OCCURRENCE_BOUND",
+            expected_v3_hmac,
+            INSTALLATION_HMAC_KEY_VERSION,
+        ):
+            raise RuntimeError("V3 occurrence installation identity was not pseudonymized exactly")
+        raw_payload = str(row[12])
+        for plaintext in (
+            "occurrence-e2e-installation",
+            "batch-installation-must-not-persist",
+        ):
+            if plaintext in raw_payload:
+                raise RuntimeError("V3 installation plaintext was retained in payload_json")
+
+    native_identity = json.loads(by_event_id["collector-e2e-v3-event-1"][11])
+    if native_identity != [
+        {
+            "abi": "arm64-v8a",
+            "module_build_id": "0123456789abcdef",
+            "module_name": "libcollector-e2e.so",
+            "module_relative_pc": 4_660,
+            "load_bias": 4_096,
+        }
+    ]:
+        raise RuntimeError(f"V3 native identity changed during durable handoff: {native_identity}")
+    if json.loads(by_event_id["collector-e2e-v3-event-2"][11]) != []:
+        raise RuntimeError("An empty V3 native identity was not retained as an explicit empty list")
 
 
 def main() -> int:
@@ -245,6 +322,15 @@ def main() -> int:
             work = Path(temporary)
             database = work / "collector.db"
             database_url = f"sqlite+aiosqlite:///{database.as_posix()}"
+            hmac_secret = secrets.token_bytes(32)
+            hmac_keys_json = json.dumps(
+                {
+                    INSTALLATION_HMAC_KEY_VERSION: base64.b64encode(hmac_secret).decode(
+                        "ascii"
+                    )
+                },
+                separators=(",", ":"),
+            )
             server_environment = os.environ.copy()
             server_environment.update(
                 {
@@ -252,6 +338,8 @@ def main() -> int:
                     "APM_ENVIRONMENT": "e2e",
                     "APM_EXPORT_ENABLED": "false",
                     "APM_INGEST_ENABLED": "true",
+                    "APM_INSTALLATION_HMAC_KEYS_JSON": hmac_keys_json,
+                    "APM_INSTALLATION_HMAC_ACTIVE_KEY_VERSION": INSTALLATION_HMAC_KEY_VERSION,
                 }
             )
             run(
@@ -266,7 +354,7 @@ def main() -> int:
                     "androidapm_server.admin",
                     "create-ingest-key",
                     "--tenant-id",
-                    "collector-e2e",
+                    TENANT_ID,
                     "--tenant-name",
                     "Collector E2E",
                     "--app-id",
@@ -347,14 +435,14 @@ def main() -> int:
                     except subprocess.TimeoutExpired:
                         process.kill()
                         process.wait(timeout=5)
-            validate_database(database)
+            validate_database(database, hmac_secret)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         print(f"[collector-e2e] FAILED: {error}", file=sys.stderr, flush=True)
         return 1
 
     print(
-        "[collector-e2e] PASSED: real V2 uploader, Gzip HTTP, exact ACK, "
-        "typed persistence, and replay deduplication",
+        "[collector-e2e] PASSED: real V2/V3 uploader, Gzip HTTP, exact ACK, "
+        "typed persistence, occurrence identity, installation HMAC, and replay deduplication",
         flush=True,
     )
     return 0

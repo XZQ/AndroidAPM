@@ -4,7 +4,7 @@ package com.apm.core.privacy
  * 内置脱敏规则集。
  *
  * 覆盖常见的 PII 类型：手机号、邮箱、身份证号、URL 中的敏感参数（token、password）。
- * 所有规则使用正则表达式匹配，匹配到的内容被部分掩码处理（保留前后几位）。
+ * 邮箱使用线性扫描，其余规则使用有界候选正则；匹配内容被部分掩码处理。
  *
  * 使用方式：
  * ```kotlin
@@ -71,17 +71,67 @@ object DefaultSanitizationRules {
      * 示例：user@example.com → u***@example.com
      */
     fun emailRule(): SanitizationRule = SanitizationRule { input ->
-        // 长度快拒：短于最短合法邮箱形式 `a@b.co` 的输入无需进入正则。
-        if (input.length < MIN_EMAIL_INPUT_LENGTH) input else EMAIL_REGEX.replace(input) { match ->
-            val email = match.value
-            val atIndex = email.indexOf('@')
-            if (atIndex > 1) {
-                "${email.first()}***${email.substring(atIndex)}"
+        maskEmails(input)
+    }
+
+    /**
+     * Scans disjoint local/domain runs once, preserving the historical ASCII match and mask.
+     * A failed domain is consumed before looking for the next @; long near-matches cannot restart
+     * an unbounded regex from every local-part character.
+     */
+    private fun maskEmails(input: String): String {
+        if (input.length < MIN_EMAIL_INPUT_LENGTH || '@' !in input) return input
+        var cursor = 0
+        var localStart = 0
+        var copiedUntil = 0
+        var output: StringBuilder? = null
+        while (cursor < input.length) {
+            val character = input[cursor]
+            if (character != '@' || cursor == localStart) {
+                if (!isEmailLocalCharacter(character)) localStart = cursor + 1
+                cursor++
+                continue
+            }
+            val at = cursor
+            val domainStart = at + 1
+            var domainEnd = domainStart
+            var suffixStart = -1
+            var matchedEnd = -1
+            while (domainEnd < input.length && isEmailDomainCharacter(input[domainEnd])) {
+                val domainCharacter = input[domainEnd]
+                when {
+                    domainCharacter == '.' -> suffixStart = if (domainEnd > domainStart) domainEnd + 1 else -1
+                    !isAsciiLetter(domainCharacter) -> suffixStart = -1
+                    suffixStart >= 0 && domainEnd - suffixStart + 1 >= 2 -> matchedEnd = domainEnd + 1
+                }
+                domainEnd++
+            }
+            if (matchedEnd >= 0) {
+                val target = output ?: StringBuilder(input.length).also { output = it }
+                target.append(input, copiedUntil, localStart)
+                if (at - localStart > 1) target.append(input[localStart])
+                target.append("***").append(input, at, matchedEnd)
+                copiedUntil = matchedEnd
+                cursor = matchedEnd
+                localStart = cursor
             } else {
-                "***${email.substring(atIndex)}"
+                cursor = domainEnd
+                localStart = domainStart
             }
         }
+        return output?.append(input, copiedUntil, input.length)?.toString() ?: input
     }
+
+    /** ASCII letters accepted by the existing email contract. */
+    private fun isAsciiLetter(value: Char): Boolean = value in 'a'..'z' || value in 'A'..'Z'
+
+    /** Domain run characters; @ and local-only punctuation end this lookahead. */
+    private fun isEmailDomainCharacter(value: Char): Boolean =
+        isAsciiLetter(value) || value in '0'..'9' || value == '.' || value == '-'
+
+    /** Local run characters accepted by the historical pattern. */
+    private fun isEmailLocalCharacter(value: Char): Boolean =
+        isEmailDomainCharacter(value) || value == '_' || value == '%' || value == '+'
 
     /**
      * 身份证号脱敏规则。
@@ -147,9 +197,6 @@ object DefaultSanitizationRules {
     /** 中国大陆手机号：1 开头，第二位 3-9，共 11 位。 */
     private const val PHONE_PATTERN = """(?<!\d)1[3-9]\d{9}(?!\d)"""
 
-    /** 邮箱：标准格式 user@domain.tld。 */
-    private const val EMAIL_PATTERN = """[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"""
-
     /** 18 位身份证号：1-9 开头，6 位地区码 + 8 位生日 + 3 位序号 + 1 位校验。 */
     private const val ID_CARD_PATTERN = """(?<!\d)[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx](?!\d)"""
 
@@ -161,7 +208,6 @@ object DefaultSanitizationRules {
 
     /** Precompiled immutable regexes avoid reparsing attacker-influenced text on every event. */
     private val PHONE_REGEX = Regex(PHONE_PATTERN)
-    private val EMAIL_REGEX = Regex(EMAIL_PATTERN)
     private val ID_CARD_REGEX = Regex(ID_CARD_PATTERN)
     private val URL_TOKEN_REGEX = Regex(URL_TOKEN_PATTERN)
     private val URL_PASSWORD_REGEX = Regex(URL_PASSWORD_PATTERN)

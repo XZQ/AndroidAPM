@@ -6,6 +6,7 @@ public final class com/apm/core/Apm {
 	public static synthetic fun emitCriticalSync$default (Lcom/apm/core/Apm;Ljava/lang/String;Ljava/lang/String;Lcom/apm/model/ApmEventKind;Lcom/apm/model/ApmSeverity;Lcom/apm/model/ApmPriority;Ljava/lang/String;Ljava/lang/Boolean;Ljava/util/Map;Ljava/util/Map;ILjava/lang/Object;)Z
 	public final fun grantCollectionConsent ()V
 	public final fun init (Landroid/app/Application;Lcom/apm/core/ApmConfig;)V
+	public final fun init (Landroid/app/Application;Lcom/apm/core/ApmConfig;Lcom/apm/model/ApmOccurrenceContext;)V
 	public final fun isCollectionConsentRevoked ()Z
 	public final fun isInitialized ()Z
 	public final fun recentEvents (I)Ljava/util/List;
@@ -250,6 +251,7 @@ public final class com/apm/core/ConsentRevocationResult {
 	public final fun getDiscardedQueuedEventCount ()I
 	public final fun getIpcFilesCleared ()Z
 	public final fun getStorageCleared ()Z
+	public final fun getUploadWorkerStopped ()Ljava/lang/Boolean;
 	public final fun getWasInitialized ()Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
@@ -667,6 +669,7 @@ public final class com/apm/core/selfmonitor/SdkDropReason : java/lang/Enum {
 	public static final field STORAGE_PAYLOAD_REJECTED Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field UNCLASSIFIED Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field UPLOADER_REJECTED Lcom/apm/core/selfmonitor/SdkDropReason;
+	public static final field UPLOAD_PROTOCOL_REJECTED Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static fun values ()[Lcom/apm/core/selfmonitor/SdkDropReason;

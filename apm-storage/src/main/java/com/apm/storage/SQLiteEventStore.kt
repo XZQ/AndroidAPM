@@ -31,7 +31,7 @@ class SQLiteEventStore(
     private val maxEvents: Int = DEFAULT_MAX_EVENTS,
     private val maxPayloadBytes: Long = DEFAULT_MAX_PAYLOAD_BYTES,
     private val maxEventPayloadBytes: Int = DEFAULT_MAX_EVENT_PAYLOAD_BYTES
-) : PendingEventStore {
+) : PendingEventStore, DiscardablePendingEventStore {
 
     init {
         require(maxEvents > 0) { "maxEvents must be positive" }
@@ -426,6 +426,17 @@ class SQLiteEventStore(
     /** Deletes only rows still owned by the acknowledging worker. */
     @Synchronized
     override fun acknowledgeClaim(ownerId: String, ids: List<Long>): Int {
+        return deleteClaimedRows(ownerId, ids)
+    }
+
+    /** Removes permanently rejected rows without representing them as collector acknowledgements. */
+    @Synchronized
+    override fun discardClaim(ownerId: String, ids: List<Long>): Int {
+        return deleteClaimedRows(ownerId, ids)
+    }
+
+    /** Shared ownership predicate and accounting for explicit ACK and rejection dispositions. */
+    private fun deleteClaimedRows(ownerId: String, ids: List<Long>): Int {
         require(ownerId.isNotBlank()) { "ownerId must not be blank" }
         if (ids.isEmpty()) {
             return 0
@@ -843,7 +854,11 @@ class SQLiteEventStore(
     /** Restores a migrated event ID when the payload predates codec version 2. */
     private fun decodeStoredEvent(payload: ByteArray, storedEventId: String): ApmEvent {
         val event = eventDecoder(payload)
-        return if (event.eventId.isBlank()) event.copy(eventId = storedEventId) else event
+        if (event.eventId.isNotBlank()) {
+            return event
+        }
+        val identified = event.copy(eventId = storedEventId)
+        return event.occurrence?.let(identified::withOccurrenceContext) ?: identified
     }
 
     /** Deletes rows inside an existing transaction without reopening the database. */

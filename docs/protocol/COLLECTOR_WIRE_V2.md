@@ -1,12 +1,12 @@
 # AndroidAPM Collector Wire Protocol V2
 
-> 状态：客户端协议已冻结｜同步日期：2026-07-31｜参考服务端已联调，生产部署仍位于仓库边界之外
+> 状态：兼容协议已冻结｜同步日期：2026-08-28｜参考服务端已联调，当前 strict built-in HTTP 已升级到 V3
 
 ## 1. 适用范围
 
 本协议对应 `SerializationFormat.PROTOBUF_ENVELOPE_V2`。它解决 legacy Line Protocol 和“4 字节长度 + 裸事件 Protobuf”没有 schema/SDK/resource/batch ACK 的问题。旧 `LINE_PROTOCOL`、`PROTOBUF` 保留用于兼容，不被静默解释成 V2。
 
-正式 HTTP 接入使用 `ApmRuntimeProfile.PRODUCTION_STRICT` 时，默认 uploader 必须选择 V2；显式 custom uploader 自行定义并承担等价协议责任。
+V2 继续用于 batch-declared 兼容接入。正式 HTTP 接入使用 `ApmRuntimeProfile.PRODUCTION_STRICT` 时，默认 uploader 现在必须选择 occurrence-bound V3；显式 custom uploader 自行定义并承担等价协议责任。V2 event 不得携带 occurrence field 16，客户端 serializer 会 fail closed，避免把业务要求的发生时身份静默降级成 batch resource。
 
 ## 2. 请求
 
@@ -113,4 +113,8 @@ V2 的 HTTP 2xx 不是充分成功条件。Collector 必须在同一响应中返
 - 破坏性变化必须新增 schema version、media-type version 与配置枚举，不能在 V2 下静默切换。
 - Collector 仍需实现鉴权、租户隔离、eventId 幂等、协议错误指标和死信；这些不属于客户端仓库。
 
+需要发生时 release/build/installation 或精确符号化的生产流量必须使用 [Collector Wire Protocol V3](COLLECTOR_WIRE_V3.md)。V2 `service_version`/installation 只来自上传 batch resource，服务端分别标记为 `BATCH_DECLARED` 并在持久化前对 installation 做 tenant-scoped HMAC；应用升级后它不能证明旧 outbox 事件的发生版本。
+
 2026-07-31，独立 `AndroidAPM-Server` 仓库的 `codex/collector-v2-e2e` 分支已实现 V2 decoder、typed scalar、resource/header 一致性、提交后精确 ACK 和 `(tenant_id,event_id)` 去重。客户端仓库的 `tools/verify_collector_e2e.py` 会构建真实 `HttpApmUploader`，经 Gzip HTTP 向运行中的 Gateway 连续重放同一 batch，并从测试用 SQLite 核对唯一事件、类型和 resource。该证据冻结了跨语言 wire 兼容性；它不代表 PostgreSQL 并发/事务、TLS ingress、反向代理丢 ACK、SigNoz 或生产部署已经验收。
+
+2026-08-28，同一真实 probe 保留上述 V2 断言并新增 V3 batch；最终 4 个唯一 eventId 中，V2 的 typed scalar、`BATCH_DECLARED` 质量、tenant-scoped installation HMAC/key version 和明文删除继续被独立核对。历史 V2 结果没有被改写成 V3，也没有被外推为生产环境验收。

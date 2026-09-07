@@ -4,6 +4,7 @@ import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.core.throttle.GrayReleaseController
 import com.apm.core.diagnostics.DiagnosticsConfig
 import com.apm.model.ApmResourceContext
+import com.apm.model.ApmOccurrenceContext
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.HttpHeaderProvider
@@ -236,9 +237,14 @@ data class ApmConfig(
  * explicit consent, durable storage, mandatory sanitization, disabled debug logging, and either a
  * verified HTTPS endpoint or a non-Logcat custom uploader.
  */
-internal fun ApmConfig.validateForRuntime() {
+internal fun ApmConfig.validateForRuntime(occurrenceContext: ApmOccurrenceContext? = null) {
     require(initialCollectionConsent != CollectionConsent.DENIED) {
         "APM collection consent is denied"
+    }
+    if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+        require(occurrenceContext?.hasStrictOccurrenceIdentity() == true) {
+            "PROTOBUF_ENVELOPE_V3 requires occurrence-bound version, build, variant, and installation identity"
+        }
     }
     if (runtimeProfile != ApmRuntimeProfile.PRODUCTION_STRICT) {
         return
@@ -262,8 +268,8 @@ internal fun ApmConfig.validateForRuntime() {
         "PRODUCTION_STRICT requires an HTTPS endpoint or a custom uploader"
     }
     if (uploader == null) {
-        require(serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
-            "PRODUCTION_STRICT default HTTP delivery requires PROTOBUF_ENVELOPE_V2"
+        require(serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+            "PRODUCTION_STRICT default HTTP delivery requires PROTOBUF_ENVELOPE_V3"
         }
         require(resourceContext.hasStrictResourceIdentity()) {
             "PRODUCTION_STRICT requires bounded service, version, environment, and installation resource identity"
@@ -285,6 +291,32 @@ private fun ApmResourceContext.hasStrictResourceIdentity(): Boolean {
         serviceVersion.isStrictResourceValue() &&
         deploymentEnvironment.isStrictResourceValue() &&
         installationId.isStrictResourceValue()
+}
+
+/** Returns whether the per-event identity is complete and safe to freeze into durable rows. */
+private fun ApmOccurrenceContext.hasStrictOccurrenceIdentity(): Boolean {
+    if (!serviceVersion.isStrictResourceValue() ||
+        !versionCode.isCanonicalVersionCode() ||
+        !appBuild.isStrictResourceValue() ||
+        !variant.isStrictResourceValue() ||
+        !installationId.isStrictResourceValue() ||
+        nativeFrames.size > MAX_OCCURRENCE_NATIVE_FRAMES
+    ) {
+        return false
+    }
+    return nativeFrames.all { frame ->
+        val loadBias = frame.loadBias
+        frame.abi.isStrictResourceValue() &&
+            frame.moduleBuildId.isStrictResourceValue() &&
+            frame.moduleName.isStrictResourceValue() &&
+            frame.moduleRelativePc >= 0L &&
+            (loadBias == null || loadBias >= 0L)
+    }
+}
+
+/** Returns whether versionCode is canonical unsigned decimal text within the identity bound. */
+private fun String.isCanonicalVersionCode(): Boolean {
+    return isStrictResourceValue() && all(Char::isDigit) && (length == 1 || first() != '0')
 }
 
 /** Applies the fixed resource-value bound before any protobuf allocation occurs. */
@@ -312,6 +344,9 @@ private const val STRICT_HTTPS_SCHEME = "https"
 
 /** Maximum UTF-16 characters in each strict standard resource value. */
 private const val MAX_RESOURCE_VALUE_CHARS = 256
+
+/** Maximum native frames admitted into one strict occurrence snapshot. */
+private const val MAX_OCCURRENCE_NATIVE_FRAMES = 256
 
 /** Minimum strict request budget: 64 KiB. */
 private const val MIN_STRICT_BATCH_BYTES = 64 * 1024

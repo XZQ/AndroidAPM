@@ -4,7 +4,9 @@ import android.app.Application
 import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.core.diagnostics.HostIntegrationRegistry
 import com.apm.model.ApmEvent
+import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmPriority
+import com.apm.model.SerializationFormat
 import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 
@@ -27,7 +29,9 @@ class ApmContext internal constructor(
     /** Optional cross-process event bridge. */
     private val processCoordinator: ProcessEventCoordinator? = null,
     /** Whether the current process owns network upload. */
-    private val isUploaderProcess: Boolean = true
+    private val isUploaderProcess: Boolean = true,
+    /** Host occurrence identity frozen once by the occurrence-aware [Apm.init] overload. */
+    private val occurrenceContext: ApmOccurrenceContext? = null
 ) {
     /** SDK 自监控组件，用于模块记录自身运行指标。 */
     var selfMonitor: SdkSelfMonitor? = null
@@ -39,10 +43,11 @@ class ApmContext internal constructor(
      * @param event 已构造完成的 APM 事件
      */
     fun emit(event: ApmEvent) {
+        val occurrenceBoundEvent = bindOccurrence(event)
         if (processCoordinator != null && !isUploaderProcess) {
-            processCoordinator.writeEvent(event)
+            processCoordinator.writeEvent(occurrenceBoundEvent)
         } else {
-            dispatcher.dispatch(event)
+            dispatcher.dispatch(occurrenceBoundEvent)
         }
     }
 
@@ -64,9 +69,11 @@ class ApmContext internal constructor(
     ) {
         if (processCoordinator != null && !isUploaderProcess) {
             // IPC 写文件需要完整事件，立即构建
-            processCoordinator.writeEvent(eventFactory())
+            processCoordinator.writeEvent(bindOccurrence(eventFactory()))
         } else {
-            dispatcher.dispatchLazy(priority, sourceModule, estimatedBytes, eventFactory)
+            dispatcher.dispatchLazy(priority, sourceModule, estimatedBytes) {
+                bindOccurrence(eventFactory())
+            }
         }
     }
 
@@ -77,19 +84,40 @@ class ApmContext internal constructor(
      * @return true when the event reached the durable local hand-off point
      */
     fun emitCriticalSync(event: ApmEvent): Boolean {
+        val occurrenceBoundEvent = bindOccurrence(event)
         return if (processCoordinator != null && !isUploaderProcess) {
             selfMonitor?.recordEmit()
-            val result = processCoordinator.writeEventSyncWithResult(event)
+            val result = processCoordinator.writeEventSyncWithResult(occurrenceBoundEvent)
             if (!result.success) {
                 selfMonitor?.recordDrop(
-                    event.priority,
+                    occurrenceBoundEvent.priority,
                     result.dropReason ?: SdkDropReason.IPC_HANDOFF_FAILURE
                 )
             }
             result.success
         } else {
-            dispatcher.dispatchCriticalSync(event)
+            dispatcher.dispatchCriticalSync(occurrenceBoundEvent)
         }
+    }
+
+    /**
+     * Freezes the init-time occurrence identity before any durable or asynchronous hand-off.
+     *
+     * A module may provide native frames on its event occurrence object, but it cannot replace the
+     * host release/build/installation values captured by the runtime configuration.
+     */
+    private fun bindOccurrence(event: ApmEvent): ApmEvent {
+        if (config.serializationFormat != SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+            return event
+        }
+        val configured = requireNotNull(occurrenceContext) {
+            "Schema V3 runtime is missing its occurrence identity"
+        }
+        val moduleFrames = event.occurrence?.nativeFrames
+        val snapshot = configured.copy(
+            nativeFrames = moduleFrames ?: configured.nativeFrames
+        )
+        return event.withOccurrenceContext(snapshot)
     }
 
     /**
@@ -124,7 +152,8 @@ class ApmContext internal constructor(
             logger = scopedLogger,
             dispatcher = dispatcher,
             processCoordinator = processCoordinator,
-            isUploaderProcess = isUploaderProcess
+            isUploaderProcess = isUploaderProcess,
+            occurrenceContext = occurrenceContext
         ).also { scopedContext -> scopedContext.selfMonitor = selfMonitor }
     }
 }

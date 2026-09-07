@@ -15,6 +15,7 @@ import com.apm.core.throttle.RateLimiter
 import com.apm.core.throttle.DynamicEventPolicy
 import com.apm.core.throttle.DynamicConfigProvider
 import com.apm.uploader.ApmUploader
+import com.apm.uploader.HttpApmUploader
 import com.apm.uploader.RetryPolicy
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
@@ -46,7 +47,9 @@ internal inline fun runAggregationMaintenance(
 internal data class ConsentStorageCleanupResult(
     val discardedQueuedEventCount: Int,
     val clearedStoredEventCount: Int?,
-    val storageCleared: Boolean
+    val storageCleared: Boolean,
+    /** Actual worker termination evidence; unknown for unsupported custom transports. */
+    val uploadWorkerStopped: Boolean? = null
 )
 
 /**
@@ -754,13 +757,14 @@ internal class ApmDispatcher(
                 val remaining = agg.flush()
                 for (event in remaining) {
                     try {
-                        val appendResult = store.appendWithResult(event)
+                        val sanitized = piiSanitizer?.sanitizeFrozen(event) ?: event
+                        val appendResult = store.appendWithResult(sanitized)
                         recordStorageResult(appendResult)
                         if (appendResult.acceptedEventCount > 0) {
                             if (persistentUploadWorker != null) {
                                 persistentUploadWorker.signal()
                             } else {
-                                uploader.upload(event)
+                                uploader.upload(sanitized)
                             }
                         }
                     } catch (e: Exception) {
@@ -804,10 +808,15 @@ internal class ApmDispatcher(
             logger.w("Dispatcher did not stop within ${DISPATCH_SHUTDOWN_TIMEOUT_MS}ms during consent revocation")
         }
 
+        var uploadWorkerStopped: Boolean? = null
         if (persistentUploadWorker != null) {
-            shutdownPhase("persistent uploader") { persistentUploadWorker.shutdown() }
+            uploadWorkerStopped = false
+            shutdownPhase("persistent uploader") { uploadWorkerStopped = persistentUploadWorker.shutdown() }
         } else {
-            shutdownPhase("uploader") { uploader.shutdown() }
+            shutdownPhase("uploader") {
+                uploader.shutdown()
+                uploadWorkerStopped = (uploader as? HttpApmUploader)?.isShutdownComplete()
+            }
         }
 
         val storedEventCount = try {
@@ -829,7 +838,8 @@ internal class ApmDispatcher(
         return ConsentStorageCleanupResult(
             discardedQueuedEventCount = discardedQueuedEvents,
             clearedStoredEventCount = storedEventCount,
-            storageCleared = storageCleared
+            storageCleared = storageCleared,
+            uploadWorkerStopped = uploadWorkerStopped
         )
     }
 

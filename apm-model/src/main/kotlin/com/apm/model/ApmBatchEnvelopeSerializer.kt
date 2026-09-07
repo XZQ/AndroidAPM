@@ -30,14 +30,39 @@ object ApmBatchEnvelopeSerializer {
         events: List<ApmEvent>,
         resource: ApmResourceContext,
         sentAtMs: Long = System.currentTimeMillis()
+    ): EncodedApmBatch = serializeForSchema(
+        events,
+        resource,
+        sentAtMs,
+        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2
+    )
+
+    /** Encodes one schema-V3 batch and requires occurrence identity on every event. */
+    fun serializeV3(
+        events: List<ApmEvent>,
+        resource: ApmResourceContext,
+        sentAtMs: Long = System.currentTimeMillis()
+    ): EncodedApmBatch = serializeForSchema(
+        events,
+        resource,
+        sentAtMs,
+        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V3
+    )
+
+    /** Shared explicit-envelope serializer with schema-specific event semantics. */
+    private fun serializeForSchema(
+        events: List<ApmEvent>,
+        resource: ApmResourceContext,
+        sentAtMs: Long,
+        schemaVersion: Int
     ): EncodedApmBatch {
         require(events.isNotEmpty()) { "Versioned APM batch must contain at least one event" }
         // 公共入口直接预编码后走统一写路径，保证 serialize 与 serializeWithinBudget 输出一致
         val encodedEvents = ArrayList<ByteArray>(events.size)
         for (event in events) {
-            encodedEvents += ProtobufSerializer.serializeVersionedEvent(event)
+            encodedEvents += serializeEventForSchema(event, schemaVersion)
         }
-        return serializePreEncoded(events, encodedEvents, resource, sentAtMs)
+        return serializePreEncoded(events, encodedEvents, resource, sentAtMs, schemaVersion)
     }
 
     /**
@@ -60,6 +85,35 @@ object ApmBatchEnvelopeSerializer {
         resource: ApmResourceContext,
         maxBatchBytes: Int,
         sentAtMs: Long
+    ): List<EncodedApmBatch>? = serializeWithinBudgetForSchema(
+        events,
+        resource,
+        maxBatchBytes,
+        sentAtMs,
+        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2
+    )
+
+    /** Splits schema-V3 events within the same exact uncompressed payload budget. */
+    fun serializeWithinBudgetV3(
+        events: List<ApmEvent>,
+        resource: ApmResourceContext,
+        maxBatchBytes: Int,
+        sentAtMs: Long
+    ): List<EncodedApmBatch>? = serializeWithinBudgetForSchema(
+        events,
+        resource,
+        maxBatchBytes,
+        sentAtMs,
+        ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V3
+    )
+
+    /** Shared budget splitter for explicit V2/V3 envelopes. */
+    private fun serializeWithinBudgetForSchema(
+        events: List<ApmEvent>,
+        resource: ApmResourceContext,
+        maxBatchBytes: Int,
+        sentAtMs: Long,
+        schemaVersion: Int
     ): List<EncodedApmBatch>? {
         require(maxBatchBytes > 0) { "maxBatchBytes must be positive" }
         if (events.isEmpty()) {
@@ -70,14 +124,14 @@ object ApmBatchEnvelopeSerializer {
         val encodedEvents = ArrayList<ByteArray>(events.size)
         val contributions = IntArray(events.size)
         for (index in events.indices) {
-            val encoded = ProtobufSerializer.serializeVersionedEvent(events[index])
+            val encoded = serializeEventForSchema(events[index], schemaVersion)
             encodedEvents += encoded
             contributions[index] = eventContributionBytes(encoded.size)
         }
 
         // 单事件探针：固定组件大小 = 探针 envelope 大小 - 首事件贡献
         val probe = serializePreEncoded(
-            events.subList(0, 1), encodedEvents.subList(0, 1), resource, sentAtMs
+            events.subList(0, 1), encodedEvents.subList(0, 1), resource, sentAtMs, schemaVersion
         )
         val fixedBaseBytes = probe.payload.size - contributions[0]
         if (probe.payload.size > maxBatchBytes) {
@@ -100,7 +154,8 @@ object ApmBatchEnvelopeSerializer {
                 events.subList(batchStart, index),
                 encodedEvents.subList(batchStart, index),
                 resource,
-                sentAtMs
+                sentAtMs,
+                schemaVersion
             )
             if (committed.payload.size > maxBatchBytes) {
                 // 增量算术与实际编码出现偏差时的兜底：宁可失败也不返回超预算批次
@@ -119,7 +174,8 @@ object ApmBatchEnvelopeSerializer {
                 events.subList(batchStart, events.size),
                 encodedEvents.subList(batchStart, events.size),
                 resource,
-                sentAtMs
+                sentAtMs,
+                schemaVersion
             )
         }
         return encodedBatches
@@ -136,11 +192,12 @@ object ApmBatchEnvelopeSerializer {
         events: List<ApmEvent>,
         encodedEvents: List<ByteArray>,
         resource: ApmResourceContext,
-        sentAtMs: Long
+        sentAtMs: Long,
+        schemaVersion: Int
     ): EncodedApmBatch {
         require(events.isNotEmpty()) { "Versioned APM batch must contain at least one event" }
         require(events.size == encodedEvents.size) { "Encoded event count mismatch" }
-        val batchId = stableBatchId(events)
+        val batchId = stableBatchId(events, schemaVersion)
         // 容量按已编码字节数精确预估，仅加固定头部余量
         var encodedTotal = 0
         for (encoded in encodedEvents) {
@@ -148,7 +205,7 @@ object ApmBatchEnvelopeSerializer {
         }
         val buffer = ByteArrayOutputStream(encodedTotal + ESTIMATE_ENVELOPE_FIXED_BYTES)
         val writer = ProtobufWriter(buffer)
-        writer.writeInt64(FIELD_SCHEMA_VERSION, ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toLong())
+        writer.writeInt64(FIELD_SCHEMA_VERSION, schemaVersion.toLong())
         writer.writeString(FIELD_SDK_NAME, ApmWireProtocol.SDK_NAME)
         writer.writeString(FIELD_SDK_VERSION, ApmWireProtocol.SDK_VERSION)
         writer.writeString(FIELD_BATCH_ID, batchId)
@@ -160,6 +217,17 @@ object ApmBatchEnvelopeSerializer {
         }
         writer.flush()
         return EncodedApmBatch(batchId, events.size, buffer.toByteArray())
+    }
+
+    /** Selects the only valid event encoding for one explicit envelope schema. */
+    private fun serializeEventForSchema(event: ApmEvent, schemaVersion: Int): ByteArray {
+        return when (schemaVersion) {
+            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2 ->
+                ProtobufSerializer.serializeVersionedEvent(event)
+            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V3 ->
+                ProtobufSerializer.serializeVersionedEventV3(event)
+            else -> error("Unsupported APM envelope schema version: $schemaVersion")
+        }
     }
 
     /** Encodes the fixed standard resource block without arbitrary unreviewed attributes. */
@@ -195,9 +263,9 @@ object ApmBatchEnvelopeSerializer {
     }
 
     /** Derives a retry-stable batch identity from length-delimited ordered event IDs. */
-    private fun stableBatchId(events: List<ApmEvent>): String {
+    private fun stableBatchId(events: List<ApmEvent>, schemaVersion: Int): String {
         val digest = MessageDigest.getInstance(SHA_256)
-        digest.update(ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toByte())
+        digest.update(schemaVersion.toByte())
         for (event in events) {
             val identity = event.eventId.toByteArray(Charsets.UTF_8)
             // Length delimiting prevents ambiguous concatenations such as ["ab", "c"] and ["a", "bc"].
@@ -213,7 +281,12 @@ object ApmBatchEnvelopeSerializer {
             hex.append(HEX_DIGITS[byte ushr BITS_4])
             hex.append(HEX_DIGITS[byte and HALF_BYTE_MASK])
         }
-        return BATCH_ID_PREFIX + hex
+        val prefix = when (schemaVersion) {
+            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2 -> BATCH_ID_PREFIX_V2
+            ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V3 -> BATCH_ID_PREFIX_V3
+            else -> error("Unsupported APM envelope schema version: $schemaVersion")
+        }
+        return prefix + hex
     }
 
     /** Encodes a positive string length in fixed big-endian form for batch hashing. */
@@ -247,7 +320,9 @@ object ApmBatchEnvelopeSerializer {
     /** Resource field: anonymous installation identity. */
     private const val RESOURCE_INSTALLATION_ID = 4
     /** Stable batch identity prefix naming the schema generation. */
-    private const val BATCH_ID_PREFIX = "b2-"
+    private const val BATCH_ID_PREFIX_V2 = "b2-"
+    /** Stable schema-V3 batch identity prefix. */
+    private const val BATCH_ID_PREFIX_V3 = "b3-"
     /** SHA-256 bytes retained in the compact batch identity. */
     private const val BATCH_ID_HASH_BYTES = 16
     /** SHA-256 algorithm name. */

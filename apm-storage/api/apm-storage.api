@@ -1,3 +1,7 @@
+public abstract interface class com/apm/storage/DiscardablePendingEventStore {
+	public abstract fun discardClaim (Ljava/lang/String;Ljava/util/List;)I
+}
+
 public final class com/apm/storage/EventDbHelper : android/database/sqlite/SQLiteOpenHelper {
 	public static final field Companion Lcom/apm/storage/EventDbHelper$Companion;
 	public fun <init> (Landroid/content/Context;Ljava/lang/String;I)V
@@ -117,7 +121,7 @@ public final class com/apm/storage/PendingEventStore$DefaultImpls {
 	public static fun releaseClaims (Lcom/apm/storage/PendingEventStore;Ljava/lang/String;)I
 }
 
-public final class com/apm/storage/SQLiteEventStore : com/apm/storage/PendingEventStore {
+public final class com/apm/storage/SQLiteEventStore : com/apm/storage/DiscardablePendingEventStore, com/apm/storage/PendingEventStore {
 	public static final field Companion Lcom/apm/storage/SQLiteEventStore$Companion;
 	public fun <init> (Lcom/apm/storage/EventDbHelper;IJI)V
 	public synthetic fun <init> (Lcom/apm/storage/EventDbHelper;IJIILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -130,6 +134,7 @@ public final class com/apm/storage/SQLiteEventStore : com/apm/storage/PendingEve
 	public fun clear ()V
 	public fun close ()V
 	public fun deletePending (Ljava/util/List;)I
+	public fun discardClaim (Ljava/lang/String;Ljava/util/List;)I
 	public fun failClaim (Ljava/lang/String;Ljava/util/List;)V
 	public fun markRetry (Ljava/util/List;)V
 	public fun pendingCount ()I

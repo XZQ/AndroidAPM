@@ -114,12 +114,13 @@ fun AggregatedEvent.toApmEvent(): ApmEvent {
     )
     // 展开每个字段的统计指标
     for ((fieldName, stats) in fieldStats) {
-        fields["${fieldName}_p50"] = "%.2f".format(stats.p50)
-        fields["${fieldName}_p90"] = "%.2f".format(stats.p90)
-        fields["${fieldName}_p99"] = "%.2f".format(stats.p99)
-        fields["${fieldName}_min"] = "%.2f".format(stats.min)
-        fields["${fieldName}_max"] = "%.2f".format(stats.max)
-        fields["${fieldName}_sum"] = "%.2f".format(stats.sum)
+        fields["${fieldName}_p50"] = stats.p50
+        fields["${fieldName}_p90"] = stats.p90
+        fields["${fieldName}_p99"] = stats.p99
+        fields["${fieldName}_min"] = stats.min
+        fields["${fieldName}_max"] = stats.max
+        fields["${fieldName}_sum"] = stats.sum
+        fields["${fieldName}_sample_count"] = stats.sampleCount
     }
     return ApmEvent(
         module = module,

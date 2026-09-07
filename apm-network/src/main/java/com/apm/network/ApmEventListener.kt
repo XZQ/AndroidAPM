@@ -166,7 +166,9 @@ class ApmEventListener(
     override fun callEnd(call: Call) {
         val timing = callTimings.remove(call) ?: return
         val totalMs = elapsedMs(timing.callStartNs)
-        reportNetworkStats(timing, totalMs, timing.connectionError)
+        // Route attempts may fail before another address succeeds. Only callFailed describes
+        // terminal transport failure; retain connectionError solely as attempt diagnostics.
+        reportNetworkStats(timing, totalMs, error = null)
     }
 
     override fun callFailed(call: Call, ioe: IOException) {

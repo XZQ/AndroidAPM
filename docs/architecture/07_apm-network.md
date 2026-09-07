@@ -1,6 +1,6 @@
 # apm-network 模块
 
-> 同步日期：2026-07-21｜模块名：`network`
+> 同步日期：2026-09-07｜模块名：`network`
 
 ## 目的与接入
 
@@ -38,6 +38,8 @@ val body = try {
 ```
 
 `traceHttpUrlConnection` 读取一次 `responseCode` 作为明确执行点，并将宿主 block 耗时计入 total duration。它不消费正文、不 disconnect、不改变超时/重定向配置，也不伪造 HttpURLConnection 无法提供的 DNS/TCP/TLS 分阶段数据。transport `IOException` 保留原异常并报告网络错误；headers 已收到后的宿主解析异常保留真实 HTTP outcome；监控报告的 recoverable 失败不会覆盖宿主结果。
+
+OkHttp 的中间 `connectFailed` 仅表示一次 route attempt 失败，最终 `callEnd` 仍按响应状态统计成功；只有 `callFailed` 表示最终 transport failure。JVM 回归覆盖多地址回退成功、连接复用、重定向以及收到 headers 后 body 失败。测试复用已有 OkHttp 依赖，发布时仍为 compileOnly。
 
 ## 采集
 

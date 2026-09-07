@@ -5,9 +5,11 @@ import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.storage.EventStorePruneResult
 import com.apm.storage.PendingEvent
 import com.apm.storage.PendingEventStore
+import com.apm.storage.DiscardablePendingEventStore
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.RetryPolicy
+import com.apm.uploader.ValidatingApmUploader
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
@@ -47,7 +49,9 @@ internal class PersistentUploadWorker(
     /** Logger for recoverable worker failures. */
     private val logger: ApmLogger,
     /** Optional SDK health monitor. */
-    private val selfMonitor: SdkSelfMonitor?
+    private val selfMonitor: SdkSelfMonitor?,
+    /** Bounded stop wait; injectable for deterministic cancellation-race tests. */
+    private val shutdownTimeoutMs: Long = SHUTDOWN_TIMEOUT_MS
 ) {
     /** Failed-attempt count at which a row is exhausted, including the initial attempt. */
     private val retryFailureLimit = retryPolicy.maxRetries.coerceAtLeast(0).let { configuredRetries ->
@@ -79,7 +83,7 @@ internal class PersistentUploadWorker(
     /**
      * Stops network processing while leaving unacknowledged rows durable.
      */
-    fun shutdown() {
+    fun shutdown(): Boolean {
         running = false
         signal()
         // Ask the transport to cancel or stop before making owned rows
@@ -92,10 +96,17 @@ internal class PersistentUploadWorker(
             Apm.recordInternalError(ERROR_SHUTDOWN_UPLOADER, error)
         }
         executor.shutdownNow()
-        try {
-            executor.awaitTermination(SHUTDOWN_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        val terminated = try {
+            executor.awaitTermination(shutdownTimeoutMs, TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             Thread.currentThread().interrupt()
+            executor.isTerminated
+        }
+        // A still-running transport retains its lease until expiry. Releasing it here could cause
+        // another worker to send the same row while this request is still active.
+        if (!terminated) {
+            logger.w("Persistent upload worker did not stop within ${shutdownTimeoutMs}ms")
+            return false
         }
         try {
             store.releaseClaims(ownerId)
@@ -103,12 +114,13 @@ internal class PersistentUploadWorker(
             logger.e("Failed to release persistent upload claims", error)
             Apm.recordInternalError(ERROR_RELEASE_CLAIMS, error)
         }
+        return true
     }
 
     /** Main durable replay loop. */
     private fun processLoop() {
         while (running) {
-            val batch = try {
+            val claimed = try {
                 store.claimPending(
                     ownerId = ownerId,
                     limit = batchSize,
@@ -120,6 +132,9 @@ internal class PersistentUploadWorker(
                 Apm.recordInternalError(ERROR_CLAIM, error)
                 emptyList()
             }
+            if (!running) return
+            val batch = isolateProtocolRejections(claimed)
+            if (!running) return
             val pendingCount = try {
                 store.pendingCount()
             } catch (error: Exception) {
@@ -132,12 +147,16 @@ internal class PersistentUploadWorker(
             if (batch.isEmpty()) {
                 // 空闲周期顺带清理重试耗尽/超龄的行，防止 outbox 永久膨胀
                 pruneExpiredRows()
-                awaitWake(IDLE_POLL_MS)
+                awaitWake(if (claimed.isEmpty()) IDLE_POLL_MS else MIN_RETRY_WAIT_MS)
                 continue
             }
 
             val startedAt = ApmClock.monotonicTimeMillis()
-            if (uploadOnce(batch)) {
+            val uploaded = uploadOnce(batch)
+            // Consent erasure may already have closed storage after a timed-out shutdown. Never
+            // acknowledge, retry, prune, or send another event after the stop flag is observed.
+            if (!running) return
+            if (uploaded) {
                 val ids = batch.map(PendingEvent::id)
                 try {
                     val acknowledged = store.acknowledgeClaim(ownerId, ids)
@@ -175,7 +194,7 @@ internal class PersistentUploadWorker(
                     null
                 }
                 val backoffMs = boundedRetryWaitMs(retryPolicy.delayForAttempt(retryAttempt), retryAfterMs)
-                awaitWake(backoffMs)
+                awaitRetryDeadline(backoffMs)
             }
         }
     }
@@ -188,17 +207,80 @@ internal class PersistentUploadWorker(
      * @return true when the complete batch was accepted
      */
     private fun uploadOnce(batch: List<PendingEvent>): Boolean {
+        if (!running) return false
         val events = batch.map(PendingEvent::event)
         return try {
             if (uploader is BatchApmUploader) {
                 uploader.uploadBatch(events)
             } else {
-                events.all(uploader::upload)
+                events.all { running && uploader.upload(it) }
             }
         } catch (error: Exception) {
             logger.e("Persistent upload attempt failed", error)
             Apm.recordInternalError(ERROR_UPLOAD, error)
             false
+        }
+    }
+
+    /**
+     * Isolates historical/incompatible rows before constructing a transport batch. SQLite uses
+     * explicit owner-aware discard; older custom stores retain their existing bounded retry/TTL
+     * policy for rejected rows only. Valid rows never inherit a rejected row's failure count.
+     */
+    private fun isolateProtocolRejections(batch: List<PendingEvent>): List<PendingEvent> {
+        val validator = uploader as? ValidatingApmUploader ?: return batch
+        val accepted = ArrayList<PendingEvent>(batch.size)
+        val rejected = ArrayList<PendingEvent>()
+        for (row in batch) {
+            val reason = try {
+                validator.rejectionReason(row.event)
+            } catch (error: Exception) {
+                // A broken custom validator is not evidence that an event is permanently invalid.
+                Apm.recordInternalError(ERROR_PREFLIGHT, error)
+                null
+            }
+            if (reason == null) accepted += row else rejected += row
+        }
+        if (rejected.isEmpty() || !running) return accepted
+        try {
+            val ids = rejected.map(PendingEvent::id)
+            if (store is DiscardablePendingEventStore) {
+                val discarded = store.discardClaim(ownerId, ids)
+                selfMonitor?.recordDropsByPriority(
+                    totalCount = discarded,
+                    priorityCounts = if (discarded == rejected.size) {
+                        rejected.groupingBy { it.event.priority }.eachCount()
+                    } else emptyMap(),
+                    reason = SdkDropReason.UPLOAD_PROTOCOL_REJECTED
+                )
+                logger.w("Discarded $discarded protocol-incompatible outbox rows before upload")
+            } else {
+                store.failClaim(ownerId, ids)
+                logger.w("Isolated ${ids.size} protocol-incompatible rows under custom-store retry policy")
+                pruneExpiredRows()
+            }
+        } catch (error: Exception) {
+            Apm.recordInternalError(ERROR_PREFLIGHT, error)
+            logger.e("Failed to dispose protocol-incompatible outbox rows", error)
+        }
+        return accepted
+    }
+
+    /** Waits against a monotonic deadline; new-work signals cannot shorten endpoint backoff. */
+    private fun awaitRetryDeadline(delayMs: Long) {
+        val deadlineNanos = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(delayMs)
+        try {
+            while (running) {
+                val remainingNanos = deadlineNanos - System.nanoTime()
+                if (remainingNanos <= 0L) return
+                TimeUnit.NANOSECONDS.sleep(remainingNanos)
+            }
+        } catch (_: InterruptedException) {
+            // shutdownNow is the cancellation signal; other interruptions must not create a hot loop.
+            if (running) {
+                running = false
+                Thread.currentThread().interrupt()
+            }
         }
     }
 
@@ -230,7 +312,7 @@ internal class PersistentUploadWorker(
     }
 
     /**
-     * Waits for new work or a retry deadline.
+     * Waits for new work while idle. Failed attempts use a separate monotonic deadline.
      *
      * @param timeoutMs maximum wait duration
      */
@@ -242,6 +324,7 @@ internal class PersistentUploadWorker(
             wakeSignal.poll(timeoutMs.coerceAtLeast(MIN_RETRY_WAIT_MS), TimeUnit.MILLISECONDS)
         } catch (_: InterruptedException) {
             if (running) {
+                running = false
                 Thread.currentThread().interrupt()
             }
         }
@@ -287,5 +370,7 @@ internal class PersistentUploadWorker(
         private const val ERROR_RELEASE_CLAIMS = "persistent_upload_release"
         /** Self-monitor tag for custom transport shutdown failures. */
         private const val ERROR_SHUTDOWN_UPLOADER = "persistent_upload_shutdown_transport"
+        /** Self-monitor tag for preflight or rejected-row disposal failure. */
+        private const val ERROR_PREFLIGHT = "persistent_upload_preflight"
     }
 }

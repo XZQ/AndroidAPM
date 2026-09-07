@@ -2,11 +2,36 @@ package com.apm.core.privacy
 
 import com.apm.core.ApmLogger
 import com.apm.model.ApmEvent
+import java.math.BigDecimal
+import java.math.BigInteger
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 
 /** Replacement used when a field name itself identifies credential or direct-contact data. */
 private const val REDACTED_FIELD_VALUE = "***"
+
+/** Maximum copied text from one mutable host field before asynchronous processing. */
+private const val MAX_FIELD_TEXT_CHARS = 64 * 1024
+
+/** Explicit replacement for unsupported host objects; never invokes arbitrary host toString code. */
+private const val UNSUPPORTED_FIELD_VALUE = "[unsupported]"
+
+/**
+ * Freezes the supported scalar contract at admission. Mutable text is copied within a fixed bound;
+ * other host objects are replaced, without traversing object graphs or calling arbitrary methods.
+ * Exact big-number classes retain typed wire semantics without retaining mutable subclasses.
+ */
+internal fun freezeEventField(value: Any?): Any? = when (value) {
+    null, is Boolean, is Byte, is Short, is Int, is Long, is Float, is Double, is Char -> value
+    is String -> value
+    is StringBuilder -> value.substring(0, minOf(value.length, MAX_FIELD_TEXT_CHARS))
+    is StringBuffer -> synchronized(value) {
+        value.substring(0, minOf(value.length, MAX_FIELD_TEXT_CHARS))
+    }
+    is BigInteger -> if (value.javaClass == BigInteger::class.java) value else UNSUPPORTED_FIELD_VALUE
+    is BigDecimal -> if (value.javaClass == BigDecimal::class.java) value else UNSUPPORTED_FIELD_VALUE
+    else -> UNSUPPORTED_FIELD_VALUE
+}
 
 /**
  * Upper bound for the sensitive-name decision cache. Field names repeat on every event, so the
@@ -133,12 +158,13 @@ class PiiSanitizer(
         // 对 scene 执行脱敏
         val sanitizedScene = event.scene?.let { applyRules(it) }
 
-        return event.copy(
+        val sanitized = event.copy(
             fields = sanitizedFields,
             globalContext = sanitizedContext,
             extras = sanitizedExtras,
             scene = sanitizedScene
         )
+        return event.occurrence?.let(sanitized::withOccurrenceContext) ?: sanitized
     }
 
     /**
@@ -202,7 +228,8 @@ class PiiSanitizer(
         if (isSensitiveFieldName(key)) {
             return REDACTED_FIELD_VALUE
         }
-        return if (value is String) applyRules(value) else value
+        val frozen = freezeEventField(value)
+        return if (frozen is String) applyRules(frozen) else frozen
     }
 
     /** Redacts a sensitive string-map entry by name, otherwise applies textual rules. */

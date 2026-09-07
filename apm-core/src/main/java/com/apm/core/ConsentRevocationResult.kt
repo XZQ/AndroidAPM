@@ -20,4 +20,20 @@ data class ConsentRevocationResult(
     val clearedIpcFileCount: Int,
     val ipcFilesCleared: Boolean,
     val storageCleared: Boolean
-)
+) {
+    /** Captured separately to retain the original constructor/copy/component JVM signatures. */
+    private var uploadWorkerStoppedSnapshot: Boolean? = null
+
+    /**
+     * Whether the SDK upload worker actually terminated before local erasure. Null means no worker
+     * termination evidence (for example a custom asynchronous transport or a copied legacy result).
+     * This cannot retract requests already received by a server.
+     */
+    val uploadWorkerStopped: Boolean?
+        get() = uploadWorkerStoppedSnapshot
+
+    /** Attaches runtime-only evidence to a freshly constructed result without changing its public ABI. */
+    internal fun withUploadWorkerStopped(value: Boolean?): ConsentRevocationResult = apply {
+        uploadWorkerStoppedSnapshot = value
+    }
+}

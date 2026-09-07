@@ -41,5 +41,7 @@ enum class SdkDropReason {
     /** One encoded event or atomic IPC file exceeded its configured byte budget. */
     IPC_FILE_BYTE_BUDGET,
     /** Published IPC files exhausted the process-shared directory byte budget. */
-    IPC_DIRECTORY_BYTE_BUDGET
+    IPC_DIRECTORY_BYTE_BUDGET,
+    /** Local protocol preflight permanently rejected a durable row before network transmission. */
+    UPLOAD_PROTOCOL_REJECTED
 }

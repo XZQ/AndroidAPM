@@ -3,6 +3,10 @@ package com.apm.core.privacy
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmEventCodec
+import com.apm.core.snapshotEvent
+import java.math.BigInteger
+import java.math.BigDecimal
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -22,6 +26,79 @@ import kotlin.random.Random
  * 7. 无 PII 事件不受影响
  */
 class PiiSanitizerTest {
+
+    /** Mutable text is frozen before admission and receives the same privacy rules as String. */
+    @Test
+    fun `mutable field snapshot is immutable and sanitized before durable encoding`() {
+        val text = StringBuilder("review.user@example.invalid")
+        val original = createEvent(fields = mapOf("detail" to text))
+        val snapshot = snapshotEvent(original)
+        text.append("-changed")
+        assertEquals("review.user@example.invalid", snapshot.fields["detail"])
+        val restored = ApmEventCodec.decode(ApmEventCodec.encode(sanitizer.sanitize(snapshot)))
+        assertEquals("r***@example.invalid", restored.fields["detail"])
+        val direct = sanitizer.sanitize(createEvent(fields = mapOf("detail" to StringBuffer("user@example.invalid"))))
+        assertEquals("u***@example.invalid", direct.fields["detail"])
+    }
+
+    /** Unknown graphs cannot run arbitrary conversion code; supported immutable numbers stay typed. */
+    @Test
+    fun `unsupported objects are explicit replacements and scalar types survive`() {
+        val hostile = object {
+            override fun toString(): String = throw AssertionError("Must not invoke host code")
+        }
+        val large = BigInteger("12345678901234567890")
+        val decimal = BigDecimal("123.4500")
+        val result = sanitizer.sanitize(createEvent(fields = mapOf(
+            "detail" to hostile, "nested" to listOf(hostile), "large" to large,
+            "decimal" to decimal, "flag" to true, "character" to 'x', "absent" to null
+        )))
+        assertEquals("[unsupported]", result.fields["detail"])
+        assertEquals("[unsupported]", result.fields["nested"])
+        assertEquals(large, result.fields["large"])
+        assertEquals(decimal, result.fields["decimal"])
+        assertEquals(true, result.fields["flag"])
+        assertEquals('x', result.fields["character"])
+        assertEquals(null, result.fields["absent"])
+    }
+
+    /** Oversized mutable text is copied only within the retained field budget. */
+    @Test
+    fun `mutable text snapshot has a fixed character bound`() {
+        val text = StringBuilder("a".repeat(100_000))
+        val frozen = snapshotEvent(createEvent(fields = mapOf("detail" to text)))
+        text.setLength(0)
+        assertEquals(64 * 1024, (frozen.fields["detail"] as String).length)
+    }
+
+    /** The linear matcher preserves historical matching on a deterministic mixed ASCII corpus. */
+    @Test
+    fun `email scan matches historical small-input corpus`() {
+        val historical = Regex("""[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}""")
+        val rule = DefaultSanitizationRules.emailRule()
+        val random = Random(731)
+        val alphabet = "abcXYZ19.-_%+@ /:"
+        val corpus = listOf("a@b.co@d.ef", "a@b.aa.1", "a@b.aa.x", "a@.aa", "a@..aa", "a@x.y@z.co") +
+            List(2_000) { buildString { repeat(64) { append(alphabet[random.nextInt(alphabet.length)]) } } }
+        for (input in corpus) {
+            val expected = historical.replace(input) { match ->
+                val at = match.value.indexOf('@')
+                (if (at > 1) match.value.first().toString() else "") + "***" + match.value.substring(at)
+            }
+            assertEquals(input, expected, rule.sanitize(input))
+        }
+    }
+
+    /** A generous watchdog catches the old quadratic no-match/near-match path, not device budgets. */
+    @Test(timeout = 5_000)
+    fun `email scan handles long absent and near matches`() {
+        val rule = DefaultSanitizationRules.emailRule()
+        val run = "a".repeat(65_536)
+        for (input in listOf(run, "$run@$run", "$run@$run.x", "$run@${"a.".repeat(32_768)}1")) {
+            assertEquals(input, rule.sanitize(input))
+        }
+        assertEquals("a***@example.invalid", rule.sanitize("$run@example.invalid"))
+    }
 
     private val sanitizer = PiiSanitizer(DefaultSanitizationRules.all())
 

@@ -54,6 +54,7 @@ class ApmConsentLifecycleTest {
 
         assertTrue(result.wasInitialized)
         assertTrue(result.storageCleared)
+        assertTrue(result.uploadWorkerStopped == true)
         assertTrue(result.ipcFilesCleared)
         assertNotNull(result.clearedStoredEventCount)
         assertTrue((result.clearedStoredEventCount ?: 0) >= 1)

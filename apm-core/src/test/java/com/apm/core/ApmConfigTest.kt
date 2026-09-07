@@ -2,6 +2,7 @@ package com.apm.core
 
 import com.apm.model.ApmEvent
 import com.apm.model.ApmResourceContext
+import com.apm.model.ApmOccurrenceContext
 import com.apm.model.SerializationFormat
 import com.apm.uploader.ApmUploader
 import com.apm.uploader.LogcatApmUploader
@@ -206,9 +207,9 @@ class ApmConfigTest {
             runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
             initialCollectionConsent = CollectionConsent.GRANTED,
             endpoint = "https://collector.example.com/v1/events",
-            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3,
             resourceContext = productionResource()
-        ).validateForRuntime()
+        ).validateForRuntime(productionOccurrence())
     }
 
     /** A custom non-Logcat uploader is a valid strict delivery path without an endpoint string. */
@@ -228,42 +229,53 @@ class ApmConfigTest {
             runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
             initialCollectionConsent = CollectionConsent.GRANTED,
             endpoint = "https://collector.example.com/v1/events",
-            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2,
+            serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3,
             resourceContext = productionResource()
         )
+        val occurrence = productionOccurrence()
 
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(initialCollectionConsent = CollectionConsent.UNSPECIFIED).validateForRuntime()
+            strictBase.copy(initialCollectionConsent = CollectionConsent.UNSPECIFIED)
+                .validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(endpoint = "").validateForRuntime()
+            strictBase.copy(endpoint = "").validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(endpoint = "http://collector.example.com").validateForRuntime()
+            strictBase.copy(endpoint = "http://collector.example.com").validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(endpoint = "logcat://production").validateForRuntime()
+            strictBase.copy(endpoint = "logcat://production").validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(enablePiiSanitization = false).validateForRuntime()
+            strictBase.copy(enablePiiSanitization = false).validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(debugLogging = true).validateForRuntime()
+            strictBase.copy(debugLogging = true).validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(storageType = StorageType.FILE).validateForRuntime()
+            strictBase.copy(storageType = StorageType.FILE).validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(uploader = LogcatApmUploader()).validateForRuntime()
+            strictBase.copy(uploader = LogcatApmUploader()).validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(serializationFormat = SerializationFormat.PROTOBUF).validateForRuntime()
+            strictBase.copy(serializationFormat = SerializationFormat.PROTOBUF)
+                .validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(resourceContext = ApmResourceContext()).validateForRuntime()
+            strictBase.copy(serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V2)
+                .validateForRuntime(occurrence)
         }
         assertThrows(IllegalArgumentException::class.java) {
-            strictBase.copy(maxUploadBatchBytes = strictBase.maxEventPayloadBytes).validateForRuntime()
+            strictBase.copy(resourceContext = ApmResourceContext()).validateForRuntime(occurrence)
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.validateForRuntime(ApmOccurrenceContext())
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            strictBase.copy(maxUploadBatchBytes = strictBase.maxEventPayloadBytes)
+                .validateForRuntime(occurrence)
         }
     }
 
@@ -272,6 +284,15 @@ class ApmConfigTest {
         serviceName = "wallet",
         serviceVersion = "1.0.0",
         deploymentEnvironment = "production",
+        installationId = "install-test"
+    )
+
+    /** Complete occurrence identity required by strict schema-V3 delivery. */
+    private fun productionOccurrence(): ApmOccurrenceContext = ApmOccurrenceContext(
+        serviceVersion = "1.0.0",
+        versionCode = "100",
+        appBuild = "build-config-test",
+        variant = "release",
         installationId = "install-test"
     )
 

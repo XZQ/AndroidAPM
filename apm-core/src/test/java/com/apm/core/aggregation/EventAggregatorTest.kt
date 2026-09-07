@@ -3,6 +3,13 @@ package com.apm.core.aggregation
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmOccurrenceContext
+import com.apm.model.ApmPriority
+import com.apm.model.ApmBatchEnvelopeSerializer
+import com.apm.model.ApmResourceContext
+import com.apm.model.ApmEventCodec
+import com.apm.core.privacy.PiiSanitizer
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +25,66 @@ import org.junit.Test
  * 5. flush 刷出未到期窗口
  */
 class EventAggregatorTest {
+
+    /** Aggregates retain event-time identity/dimensions and remain typed across privacy and codec. */
+    @Test
+    fun `aggregate preserves occurrence dimensions and typed statistics under any locale`() {
+        val previous = Locale.getDefault()
+        Locale.setDefault(Locale.GERMANY)
+        try {
+            val aggregator = EventAggregator()
+            val identity = ApmOccurrenceContext("1.0", "1", "build-1", "release", "test-installation")
+            val event = ApmEvent("fps", "frame", severity = ApmSeverity.WARN, priority = ApmPriority.HIGH,
+                processName = "sample", threadName = "render", scene = "Feed", foreground = true,
+                fields = mapOf("ms" to 12.5, "route" to "/feed"),
+                globalContext = mapOf("environment" to "qa"), extras = mapOf("channel" to "internal")
+            ).withOccurrenceContext(identity)
+            aggregator.process(event)
+            aggregator.process(event.copy(fields = mapOf("ms" to 17.5, "route" to "/feed")).withOccurrenceContext(identity))
+            val result = ApmEventCodec.decode(ApmEventCodec.encode(PiiSanitizer().sanitize(aggregator.flush().single())))
+            assertEquals(identity, result.occurrence)
+            assertEquals(event.priority, result.priority)
+            assertEquals(event.severity, result.severity)
+            assertEquals(event.processName, result.processName)
+            assertEquals(event.threadName, result.threadName)
+            assertEquals(event.scene, result.scene)
+            assertEquals(event.foreground, result.foreground)
+            assertEquals(event.globalContext, result.globalContext)
+            assertEquals(event.extras, result.extras)
+            assertEquals("/feed", result.fields["route"])
+            assertEquals(15.0, result.fields["ms_p50"])
+            assertEquals(2, result.fields["ms_sample_count"])
+            assertTrue(result.eventId != event.eventId)
+            assertEquals(1, ApmBatchEnvelopeSerializer.serializeV3(listOf(result), ApmResourceContext()).eventCount)
+        } finally { Locale.setDefault(previous) }
+    }
+
+    /** Scene, historical build, raw dimensions and slash-separated names cannot merge. */
+    @Test
+    fun `aggregation isolates dimensions and identities within bucket bound`() {
+        val identity = ApmOccurrenceContext("1", "1", "old", "release", "test-installation")
+        val base = ApmEvent("a/b", "c", scene = "Feed", fields = mapOf("ms" to 1.0, "route" to "a"))
+            .withOccurrenceContext(identity)
+        val events = listOf(base, base.copy(scene = "Detail").withOccurrenceContext(identity),
+            base.withOccurrenceContext(identity.copy(appBuild = "new")),
+            base.copy(fields = mapOf("ms" to 1.0, "route" to "b")).withOccurrenceContext(identity),
+            base.copy(module = "a", name = "b/c").withOccurrenceContext(identity))
+        val aggregator = EventAggregator(maxBuckets = 2)
+        val output = events.flatMap(aggregator::process) + aggregator.flush()
+        assertEquals(events.size, output.size)
+        assertTrue(output.all { it.fields["count"] == 1 && it.occurrence != null })
+    }
+
+    /** Unsupported metric shapes are delivered intact instead of disappearing in an empty bucket. */
+    @Test
+    fun `text metrics and colliding statistic dimensions bypass aggregation`() {
+        val aggregator = EventAggregator()
+        val text = ApmEvent("sample", "message", fields = mapOf("detail" to "ready"))
+        val collision = text.copy(fields = mapOf("ms" to 12, "ms_p50" to "dimension"))
+        assertEquals(listOf(text), aggregator.process(text))
+        assertEquals(listOf(collision), aggregator.process(collision))
+        assertTrue(aggregator.flush().isEmpty())
+    }
 
     // --- METRIC 聚合测试 ---
 
@@ -79,9 +146,9 @@ class EventAggregatorTest {
         assertEquals(100, event.fields["count"])
 
         // P50 ≈ 50, P90 ≈ 90, P99 ≈ 99
-        val p50 = (event.fields["fps_p50"] as String).toDouble()
-        val p90 = (event.fields["fps_p90"] as String).toDouble()
-        val p99 = (event.fields["fps_p99"] as String).toDouble()
+        val p50 = event.fields["fps_p50"] as Double
+        val p90 = event.fields["fps_p90"] as Double
+        val p99 = event.fields["fps_p99"] as Double
 
         assertTrue("P50 should be around 50, got $p50", p50 in 49.0..51.0)
         assertTrue("P90 should be around 90, got $p90", p90 in 89.0..91.0)

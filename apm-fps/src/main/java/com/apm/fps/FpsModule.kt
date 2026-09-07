@@ -135,11 +135,7 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
      */
     private fun onFrameStats(stats: FrameStats) {
         // 只在有异常时上报
-        val needReport = stats.fps < config.fpsWarnThreshold
-                || stats.jankCount > 0
-                || stats.frozenCount > 0
-                || stats.dropSeverity > FrameStats.DROP_SEVERITY_NONE
-        if (!needReport) {
+        if (!shouldReportFrameStats(stats, config)) {
             return
         }
 
@@ -237,3 +233,8 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
         private const val FIELD_METRICS_DELAYED_FRAMES = "metricsDelayedFrames"
     }
 }
+
+/** Low callback rate alone is not an anomaly when only actual rendered frames are observed. */
+internal fun shouldReportFrameStats(stats: FrameStats, config: FpsConfig): Boolean =
+    (stats.frameMetricsBreakdown == null && stats.fps < config.fpsWarnThreshold) ||
+        stats.jankCount > 0 || stats.frozenCount > 0 || stats.dropSeverity > FrameStats.DROP_SEVERITY_NONE

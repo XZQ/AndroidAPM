@@ -6,6 +6,10 @@ import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.core.ApmLogger
+import com.apm.core.ApmEventSizeEstimator
+import com.apm.core.snapshotEvent
+import com.apm.model.ApmOccurrenceContext
+import com.apm.model.ApmPriority
 
 /**
  * 客户端事件聚合器。
@@ -42,9 +46,9 @@ class EventAggregator(
 
     /**
      * 活跃的聚合桶。
-     * key = "${module}/${name}"，value = 该桶的采样数据。
+     * Keys include occurrence identity and dimensions; the existing bucket limit bounds cardinality.
      */
-    private val buckets = LinkedHashMap<String, AggregationBucket>()
+    private val buckets = LinkedHashMap<AggregationKey, AggregationBucket>()
 
     /** Aggregation window exposed to the dispatch scheduler. */
     val windowDurationMs: Long
@@ -91,9 +95,8 @@ class EventAggregator(
 
         for ((key, bucket) in buckets) {
             if (bucket.eventCount > 0) {
-                val aggregated = bucket.toAggregatedEvent(nowTimestampMs)
-                results.add(aggregated.toApmEvent())
-                logger?.d("Flushed aggregation bucket $key: ${bucket.eventCount} events")
+                results.add(bucket.toEvent(nowTimestampMs))
+                logger?.d("Flushed aggregation bucket: ${bucket.eventCount} events")
             }
         }
 
@@ -119,7 +122,7 @@ class EventAggregator(
             }
             iterator.remove()
             if (bucket.eventCount > 0) {
-                results += bucket.toAggregatedEvent(nowTimestampMs).toApmEvent()
+                results += bucket.toEvent(nowTimestampMs)
             }
         }
         return results
@@ -130,7 +133,23 @@ class EventAggregator(
      * 如果窗口未满，吞入事件返回空列表；如果窗口到期，输出聚合结果。
      */
     private fun aggregateMetric(event: ApmEvent): List<ApmEvent> {
-        val bucketKey = "${event.module}/${event.name}"
+        // Large/high-cardinality dimensions and non-numeric events remain ordinary telemetry.
+        // This prevents both silent loss of text-only metrics and unbounded retained templates.
+        val template = snapshotEvent(event)
+        if (ApmEventSizeEstimator.estimate(template) > MAX_AGGREGATION_EVENT_BYTES ||
+            template.fields.size > MAX_AGGREGATION_FIELDS
+        ) return listOf(event)
+        val numericFields = template.fields.filterValues { numericMetricValue(it) != null }.keys
+        if (numericFields.isEmpty()) return listOf(event)
+        val dimensions = template.fields.filterKeys { it !in numericFields }
+        // Numeric-only streams allocate no generated-name list; only matching dimension suffixes
+        // need a prefix lookup to prove that an output statistic would collide.
+        if (dimensions.keys.any { key ->
+                key in WINDOW_FIELD_NAMES || STAT_SUFFIXES.any { suffix ->
+                    key.endsWith(suffix) && key.dropLast(suffix.length) in numericFields
+                }
+            }) return listOf(event)
+        val bucketKey = AggregationKey(template, dimensions, numericFields)
         val nowElapsedMs = ApmClock.monotonicTimeMillis()
         val nowTimestampMs = ApmClock.wallTimeMillis()
         // 常见路径是事件被吞入桶且无桶到期，惰性分配避免每事件一次 ArrayList
@@ -149,13 +168,14 @@ class EventAggregator(
                 if (eldest != null) {
                     buckets.remove(eldest.key)
                     if (eldest.value.eventCount > 0) {
-                        emitAggregated(eldest.value.toAggregatedEvent(nowTimestampMs).toApmEvent())
+                        emitAggregated(eldest.value.toEvent(nowTimestampMs))
                     }
                 }
             }
             bucket = AggregationBucket(
-                module = event.module,
-                name = event.name,
+                template = template.copy(fields = dimensions).let { copy ->
+                    template.occurrence?.let(copy::withOccurrenceContext) ?: copy
+                },
                 windowStartTimestampMs = nowTimestampMs,
                 windowStartElapsedMs = nowElapsedMs,
                 maxSamplesPerField = maxSamplesPerField
@@ -164,7 +184,7 @@ class EventAggregator(
         }
 
         // 将事件的数值字段加入桶
-        bucket.addSample(event.fields)
+        bucket.addSample(template.fields)
 
         // 检查窗口是否到期
         if (nowElapsedMs - bucket.windowStartElapsedMs >= windowMs) {
@@ -172,9 +192,9 @@ class EventAggregator(
             buckets.remove(bucketKey)
             if (bucket.eventCount > 0) {
                 if (!skipDebugLogs) {
-                    logger?.d("Aggregation window expired for $bucketKey: ${bucket.eventCount} events")
+                    logger?.d("Aggregation window expired: ${bucket.eventCount} events")
                 }
-                emitAggregated(bucket.toAggregatedEvent(nowTimestampMs).toApmEvent())
+                emitAggregated(bucket.toEvent(nowTimestampMs))
             }
         }
 
@@ -211,17 +231,71 @@ class EventAggregator(
 
         /** Default percentile reservoir size per numeric field. */
         private const val DEFAULT_MAX_SAMPLES_PER_FIELD = 256
+
+        /** Per-template retained-byte bound in addition to the public bucket/sample bounds. */
+        private const val MAX_AGGREGATION_EVENT_BYTES = 16 * 1024L
+
+        /** Events beyond the numeric accumulator bound bypass aggregation intact. */
+        private const val MAX_AGGREGATION_FIELDS = 64
+
+        /** Generated suffixes that must not overwrite a non-numeric dimension. */
+        private val STAT_SUFFIXES = listOf("_p50", "_p90", "_p99", "_min", "_max", "_sum", "_sample_count")
+
+        /** Fixed fields describing an aggregation window. */
+        private val WINDOW_FIELD_NAMES = setOf("count", "window_start_ms", "window_end_ms")
     }
+}
+
+/** Immutable grouping dimensions exclude only event identity, timestamp and numeric sample values. */
+private data class AggregationKey(
+    /** Module and event name are separate fields to avoid slash collisions. */
+    val module: String,
+    /** Original metric name. */
+    val name: String,
+    /** Original severity. */
+    val severity: ApmSeverity,
+    /** Original delivery priority. */
+    val priority: ApmPriority,
+    /** Original process. */
+    val processName: String,
+    /** Original emitting thread. */
+    val threadName: String,
+    /** Original scene. */
+    val scene: String?,
+    /** Original foreground state. */
+    val foreground: Boolean?,
+    /** Frozen business context. */
+    val globalContext: Map<String, String>,
+    /** Frozen extras. */
+    val extras: Map<String, String>,
+    /** Non-numeric dimensions. */
+    val dimensions: Map<String, Any?>,
+    /** Exact field schema prevents incompatible sample populations from merging. */
+    val numericFields: Set<String>,
+    /** Occurrence identity includes native frames and is never replaced by the flushing process. */
+    val occurrence: ApmOccurrenceContext?
+) {
+    /** Builds a key from a frozen event and its numeric schema. */
+    constructor(event: ApmEvent, dimensions: Map<String, Any?>, numericFields: Set<String>) : this(
+        event.module, event.name, event.severity, event.priority, event.processName, event.threadName,
+        event.scene, event.foreground, event.globalContext, event.extras, dimensions,
+        numericFields.toSet(), event.occurrence
+    )
+}
+
+/** Finite numeric values only; NaN/infinity and text-only records retain the ordinary event path. */
+private fun numericMetricValue(value: Any?): Double? = when (value) {
+    is Number -> value.toDouble().takeIf(Double::isFinite)
+    is String -> value.toDoubleOrNull()?.takeIf(Double::isFinite)
+    else -> null
 }
 
 /**
  * 聚合桶：收集同一 module/name 的 METRIC 事件采样。
  */
 private class AggregationBucket(
-    /** 模块名。 */
-    val module: String,
-    /** 事件名。 */
-    val name: String,
+    /** Frozen occurrence and dimension template, with numeric sample values removed. */
+    private val template: ApmEvent,
     /** 窗口起始时间。 */
     val windowStartTimestampMs: Long,
     /** Monotonic window origin used only for expiration decisions. */
@@ -243,11 +317,7 @@ private class AggregationBucket(
     fun addSample(fields: Map<String, Any?>) {
         var added = false
         for ((key, value) in fields) {
-            val numericValue = when (value) {
-                is Number -> value.toDouble()
-                is String -> value.toDoubleOrNull()
-                else -> null
-            } ?: continue
+            val numericValue = numericMetricValue(value) ?: continue
             if (this.fields.size >= MAX_FIELDS_PER_BUCKET && key !in this.fields) {
                 continue
             }
@@ -264,20 +334,32 @@ private class AggregationBucket(
     /**
      * 将桶内采样数据转换为聚合结果。
      */
-    fun toAggregatedEvent(windowEndTimestampMs: Long): AggregatedEvent {
+    fun toEvent(windowEndTimestampMs: Long): ApmEvent {
         val fieldStats = mutableMapOf<String, NumericStats>()
         for ((fieldName, accumulator) in fields) {
             fieldStats[fieldName] = accumulator.snapshot()
         }
 
-        return AggregatedEvent(
-            module = module,
-            name = name,
+        val aggregate = AggregatedEvent(
+            module = template.module,
+            name = template.name,
             windowStartMs = windowStartTimestampMs,
             windowEndMs = windowEndTimestampMs,
             count = eventCount,
             fieldStats = fieldStats
+        ).toApmEvent()
+        val result = aggregate.copy(
+            severity = template.severity,
+            priority = template.priority,
+            processName = template.processName,
+            threadName = template.threadName,
+            scene = template.scene,
+            foreground = template.foreground,
+            globalContext = template.globalContext,
+            extras = template.extras,
+            fields = template.fields + aggregate.fields
         )
+        return template.occurrence?.let(result::withOccurrenceContext) ?: result
     }
 
     companion object {

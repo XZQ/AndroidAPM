@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-08-24
+> 同步日期：2026-09-07
 
 ## 1. 分层关系
 
@@ -22,7 +22,7 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 |---|---|
 | identity | `eventId`, `module`, `name`, `kind` |
 | urgency | `severity`, `priority` |
-| occurrence | `timestamp`, `processName`, `threadName` |
+| occurrence | `timestamp`, `processName`, `threadName`；V3 另有 `ApmOccurrenceContext` release/build/installation/native snapshot |
 | context | `scene`, `foreground`, `globalContext`, `extras` |
 | payload | `fields` |
 
@@ -49,27 +49,27 @@ model 定义契约，storage 定义本地 ownership hand-off，uploader 定义�
 - 单事件/批量序列化
 - field 13 保存 priority enum name
 - field 14 保存稳定 eventId
-- V2 typed fields（field 15）的 map entry 由 writer 以 size-then-write 单趟写入，无两级中间缓冲；枚举名 UTF-8 编码按封闭集合预计算，输出字节与嵌套缓冲实现逐字节一致
+- V2/V3 typed fields（field 15）的 map entry 由 writer 以 size-then-write 单趟写入，无两级中间缓冲；V3 额外要求 field 16 occurrence，V2 显式拒绝 occurrence semantic smuggling
 - 适合 HTTP binary payload
 
 ### ApmEventCodec durable payload
 
-- 当前写 format version：3；兼容读 version 1/2
+- 当前写 format version：4；兼容读 version 1/2/3
 - 用于 SQLite/IPC 的完整事件恢复
 - codec payload 硬上限 2 MiB；SQLite 默认另施加 256 KiB durable 单事件软上限
 - string 最大 1 MiB
 - 每个 Map 最大 4096 项
 - BigInteger/BigDecimal decimal text 最大 4096 字符，先检查再进入大数 parser
 - enum 未知值回退默认；解码侧枚举名查找使用预建的 name→value map，不再逐次克隆枚举数组
-- version 3 每个 field 带类型 tag，原样恢复 null、String、Boolean、Byte、Short、Int、Long、Float、Double、Char、BigInteger、BigDecimal
-- 其他 arbitrary object 不做对象序列化，继续通过 `toString()` 降级成 bounded String
-- version 1/2 的 field 值按历史契约读取为 String；version 2 起保存 eventId，version 1 迁移行由 SQLite `event_id` 回填
+- version 3 每个 field 带类型 tag，原样恢复 null、String、Boolean、Byte、Short、Int、Long、Float、Double、Char、BigInteger、BigDecimal；version 4 在 eventId 后 append occurrence/native frame snapshot
+- codec 直接调用的兼容行为仍把 arbitrary object 通过 `toString()` 降级成 bounded String；正常 SDK 管线已在入口将未知对象替换为 `[unsupported]`，仅有界复制可变文本后脱敏，不能绕过 privacy 再转换明文
+- version 1/2 的 field 值按历史契约读取为 String；version 2 起保存 eventId，version 1 迁移行由 SQLite `event_id` 回填；version 3 typed 行继续可读且 occurrence 保持缺失
 - 未知 version-3 type tag 使单个损坏 payload 解码失败，由 storage 隔离坏行，不猜测长度或类型
 - 解码只接受最短形式的合法 Unicode scalar UTF-8，拒绝 overlong、surrogate、越界 code point、截断和尾随字节；全 ASCII 字节序列跳过完整验证器（ASCII 必然是合法 UTF-8），接受/拒绝行为不变
 - length/map count 必须能由剩余 payload 的最小编码承载后才分配；编码缓冲区在超过 2 MiB 前立即拒绝，且初始容量按事件字符数下限预估，避免默认 32 字节缓冲的多次扩容复制
 - `stableBatchId` 的 16 字节摘要以查表方式转为小写 hex，替代逐字节 `String.format`；输出与 `%02x` 逐字符一致
 
-因此客户端 durable round-trip 对受支持标量类型保真，同时避免 Java/Kotlin 任意对象反序列化。legacy Line Protocol 与 standalone Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format v3 不改变旧 Collector 契约。独立 `PROTOBUF_ENVELOPE_V2` 在 event field 15 写 `map<string,ApmTypedValue>`，是显式新协议而非 durable tag 的复用。
+因此客户端 durable round-trip 对受支持标量类型保真，并在 V4 保存 occurrence，同时避免 Java/Kotlin 任意对象反序列化。legacy Line Protocol 与 standalone Protobuf 仍通过 `toString()` 输出 `map<string,string>`，本地 format V4 不改变旧 Collector 契约。`PROTOBUF_ENVELOPE_V2` 在 event field 15 写 `map<string,ApmTypedValue>` 并保留 batch-declared 身份；`PROTOBUF_ENVELOPE_V3` 额外写 field 16 occurrence，是当前 strict contract。两者都是显式 wire schema，不复用 durable format tag。
 
 ## 4. EventStore 契约
 
@@ -100,7 +100,9 @@ interface EventStore {
 - `pruneExpired(maxRetryCount, maxAgeMs)`
 - `pruneExpiredWithResult(maxRetryCount, maxAgeMs)`：SQLite 在同一删除事务内返回精确 priority counts；兼容实现保留 aggregate-only 结果
 
-它定义“上传成功后确认删除”的 durable outbox 契约。
+它定义“上传成功后确认删除”的 durable outbox 契约。可选 `DiscardablePendingEventStore.discardClaim(ownerId, ids)` 单独表达本地永久拒绝；SQLite 使用同一 owner predicate 和统计记账，不修改 schema。严格 V3 preflight 把无/非法 occurrence 的历史行单独拒绝并计数，不影响同批有效行的 ACK 或 retry_count。
+
+`HttpApmUploader.shutdown()` 原子关闭请求 admission，并为当前活动连接发出异步 disconnect，避免某个平台阻塞取消锁拖住撤回线程。每个物理 split batch 再检查关闭状态；`isShutdownComplete()` 返回活动 HTTP 操作是否已退出。不能撤回已送达服务端的数据，后台取消与 SDK worker 退出证据需区别处理。
 
 ## 5. SQLiteEventStore
 
@@ -204,7 +206,7 @@ interface BatchApmUploader : ApmUploader {
 - 完整 drain/close response/error stream，允许 keep-alive 复用
 - 网络异常返回 false 并 disconnect
 
-legacy 每个序列化事件包含 eventId，但没有 batch ID，HTTP 2xx 是整批唯一确认信号。V2 body 是 `ApmBatchEnvelope`：包含 schema/SDK、固定 resource、retry-stable batchId、repeated events 和 field-15 typed values；gzip 前完整 envelope 默认限制 1 MiB、绝对 4 MiB，按实际编码拆分（`ApmBatchEnvelopeSerializer.serializeWithinBudget` 每事件只编码一次，用一次单事件探针锚定固定组件大小后以精确增量字节判定拆分边界，拆分点与逐候选全量序列化一致），单事件超预算不打开连接。transport 拥有 `X-Apm-Schema-Version` / `Sdk-Version` / `Batch-Id` / `Event-Count`，宿主 Header 不能覆盖；response schema/batchId/eventCount 全匹配才成功，不支持 partial ACK。schema/eventCount 只接受正整数的规范无符号十进制，拒绝前导零、正号、负号和溢出；batchId 逐字节匹配。前一物理 batch 已 ACK、后一批失败时逻辑 claim 返回失败并可能整组重发，Collector 继续按 eventId 去重。规范见 [Collector Wire Protocol V2](../protocol/COLLECTOR_WIRE_V2.md)。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict built-in HTTP 在 factory 之前要求 HTTPS/V2/resource/batch headroom（显式非 Logcat custom uploader 除外）。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
+legacy 每个序列化事件包含 eventId，但没有 batch ID，HTTP 2xx 是整批唯一确认信号。V2/V3 body 都是 `ApmBatchEnvelope`：包含 schema/SDK、固定 resource、retry-stable batchId、repeated events 和 field-15 typed values；V3 还要求每个 event 的 field-16 occurrence，并使用 schema byte 3 与 `b3-` prefix。gzip 前完整 envelope 默认限制 1 MiB、绝对 4 MiB，按实际编码拆分（serializer 每事件只编码一次，用单事件探针锚定固定组件大小后以精确增量字节判定拆分边界），单事件超预算不打开连接。transport 拥有 `X-Apm-Schema-Version` / `Sdk-Version` / `Batch-Id` / `Event-Count`，宿主 Header 不能覆盖；response schema/batchId/eventCount 全匹配才成功，不支持 partial ACK。schema/eventCount 只接受正整数的规范无符号十进制，拒绝前导零、正号、负号和溢出；batchId 逐字节匹配。前一物理 batch 已 ACK、后一批失败时逻辑 claim 返回失败并可能整组重发，Collector 继续按 eventId 去重。当前 strict 规范见 [V3](../protocol/COLLECTOR_WIRE_V3.md)，兼容规范见 [V2](../protocol/COLLECTOR_WIRE_V2.md)。动态凭据 provider 失败时返回 false，durable outbox 不删除该批；不会缓存并复用上一个可能已撤销的 Token。core strict built-in HTTP 在 factory 之前要求 HTTPS/V3/resource/occurrence/batch headroom（显式非 Logcat custom uploader 除外）；当前自动 Provider 无 occurrence-aware overload，不能承担 V3 初始化。同意撤回先停止 persistent worker/uploader，再调用 store clear；冷启动 overload 同时清理 SQLite、File 与 IPC artifacts。
 
 ## 9. Durable retry
 
@@ -248,22 +250,17 @@ claimPending(owner, lease)
 - restart replay
 - retry/TTL pruning
 - batch/Gzip/Retry-After
-- typed durable scalar fields with version-1/2 compatibility
-- V2 typed/resource/batch identity/encoded-byte split/exact ACK
+- durable format V4 occurrence + V3 typed scalar，并兼容读取 V1/V2/V3
+- V2/V3 typed/resource/batch identity/encoded-byte split/exact ACK
 
-外部/协议缺口：
-
-- exactly-once server protocol and server-side eventId deduplication
-- Collector 部署 V2 parser、exact whole-batch ACK、协议错误指标和 dead-letter
-- Token 签发/刷新/撤销与租户授权服务（客户端逐请求注入已完成）
-- collector compatibility/version negotiation
+本地参考服务端已完成 V2/V3 parser、提交后 exact whole-batch ACK、`(tenant_id,event_id)` 去重/冲突检测、occurrence persistence 与 installation HMAC。现场/生产缺口是 PostgreSQL 并发与 commit uncertainty、TLS ingress、代理丢 ACK、真实 dead-letter/retention 演练、Token 签发/刷新/撤销、协议版本下线与跨版本运营；不能用 test-only SQLite E2E 冒充这些验收。
 
 ## 12. 测试
 
-`apm-model`：Line Protocol、codec v1/v2 兼容、v3 scalar type/value round-trip、未知 tag/fallback、priority、legacy Protobuf、V2 typed/resource/batch identity。
+`apm-model`：Line Protocol、codec V1/V2/V3 兼容、V4 occurrence/native round-trip、typed scalar type/value、未知 tag/fallback、priority、legacy Protobuf、V2/V3 typed/resource/batch identity 与 semantic-smuggling 拒绝。
 
 `apm-storage`：File rewrite、priority mapper、Robolectric SQLite batch/row+payload-byte eviction/单事件隔离/outbox/retry/prune/corruption/recent、v2 additive migration、owner mismatch、expiry reclaim、双 store 并发 claim，以及固定种子 250 步 append/duplicate/claim/ACK/fail/release/expiry 状态机。
 
-`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、worker/scheduler 实际执行线程的名称/daemon/priority、真实 HTTP socket/Gzip/batch/Retry-After（含溢出饱和）、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2 byte split 与 canonical exact ACK 固定语料。
+`apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、worker/scheduler 实际执行线程的名称/daemon/priority、真实 HTTP socket/Gzip/batch/Retry-After（含溢出饱和）、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2/V3 byte split、media type 与 canonical exact ACK 固定语料。
 
-`apm-core`：PersistentUploadWorker success/failure/fallback 与 UploaderFactory retry ownership。
+`apm-core`：PersistentUploadWorker success/failure/fallback、UploaderFactory retry ownership、strict V3 occurrence 门禁，以及普通/critical/IPC hand-off 前的 occurrence 绑定与 Native frame 合并。

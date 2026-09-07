@@ -4,6 +4,9 @@ import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
 import com.apm.model.ApmEvent
 import com.apm.model.ApmPriority
+import com.apm.model.ApmOccurrenceContext
+import com.apm.model.ApmNativeFrameIdentity
+import com.apm.model.SerializationFormat
 import com.apm.storage.EventStore
 import com.apm.uploader.ApmUploader
 import kotlin.io.path.createTempDirectory
@@ -17,6 +20,48 @@ import org.robolectric.RobolectricTestRunner
 /** Non-uploader-process critical IPC hand-off accounting tests. */
 @RunWith(RobolectricTestRunner::class)
 class ApmContextCriticalHandoffTest {
+    /** V3 freezes the init-time release while retaining module-provided native frame identity. */
+    @Test
+    fun `v3 context binds occurrence before durable critical handoff`() {
+        val store = CapturingStore()
+        val dispatcher = ApmDispatcher(store, NoOpUploader, NoOpLogger)
+        try {
+            val configured = ApmOccurrenceContext(
+                serviceVersion = "1.0.0",
+                versionCode = "100",
+                appBuild = "old-build",
+                variant = "release",
+                installationId = "install-old"
+            )
+            val frame = ApmNativeFrameIdentity("arm64-v8a", "abcd", "libsample.so", 42L)
+            val context = ApmContext(
+                application = RuntimeEnvironment.getApplication(),
+                config = ApmConfig(
+                    serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3
+                ),
+                processName = "main",
+                logger = NoOpLogger,
+                dispatcher = dispatcher,
+                occurrenceContext = configured
+            )
+
+            assertEquals(
+                true,
+                context.emitCriticalSync(
+                    ApmEvent(
+                        module = "crash",
+                        name = "native_crash",
+                        priority = ApmPriority.CRITICAL
+                    ).withOccurrenceContext(ApmOccurrenceContext(nativeFrames = listOf(frame)))
+                )
+            )
+
+            assertEquals(configured.copy(nativeFrames = listOf(frame)), store.event?.occurrence)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
     /** A stopped IPC coordinator rejects synchronously and records exact reason and priority. */
     @Test
     fun `failed critical ipc handoff is classified`() {
@@ -104,6 +149,25 @@ class ApmContextCriticalHandoffTest {
         override fun readRecent(limit: Int): List<String> = emptyList()
         /** Clears no state. */
         override fun clear() = Unit
+    }
+
+    /** Stores the latest append for occurrence-bound hand-off assertions. */
+    private class CapturingStore : EventStore {
+        /** Latest synchronously persisted event. */
+        var event: ApmEvent? = null
+
+        /** Captures one event. */
+        override fun append(event: ApmEvent) {
+            this.event = event
+        }
+
+        /** Returns no textual diagnostics. */
+        override fun readRecent(limit: Int): List<String> = emptyList()
+
+        /** Clears the captured event. */
+        override fun clear() {
+            event = null
+        }
     }
 
     /** Stateless uploader unused by the remote-process IPC branch. */

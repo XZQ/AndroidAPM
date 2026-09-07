@@ -91,6 +91,44 @@ class ApmBatchEnvelopeSerializerTest {
         assertTrue(LEGACY_FIELDS_NUMBER !in fieldNumbers)
     }
 
+    /** V3 writes field 16, uses a b3 identity, and retains the occurrence release across upload. */
+    @Test
+    fun `v3 envelope carries occurrence bound identity`() {
+        val oldOccurrence = occurrence(serviceVersion = "1.0.0", versionCode = "100")
+        val event = ApmEvent(
+            module = "crash",
+            name = "java_crash",
+            eventId = "old-release-event"
+        ).withOccurrenceContext(oldOccurrence)
+        // Simulate an old durable event uploaded by a process that has already upgraded.
+        val upgradedResource = resource().copy(serviceVersion = "2.0.0")
+
+        val encoded = ApmBatchEnvelopeSerializer.serializeV3(
+            listOf(event),
+            upgradedResource,
+            FIXED_SENT_AT_MS
+        )
+        val eventBytes = ProtobufSerializer.serializeVersionedEventV3(event)
+
+        assertTrue(encoded.batchId.startsWith("b3-"))
+        assertTrue(OCCURRENCE_NUMBER in topLevelFieldNumbers(eventBytes))
+        assertTrue(containsUtf8(encoded.payload, "1.0.0"))
+        assertTrue(containsUtf8(encoded.payload, "2.0.0"))
+        assertTrue(containsUtf8(encoded.payload, "anonymous-installation"))
+    }
+
+    /** V2 cannot silently accept a business-required V3 occurrence snapshot. */
+    @Test
+    fun `v2 rejects occurrence semantic smuggling`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            ApmBatchEnvelopeSerializer.serialize(
+                listOf(event("event-v2").withOccurrenceContext(occurrence())),
+                resource(),
+                FIXED_SENT_AT_MS
+            )
+        }
+    }
+
     /** Batch identity survives request-time changes but changes when the ordered event set changes. */
     @Test
     fun `batch identity is retry stable and event set specific`() {
@@ -221,6 +259,18 @@ class ApmBatchEnvelopeSerializerTest {
         installationId = "install-42"
     )
 
+    /** Complete event-level occurrence identity used by V3 tests. */
+    private fun occurrence(
+        serviceVersion: String = "1.2.3",
+        versionCode: String = "123"
+    ): ApmOccurrenceContext = ApmOccurrenceContext(
+        serviceVersion = serviceVersion,
+        versionCode = versionCode,
+        appBuild = "build-fixture",
+        variant = "release",
+        installationId = "anonymous-installation"
+    )
+
     /** Returns whether a protobuf payload contains one exact UTF-8 subsequence. */
     private fun containsUtf8(payload: ByteArray, text: String): Boolean {
         val expected = text.toByteArray(Charsets.UTF_8)
@@ -285,6 +335,8 @@ class ApmBatchEnvelopeSerializerTest {
         private const val LEGACY_FIELDS_NUMBER = 10
         /** Versioned typed fields number. */
         private const val TYPED_FIELDS_NUMBER = 15
+        /** Schema-V3 occurrence snapshot field number. */
+        private const val OCCURRENCE_NUMBER = 16
         /** Budget-split corpus size covering single, multi, and overflow sub-batches. */
         private const val BUDGET_CORPUS_SIZE = 24
         /** Prime stride producing varied payload lengths across the corpus. */

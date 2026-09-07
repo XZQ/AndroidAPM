@@ -204,3 +204,9 @@ interface PendingEventStore : EventStore {
     fun pruneExpiredWithResult(maxRetryCount: Int, maxAgeMs: Long): EventStorePruneResult =
         EventStorePruneResult(prunedEventCount = pruneExpired(maxRetryCount, maxAgeMs))
 }
+
+/** Optional owner-aware permanent rejection, kept separate from successful collector ACKs. */
+interface DiscardablePendingEventStore {
+    /** Deletes only rejected rows still owned by the caller and returns the actual removed count. */
+    fun discardClaim(ownerId: String, ids: List<Long>): Int
+}

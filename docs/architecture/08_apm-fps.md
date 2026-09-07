@@ -1,6 +1,6 @@
 # apm-fps 模块
 
-> 同步日期：2026-07-22｜模块名：`fps`
+> 同步日期：2026-09-07｜模块名：`fps`
 
 ## 目的与入口
 
@@ -8,14 +8,14 @@
 
 ## 双采集路径
 
-- FrameMetrics（API 24+ 主路径）：只在 Window 实际渲染时回调，根据真实 VSync interval/refresh rate 统计 expected/actual frame 和 dropped frames，并记录渲染阶段耗时
+- FrameMetrics（API 24+ 主路径）：只在 Window 实际渲染时回调，render rate 使用相邻渲染时间，jank/dropped 则按 TOTAL_DURATION 超出实际 deadline 的程度计算，并记录独立 LAYOUT_MEASURE_DURATION 等阶段耗时；API 31+ 优先 DEADLINE，旧平台/不可用时回退刷新周期
 - Choreographer FrameCallback（兼容 fallback）：仅在 FrameMetrics 被禁用或注册失败时持续采样
 
 refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 
 ## 输出
 
-单调时间窗口形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。默认每 1000ms 上报一次，窗口真实时长不随 60/90/120Hz 刷新率或卡顿程度变化；旧 `windowSize` 只为源码兼容保留，不再控制上报节奏。
+单调时间窗口形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。默认在真实回调跨过 1000ms 时间边界时形成窗口；静态页面可更久才产生下一次报告，不能据此推算缺失绘制请求；旧 `windowSize` 只为源码兼容保留，不再控制上报节奏。
 
 掉帧 severity 默认按 dropped frame count 分级：moderate 4、severe 10；frozen threshold 300ms。
 
@@ -40,7 +40,8 @@ Activity lifecycle 与传入主线程 Handler 的 FrameMetrics listener 都在�
 ## 边界
 
 - 这是应用 View/Window 帧近似，不是系统级 FrameTimeline/SurfaceFlinger 全链。
-- 16ms config 与高刷新率并不完全等价，实际 dropped frame 计算会结合 refresh rate。
+- FrameMetrics 空闲间隔只影响 render rate，不记为 dropped/jank/frozen，也不单凭低 render rate 告警；`jankThresholdMs`/低 FPS 阈值适用于连续 Choreographer fallback，真实渲染 jank 使用平台 deadline。
+- 采集源切换时清空窗口，避免把切换/空闲区间混进连续回调统计。
 - FrameMetrics 受 API/OEM 支持影响，失败时 Choreographer 路径继续工作。
 
 ## 测试
@@ -50,6 +51,8 @@ Config、FrameStats、单调时间窗口、timestamp 回退、FrameMetrics primi
 ## FPS 定义与时间语义
 
 报告边界使用单调时间。Rendered FPS = 相邻真实渲染回调形成的实际 interval 数 / 这些 interval 的真实 elapsed nanoseconds，并按当前 refresh rate 封顶；主路径使用 FrameMetrics 的 actual VSync timestamp，兼容 fallback 使用 Choreographer frame time。事件同时输出 `windowDurationMs`，回调数不会被当成完整 interval 数，collector timestamp 仍为 epoch。
+
+新增 Robolectric 合成输入覆盖 60/90/120 Hz 间歇绘制、实际慢帧/frozen、平台 deadline 覆盖及缺失 duration；这是算法/平台 API 本地证据，尚未刷新下面的历史真机数值。
 
 ## 物理 CPU 归因
 

@@ -9,17 +9,90 @@ import com.apm.uploader.BatchApmUploader
 import com.apm.uploader.RetryPolicy
 import java.io.IOException
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Verifies durable replay and acknowledgement behavior.
  */
 class PersistentUploadWorkerTest {
+
+    /** New event signals cannot shorten the endpoint's Retry-After deadline. */
+    @Test
+    fun `new work does not interrupt failed upload backoff`() {
+        val first = CountDownLatch(1)
+        val second = CountDownLatch(1)
+        val attempts = AtomicInteger()
+        val store = FakePendingStore(mutableListOf(PendingEvent(1L, event("retry"), 0)))
+        val uploader = object : BatchApmUploader {
+            override fun uploadBatch(events: List<ApmEvent>): Boolean {
+                if (attempts.incrementAndGet() == 1) first.countDown() else second.countDown()
+                return false
+            }
+            override fun retryAfterHintMs(): Long = 600L
+        }
+        val worker = PersistentUploadWorker(store, uploader, RetryPolicy(baseDelayMs = 10L), 1,
+            logger = NoOpLogger, selfMonitor = null)
+        try {
+            assertTrue(first.await(3, TimeUnit.SECONDS))
+            assertTrue(store.markedRetry.await(3, TimeUnit.SECONDS))
+            repeat(50) { worker.signal() }
+            assertFalse(second.await(200, TimeUnit.MILLISECONDS))
+            assertTrue(second.await(3, TimeUnit.SECONDS))
+        } finally { worker.shutdown() }
+    }
+
+    /** Cancellation wakes even a long backoff without making another transport attempt. */
+    @Test
+    fun `shutdown cancels long backoff promptly`() {
+        val store = FakePendingStore(mutableListOf(PendingEvent(1L, event("backoff"), 0)))
+        val uploader = object : BatchApmUploader {
+            override fun uploadBatch(events: List<ApmEvent>): Boolean = false
+            override fun retryAfterHintMs(): Long = 60_000L
+        }
+        val worker = PersistentUploadWorker(store, uploader, RetryPolicy(), 1,
+            logger = NoOpLogger, selfMonitor = null, shutdownTimeoutMs = 500L)
+        assertTrue(store.markedRetry.await(3, TimeUnit.SECONDS))
+        assertTrue(worker.shutdown())
+    }
+
+    /** A transport ignoring interruption retains leases and cannot mutate erased storage on return. */
+    @Test
+    fun `timed out shutdown retains claims and skips late ack`() {
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val returned = CountDownLatch(1)
+        val store = FakePendingStore(mutableListOf(PendingEvent(1L, event("blocked"), 0)))
+        val uploader = object : BatchApmUploader {
+            override fun uploadBatch(events: List<ApmEvent>): Boolean {
+                entered.countDown()
+                while (release.count > 0) {
+                    try { release.await() } catch (_: InterruptedException) { /* deliberately uncooperative */ }
+                }
+                returned.countDown()
+                return true
+            }
+        }
+        val worker = PersistentUploadWorker(store, uploader, RetryPolicy(), 1,
+            logger = NoOpLogger, selfMonitor = null, shutdownTimeoutMs = 100L)
+        try {
+            assertTrue(entered.await(3, TimeUnit.SECONDS))
+            assertFalse(worker.shutdown())
+            assertEquals(1L, store.released.count)
+            store.clear()
+            release.countDown()
+            assertTrue(returned.await(3, TimeUnit.SECONDS))
+            assertTrue(worker.shutdown())
+            assertEquals(1L, store.deleted.count)
+            assertEquals(1L, store.markedRetry.count)
+        } finally { release.countDown(); worker.shutdown() }
+    }
 
     /** Hostile retry hints must not create negative waits or effectively permanent sleeps. */
     @Test

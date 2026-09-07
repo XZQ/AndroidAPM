@@ -2,8 +2,15 @@ package com.apm.model
 
 /** Public constants that freeze the versioned collector contract. */
 object ApmWireProtocol {
-    /** Current protobuf batch-envelope schema version. */
-    const val ENVELOPE_SCHEMA_VERSION: Int = 2
+    /** Legacy explicit envelope version retained for V2 compatibility. */
+    const val ENVELOPE_SCHEMA_VERSION_V2: Int = 2
+
+    /** Occurrence-bound explicit envelope version used by strict production delivery. */
+    const val ENVELOPE_SCHEMA_VERSION_V3: Int = 3
+
+    /** Source-compatible V2 alias; new integrations should select a concrete schema constant. */
+    @Deprecated("Select ENVELOPE_SCHEMA_VERSION_V2 or ENVELOPE_SCHEMA_VERSION_V3 explicitly")
+    const val ENVELOPE_SCHEMA_VERSION: Int = ENVELOPE_SCHEMA_VERSION_V2
 
     /** Stable SDK implementation name carried by every versioned batch. */
     const val SDK_NAME: String = "android-apm"
@@ -11,7 +18,7 @@ object ApmWireProtocol {
     /** SDK artifact version carried by every versioned batch. */
     const val SDK_VERSION: String = "0.1.0"
 
-    /** Request/response header carrying [ENVELOPE_SCHEMA_VERSION]. */
+    /** Request/response header carrying the selected explicit envelope schema. */
     const val HEADER_SCHEMA_VERSION: String = "X-Apm-Schema-Version"
 
     /** Request header carrying [SDK_VERSION]. */
@@ -23,9 +30,13 @@ object ApmWireProtocol {
     /** Request and response header carrying the complete event count. */
     const val HEADER_EVENT_COUNT: String = "X-Apm-Event-Count"
 
-    /** Versioned protobuf envelope media type. */
+    /** Version 2 protobuf envelope media type. */
     const val CONTENT_TYPE_ENVELOPE_V2: String =
         "application/x-protobuf; message=ApmBatchEnvelope; version=2"
+
+    /** Version 3 protobuf envelope media type with per-event occurrence identity. */
+    const val CONTENT_TYPE_ENVELOPE_V3: String =
+        "application/x-protobuf; message=ApmBatchEnvelope; version=3"
 }
 
 /** Scalar types supported by the versioned wire field contract. */

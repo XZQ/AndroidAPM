@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-08-24
+> 同步日期：2026-09-07
 
 ## 1. 职责
 
@@ -21,7 +21,7 @@
 ## 2. 初始化
 
 ```text
-Apm.init(application, config)
+Apm.init(application, config[, occurrenceContext])
   synchronized(initLock)
   -> ignore duplicate init
   -> reject sticky revocation / validate runtime profile and consent
@@ -44,12 +44,14 @@ Apm.init(application, config)
   -> start registered modules
 ```
 
-`state` 只有基础设施组装完成后才发布。runtime profile/consent 在 diagnostics、event store 和线程之前校验：`DENIED` 总是拒绝；`PRODUCTION_STRICT` 还要求显式 `GRANTED`、SQLite、PII on、debug off，以及 HTTPS endpoint 或非 Logcat custom uploader。strict built-in HTTP 进一步要求 `PROTOBUF_ENVELOPE_V2`、四项完整有界的 standard resource、64 KiB–4 MiB batch budget，并给 `maxEventPayloadBytes` 至少保留 16 KiB envelope headroom。校验通过后初始化复制 `customProcessModules`、`defaultContext`、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此其后的部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；普通 `stop` 后可以重新初始化，consent revoke 后必须先显式 grant。
+`state` 只有基础设施组装完成后才发布。runtime profile/consent 在 diagnostics、event store 和线程之前校验：`DENIED` 总是拒绝；`PRODUCTION_STRICT` 还要求显式 `GRANTED`、SQLite、PII on、debug off，以及 HTTPS endpoint 或非 Logcat custom uploader。strict built-in HTTP 进一步要求 `PROTOBUF_ENVELOPE_V3`、四项完整有界的 standard resource、完整 occurrence snapshot、64 KiB–4 MiB batch budget，并给 `maxEventPayloadBytes` 至少保留 16 KiB envelope headroom。occurrence 由增量三参数 overload 提供并复制 Native frame list；所有 V3 event 在异步/IPC/SQLite hand-off 前绑定 init-time release/build/installation，模块只能补充本事件 Native frames。校验通过后初始化复制 `customProcessModules`、`defaultContext`、occurrence、自定义脱敏规则列表和静态 HTTP Header，宿主后续修改原集合不会改变运行时。diagnostics 在 event store/uploader 之前创建，因此其后的部分初始化失败仍可导出本地证据。重复 `init` 为 no-op；普通 `stop` 后可以重新初始化，consent revoke 后必须先显式 grant。
 
 初始化模式必须二选一：
 
 - 手动模式由宿主 `Application` 调用 `Apm.init`，并用 manifest merger 的 `tools:node="remove"` 移除 `ApmInitProvider`；sample 采用此模式。
 - 自动模式保留 `ApmInitProvider`，通过 `com.apm.config_class` metadata 反射创建无参 `ApmConfigProvider`，在 `Application.onCreate` 前调用 `Apm.init`。
+
+当前 Provider 只调用二参数 overload，无法取得 occurrence snapshot；配置 V3 时会 fail closed 并记录初始化错误。因此 V3/strict built-in HTTP 只能使用手动三参数初始化，不能把 Provider 失败视为已启用采集。
 
 缺少 metadata 是受支持的手动/未配置状态，只记录 debug 日志；无效类、配置构造或初始化异常会被 Provider 隔离，不阻断宿主启动。Robolectric 生命周期测试覆盖 metadata 缺失、有效 provider 和无效 provider 三条路径。
 
@@ -135,7 +137,7 @@ resolve lazy event
 
 ### 聚合维护
 
-启用聚合时，`apm-aggregation` 定期 flush 过期窗口。聚合输出以 `preAggregated` 标记重新入队，避免二次聚合。关闭时剩余聚合数据直接写 store/交 uploader。
+启用聚合时，`apm-aggregation` 定期 flush 过期窗口。聚合输出以 `preAggregated` 标记重新入队，避免二次聚合。关闭时剩余聚合数据先脱敏，再写 store/交 uploader。
 
 ## 6. PersistentUploadWorker
 
@@ -155,7 +157,7 @@ claimPending(ownerId, batchSize, now, leaseDuration)
 
 单一重试权威位于 outbox worker；durable store 下 `UploaderFactory` 不再套 `RetryingApmUploader`，避免双队列/双重试。`RetryPolicy.maxRetries` 表示首次尝试之后允许的次数；每次失败 owner-aware 释放并递增计数，达到 `maxRetries + 1` 次失败时立即 prune，不再依赖“等到 outbox 为空”才清理。
 
-每个 Worker 使用 `ProcessSessionId + process-local sequence` 作为 owner。SQLite 在写事务中选择并持久化 claim，另一个 store/进程看不到活动租约；只有 owner 可 ACK 或失败释放，shutdown 释放其全部 claim，expiry 后其他 Worker 可重领。默认 `uploadLeaseDurationMs=120000`。
+每个 Worker 使用 `ProcessSessionId + process-local sequence` 作为 owner。SQLite 在写事务中选择并持久化 claim，另一个 store/进程看不到活动租约；只有 owner 可 ACK 或失败释放，shutdown 仅在 worker 确认终止后释放其全部 claim；超时保留租约直到 expiry，expiry 后其他 Worker 可重领。默认 `uploadLeaseDurationMs=120000`。
 
 claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降级；fatal VM error 不被 `runCatching` 吞掉。自定义同步 uploader 若忽略 interrupt，SDK 只能在 3 秒后结束等待并依赖 lease expiry 让其他 Worker 恢复，无法安全终止任意宿主代码。
 
@@ -168,7 +170,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 3. 显式 `logcat://` endpoint -> `LogcatApmUploader`
 4. 其他/空 endpoint -> payload-safe discard uploader
 
-该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现；built-in HTTP 同时要求 V2/resource/byte budget。factory 把固定 resource 和 `maxUploadBatchBytes` 传给 `HttpApmUploader`。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
+该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现；built-in HTTP 同时要求 V3/resource/occurrence/byte budget。factory 把固定 resource 和 `maxUploadBatchBytes` 传给 `HttpApmUploader`。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
 
 默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
 
@@ -215,11 +217,16 @@ ERROR/FATAL 绕过动态采样和限流。provider 读取异常通过 internal e
 
 聚合默认关闭：
 
-- METRIC：窗口统计与有限样本
+- METRIC：按 occurrence、模块/事件、severity/priority、进程/线程、scene/foreground、context/extras、非数值字段及数值字段名集合分桶；每桶保留冻结模板，输出数值统计及 sample_count；新 eventId 保留发生时身份
+- 超过 64 字段、16 KiB 模板预算、仅文本或输出字段冲突的事件绕过聚合完整交付
 - ALERT：stack fingerprint 去重
 - bucket/sample/cache 都有硬上限
 
-PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；内置 Regex 预编译一次。归一化后的敏感判定按原始键名记入有界（256）并发缓存，超过 128 字符的 host-controlled 键仍判定但不保留；每条内置规则带各自的最短可命中长度快拒（手机号 11、邮箱 6、身份证 18、URL token 6、URL 密码 5），短于下限的值直接返回原引用。map 采用 copy-on-write：公开 `sanitize` 对零命中 map 也返回独立快照，防止调用方后续修改重写脱敏结果；dispatcher 只对入队时已冻结所有权的 map 使用零分配共享快路径，有命中时物化保持迭代顺序的新 map，首个变化项复用探测结果以保证每条自定义规则每项仅执行一次。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
+PII sanitization 默认开启。内置文本规则覆盖手机号、邮箱、身份证、URL token/password；字段名保护直接遮蔽 authorization、auth/authentication/auth-header、password、access/refresh token、API key、cookie、phone/email 等高置信字段，因此数值型直接标识符也不会绕过。字段名先移除分隔符并统一大小写，`author` 等非敏感近似名不误伤；邮箱采用线性扫描，其余内置 Regex 预编译一次。归一化后的敏感判定按原始键名记入有界（256）并发缓存，超过 128 字符的 host-controlled 键仍判定但不保留；每条内置规则带各自的最短可命中长度快拒（手机号 11、邮箱 6、身份证 18、URL token 6、URL 密码 5），短于下限的值直接返回原引用。map 采用 copy-on-write：公开 `sanitize` 对零命中 map 也返回独立快照，防止调用方后续修改重写脱敏结果；dispatcher 只对入队时已冻结所有权的 map 使用零分配共享快路径，有命中时物化保持迭代顺序的新 map，首个变化项复用探测结果以保证每条自定义规则每项仅执行一次。固定种子语料覆盖分隔符/大小写变体、混合手机号/邮箱/token 以及原事件不可变。普通数值指标保持原类型，生产环境仍需结合自身字段和法规扩展规则。compatibility 可显式关闭但必须完成隐私评审；strict 禁止关闭。
+
+字段快照在 async boundary 只保留 null、String、Boolean、Byte/Short/Int/Long、Float/Double、Char 和精确 BigInteger/BigDecimal 类；可变文本最多复制 64 Ki 字符后脱敏，其他对象以 `[unsupported]` 替换，不执行 arbitrary `toString`。公开 sanitizer 对直接传入的可变字段执行同样规范化；String 不截断，仍遵循既有事件/队列预算。
+
+Worker 的失败等待以 `System.nanoTime` 截止时间为准，新落盘 signal 只唤醒 idle。V3 preflight 通过可选 `ValidatingApmUploader` 识别发生身份缺失/非法行；SQLite 经 `DiscardablePendingEventStore.discardClaim` 单独按 owner 删除，并记录 `UPLOAD_PROTOCOL_REJECTED`，不把拒绝表示为成功 ACK。自定义旧 store 仅对拒绝行执行原 retry/TTL。撤回结果的 `uploadWorkerStopped` 为 nullable：true/false 表示真实 worker 退出/等待超时，custom asynchronous transport 等无证据场景为 null。
 
 ## 11. 自监控与降级
 
@@ -280,7 +287,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 - `ProcessEventCoordinatorTest`
 - RateLimiter/Gray/DynamicConfig
 - managed kill switch、dynamic sampling/rate-limit、dynamic endpoint wiring
-- strict V2/resource/batch-byte 配置门禁与 uploader factory wiring
+- strict V3/resource/occurrence/batch-byte 配置门禁与 uploader factory wiring
 - Aggregator/StackFingerprinter
 - PII sanitizer
 - SDK self-monitor

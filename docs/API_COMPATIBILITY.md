@@ -1,6 +1,6 @@
 # AndroidAPM 公共 API 兼容策略
 
-> 同步日期：2026-07-31｜当前 SDK 版本：0.1.0
+> 同步日期：2026-09-07｜当前 SDK 版本：0.1.0
 
 ## 目标与范围
 
@@ -26,7 +26,11 @@
 
 公开 API 的计划移除应先标记 deprecated，并至少保留一个 minor 版本周期。只有安全漏洞、错误契约会造成更大风险或根本无法兼容时，才允许走明确记录的例外。
 
-事件 wire schema、SQLite/durable codec 与诊断文件格式各自拥有独立版本和兼容规则，不能用 Maven 坐标升级代替协议迁移。Collector V2 继续遵守 append-only 字段、显式 schema version 和精确 ACK 契约。
+事件 wire schema、SQLite/durable codec 与诊断文件格式各自拥有独立版本和兼容规则，不能用 Maven 坐标升级代替协议迁移。Collector V2/V3 分别遵守 append-only 字段、显式 schema/media type/batch prefix 和精确 ACK 契约；durable codec V4 append occurrence 并继续读取 V1/V2/V3。
+
+2026-08-28 的 occurrence/V3 变更按 0.1.x additive 规则落地：原 `ApmEvent`、`ApmConfig` primary constructor、`copy/copy$default` 和 `componentN` JVM 签名未变化；新增公开面限于 `Apm.init(application, config, ApmOccurrenceContext)` overload、`ApmEvent.occurrence`、`ApmEvent.withOccurrenceContext` 以及 V3 serializer/protocol/identity 类型。根 `apiCheck` 与 `tools/verify_api_baselines.py` 已验证全部 24 份基线。因为 Kotlin data-class `copy` 不包含类体中的 occurrence backing field，外部自定义管线复制 V3 event 后必须显式调用 `withOccurrenceContext`；这是新增 API 的语义约束，不是既有 ABI 的隐式变化。
+
+2026-09-07 修复仅新增可选 `ValidatingApmUploader`/`UploadRejectionReason`、`DiscardablePendingEventStore`、V3 identity validator、HTTP shutdown 状态和 `ConsentRevocationResult.uploadWorkerStopped` getter，以及末尾追加的 drop reason。旧接口不增加必须实现的成员；原 data-class constructor/copy/component 签名保持。撤回结果的退出证据放在类体内，旧 `copy` 产生的结果将该证据重置为 null（未知）。聚合统计由 locale-dependent String 修正为 Double/Int，属于事件内容语义修复，宿主查询需按数值处理。
 
 ## 变更流程
 

@@ -39,7 +39,7 @@ class ApmEventCodecTest {
         assertEquals(source, decoded)
     }
 
-    /** Version 3 restores every supported scalar field type exactly. */
+    /** Version 4 retains the version-3 typed scalar contract exactly. */
     @Test
     fun `typed fields preserve supported scalar types`() {
         val fields = linkedMapOf<String, Any?>(
@@ -93,6 +93,36 @@ class ApmEventCodecTest {
         assertEquals("event-42", decoded.eventId)
     }
 
+    /** Version 4 freezes release, installation, and build-relative native identity. */
+    @Test
+    fun `occurrence snapshot survives durable round trip`() {
+        val occurrence = ApmOccurrenceContext(
+            serviceVersion = "2.4.1",
+            versionCode = "20401",
+            appBuild = "build-a1b2c3",
+            variant = "productionRelease",
+            installationId = "anonymous-installation",
+            nativeFrames = listOf(
+                ApmNativeFrameIdentity(
+                    abi = "arm64-v8a",
+                    moduleBuildId = "7f4a",
+                    moduleName = "libsample.so",
+                    moduleRelativePc = 0x1234,
+                    loadBias = 0x1000
+                )
+            )
+        )
+        val source = ApmEvent(
+            module = "crash",
+            name = "native_crash",
+            eventId = "occurrence-event"
+        ).withOccurrenceContext(occurrence)
+
+        val decoded = ApmEventCodec.decode(ApmEventCodec.encode(source))
+        assertEquals(source, decoded)
+        assertEquals(occurrence, decoded.occurrence)
+    }
+
     /** Strict UTF-8 validation continues to accept valid multilingual and supplementary text. */
     @Test
     fun `valid unicode string round trip is preserved`() {
@@ -123,6 +153,16 @@ class ApmEventCodecTest {
         assertEquals("legacy", decoded.name)
         assertEquals(mapOf("enabled" to "true"), decoded.fields)
         assertEquals("legacy-event-2", decoded.eventId)
+    }
+
+    /** Version 3 typed payloads remain readable with no invented occurrence identity. */
+    @Test
+    fun `version three payload remains readable`() {
+        val decoded = ApmEventCodec.decode(versionThreePayload())
+
+        assertEquals(mapOf("count" to 7), decoded.fields)
+        assertEquals("legacy-event-3", decoded.eventId)
+        assertEquals(null, decoded.occurrence)
     }
 
     /** Unknown version-3 field tags reject the corrupt event instead of misaligning later fields. */
@@ -227,6 +267,27 @@ class ApmEventCodecTest {
             fields = mapOf("enabled" to "true"),
             eventId = "legacy-event-2"
         )
+    }
+
+    /** Builds the exact version-3 format containing typed fields but no occurrence snapshot. */
+    private fun versionThreePayload(): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        DataOutputStream(buffer).use { output ->
+            output.writeInt(3)
+            output.writeLong(123L)
+            listOf("core", "legacy", "METRIC", "INFO", "NORMAL", "process", "thread").forEach {
+                output.writeTestString(it)
+            }
+            output.writeBoolean(false)
+            output.writeByte(0)
+            output.writeInt(1)
+            output.writeTestString("count")
+            output.writeByte(5) // FIELD_TYPE_INT in the published durable V3 format.
+            output.writeInt(7)
+            repeat(2) { output.writeInt(0) }
+            output.writeTestString("legacy-event-3")
+        }
+        return buffer.toByteArray()
     }
 
     /** Builds a legacy version-1/2 payload without relying on the current production writer. */

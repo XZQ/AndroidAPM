@@ -42,16 +42,29 @@ object ProtobufSerializer {
      * @return protobuf 编码的字节数组
      */
     fun serialize(event: ApmEvent): ByteArray {
-        return serializeEvent(event, typedFields = false)
+        return serializeEvent(event, typedFields = false, includeOccurrence = false)
     }
 
     /** Encodes one event for the schema-v2 batch envelope using explicit typed fields. */
     internal fun serializeVersionedEvent(event: ApmEvent): ByteArray {
-        return serializeEvent(event, typedFields = true)
+        require(event.occurrence == null) {
+            "Schema V2 must not carry an occurrence snapshot; select PROTOBUF_ENVELOPE_V3"
+        }
+        return serializeEvent(event, typedFields = true, includeOccurrence = false)
+    }
+
+    /** Encodes one event for schema V3 and requires complete occurrence-bound identity. */
+    internal fun serializeVersionedEventV3(event: ApmEvent): ByteArray {
+        validateOccurrence(event.occurrence)
+        return serializeEvent(event, typedFields = true, includeOccurrence = true)
     }
 
     /** Writes common event fields while selecting either legacy or versioned field semantics. */
-    private fun serializeEvent(event: ApmEvent, typedFields: Boolean): ByteArray {
+    private fun serializeEvent(
+        event: ApmEvent,
+        typedFields: Boolean,
+        includeOccurrence: Boolean
+    ): ByteArray {
         // 容量预估摊薄默认 32 字节缓冲的多次扩容；字符数下界足够作为增长提示
         val buffer = ByteArrayOutputStream(estimateEventBytes(event))
         val writer = ProtobufWriter(buffer)
@@ -97,9 +110,76 @@ object ProtobufSerializer {
         writer.writeString(FIELD_PRIORITY, event.priority.name)
         // Event identity is append-only field 14 for server-side deduplication.
         writer.writeString(FIELD_EVENT_ID, event.eventId)
+        if (includeOccurrence) {
+            writer.writeMessage(FIELD_OCCURRENCE, serializeOccurrence(requireNotNull(event.occurrence)))
+        }
 
         writer.flush()
         return buffer.toByteArray()
+    }
+
+    /** Encodes occurrence identity independently so V2 cannot accidentally emit field 16. */
+    private fun serializeOccurrence(occurrence: ApmOccurrenceContext): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        val writer = ProtobufWriter(buffer)
+        writer.writeString(OCCURRENCE_SERVICE_VERSION, occurrence.serviceVersion)
+        writer.writeString(OCCURRENCE_VERSION_CODE, occurrence.versionCode)
+        writer.writeString(OCCURRENCE_APP_BUILD, occurrence.appBuild)
+        writer.writeString(OCCURRENCE_VARIANT, occurrence.variant)
+        writer.writeString(OCCURRENCE_INSTALLATION_ID, occurrence.installationId)
+        for (frame in occurrence.nativeFrames) {
+            writer.writeMessage(OCCURRENCE_NATIVE_FRAMES, serializeNativeFrame(frame))
+        }
+        writer.flush()
+        return buffer.toByteArray()
+    }
+
+    /** Encodes one build-relative native frame without an absolute process address. */
+    private fun serializeNativeFrame(frame: ApmNativeFrameIdentity): ByteArray {
+        val buffer = ByteArrayOutputStream()
+        val writer = ProtobufWriter(buffer)
+        writer.writeString(NATIVE_FRAME_ABI, frame.abi)
+        writer.writeString(NATIVE_FRAME_BUILD_ID, frame.moduleBuildId)
+        writer.writeString(NATIVE_FRAME_MODULE_NAME, frame.moduleName)
+        writer.writeInt64(NATIVE_FRAME_RELATIVE_PC, frame.moduleRelativePc)
+        frame.loadBias?.let { writer.writeInt64(NATIVE_FRAME_LOAD_BIAS, it) }
+        writer.flush()
+        return buffer.toByteArray()
+    }
+
+    /** Validates strict V3 identity without encoding, allowing durable replay to isolate invalid rows. */
+    fun validateOccurrence(occurrence: ApmOccurrenceContext?) {
+        requireNotNull(occurrence) { "Schema V3 requires an occurrence snapshot on every event" }
+        val requiredValues = listOf(
+            occurrence.serviceVersion,
+            occurrence.versionCode,
+            occurrence.appBuild,
+            occurrence.variant,
+            occurrence.installationId
+        )
+        require(requiredValues.all { it.isNotBlank() && it == it.trim() && it.length <= MAX_IDENTITY_CHARS }) {
+            "Schema V3 occurrence values must be non-blank, trimmed, and bounded"
+        }
+        require(occurrence.versionCode.all { it in '0'..'9' }) {
+            "Schema V3 versionCode must use canonical unsigned decimal text"
+        }
+        require(occurrence.versionCode.length == 1 || occurrence.versionCode.first() != '0') {
+            "Schema V3 versionCode must use canonical unsigned decimal text"
+        }
+        require(occurrence.nativeFrames.size <= MAX_NATIVE_FRAMES) {
+            "Schema V3 occurrence exceeds the native-frame limit"
+        }
+        for (frame in occurrence.nativeFrames) {
+            require(
+                frame.abi.isNotBlank() && frame.moduleBuildId.isNotBlank() &&
+                    frame.moduleName.isNotBlank() && frame.abi.length <= MAX_IDENTITY_CHARS &&
+                    frame.moduleBuildId.length <= MAX_IDENTITY_CHARS &&
+                    frame.moduleName.length <= MAX_IDENTITY_CHARS
+            ) { "Schema V3 native frame identity is incomplete or oversized" }
+            require(frame.moduleRelativePc >= 0L && (frame.loadBias == null || frame.loadBias >= 0L)) {
+                "Schema V3 native addresses must be non-negative and module-relative"
+            }
+        }
     }
 
     /**
@@ -181,6 +261,32 @@ object ProtobufSerializer {
     private const val FIELD_EVENT_ID = 14
     /** Field 15: versioned typed event fields. */
     private const val FIELD_TYPED_FIELDS = 15
+    /** Field 16: schema-V3 occurrence-bound identity. */
+    private const val FIELD_OCCURRENCE = 16
+
+    /** Occurrence field: application version name. */
+    private const val OCCURRENCE_SERVICE_VERSION = 1
+    /** Occurrence field: versionCode. */
+    private const val OCCURRENCE_VERSION_CODE = 2
+    /** Occurrence field: immutable build identity. */
+    private const val OCCURRENCE_APP_BUILD = 3
+    /** Occurrence field: build variant. */
+    private const val OCCURRENCE_VARIANT = 4
+    /** Occurrence field: anonymous installation identity. */
+    private const val OCCURRENCE_INSTALLATION_ID = 5
+    /** Occurrence field: repeated build-relative native frames. */
+    private const val OCCURRENCE_NATIVE_FRAMES = 6
+
+    /** Native-frame field: ABI. */
+    private const val NATIVE_FRAME_ABI = 1
+    /** Native-frame field: module build ID. */
+    private const val NATIVE_FRAME_BUILD_ID = 2
+    /** Native-frame field: module name. */
+    private const val NATIVE_FRAME_MODULE_NAME = 3
+    /** Native-frame field: module-relative PC. */
+    private const val NATIVE_FRAME_RELATIVE_PC = 4
+    /** Native-frame field: optional load bias. */
+    private const val NATIVE_FRAME_LOAD_BIAS = 5
 
     /** Protobuf map-entry key field. */
     private const val MAP_ENTRY_KEY = 1
@@ -202,4 +308,10 @@ object ProtobufSerializer {
 
     /** 非字符串字段值不调用宿主 toString 时的固定保守字节估计。 */
     private const val ESTIMATE_NON_STRING_VALUE_BYTES = 24
+
+    /** Public protocol identity bound shared with the collector. */
+    private const val MAX_IDENTITY_CHARS = 256
+
+    /** Per-event native frame bound preventing unreviewed allocation growth. */
+    private const val MAX_NATIVE_FRAMES = 256
 }

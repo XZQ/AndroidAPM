@@ -53,3 +53,19 @@ interface BatchApmUploader : ApmUploader {
      */
     override fun upload(event: ApmEvent): Boolean = uploadBatch(listOf(event))
 }
+
+/** Optional, pure per-event preflight. Existing custom uploaders need not implement this contract. */
+interface ValidatingApmUploader : ApmUploader {
+    /** Returns a permanent protocol rejection, or null when normal transport should be attempted. */
+    fun rejectionReason(event: ApmEvent): UploadRejectionReason?
+}
+
+/** Payload-free local rejection reasons; these are not collector acknowledgements. */
+enum class UploadRejectionReason {
+    /** Legacy durable events have no historical occurrence identity for strict V3. */
+    OCCURRENCE_REQUIRED,
+    /** An existing occurrence violates the strict V3 contract. */
+    OCCURRENCE_INVALID,
+    /** V2 cannot carry the supplied V3 occurrence. */
+    OCCURRENCE_UNSUPPORTED
+}

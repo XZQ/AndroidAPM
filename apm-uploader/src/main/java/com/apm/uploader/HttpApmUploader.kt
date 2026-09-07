@@ -13,6 +13,10 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
+import java.util.Collections
+import java.util.IdentityHashMap
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicLong
 import java.util.zip.GZIPOutputStream
 
 /**
@@ -63,7 +67,53 @@ class HttpApmUploader(
     private val resourceContext: ApmResourceContext = ApmResourceContext(),
     /** Maximum uncompressed encoded bytes in one versioned HTTP request. */
     private val maxBatchBytes: Int = DEFAULT_MAX_BATCH_BYTES
-) : BatchApmUploader {
+) : BatchApmUploader, ValidatingApmUploader {
+
+    /** Serializes request admission with shutdown, without holding a lock across network I/O. */
+    private val lifecycleLock = Any()
+
+    /** All requests admitted before shutdown, including concurrently invoked host uploads. */
+    private val activeConnections = Collections.newSetFromMap(IdentityHashMap<HttpURLConnection, Boolean>())
+
+    /** Sticky close gate checked at admission and before every physical split request. */
+    @Volatile
+    private var stopped = false
+
+    /**
+     * Stops request admission and requests cancellation of every active connection. Some platform
+     * disconnect implementations wait on blocked I/O locks, so each cancellation runs on its own
+     * daemon instead of blocking consent revocation or preventing cancellation of another request.
+     */
+    override fun shutdown() {
+        val connections = synchronized(lifecycleLock) {
+            if (stopped) return
+            stopped = true
+            activeConnections.toList()
+        }
+        for (connection in connections) {
+            cancellationThreadFactory.newThread { disconnectSafely(connection) }.start()
+        }
+    }
+
+    /** Whether shutdown was requested and every admitted HTTP operation has actually returned. */
+    fun isShutdownComplete(): Boolean = synchronized(lifecycleLock) {
+        stopped && activeConnections.isEmpty()
+    }
+
+    /** Rejects identity-incompatible durable rows without changing their historical identity. */
+    override fun rejectionReason(event: ApmEvent): UploadRejectionReason? {
+        if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
+            return if (event.occurrence != null) UploadRejectionReason.OCCURRENCE_UNSUPPORTED else null
+        }
+        if (serializationFormat != SerializationFormat.PROTOBUF_ENVELOPE_V3) return null
+        if (event.occurrence == null) return UploadRejectionReason.OCCURRENCE_REQUIRED
+        return try {
+            ProtobufSerializer.validateOccurrence(event.occurrence)
+            null
+        } catch (_: IllegalArgumentException) {
+            UploadRejectionReason.OCCURRENCE_INVALID
+        }
+    }
 
     init {
         require(maxBatchBytes in 1..MAX_BATCH_BYTES) {
@@ -99,10 +149,13 @@ class HttpApmUploader(
      * @return true 表示完整批次上传成功
      */
     override fun uploadBatch(events: List<ApmEvent>): Boolean {
+        if (stopped) return false
         if (events.isEmpty()) {
             return true
         }
-        if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
+        if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2 ||
+            serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3
+        ) {
             return uploadVersionedBatches(events)
         }
         val payload = when (serializationFormat) {
@@ -110,19 +163,24 @@ class HttpApmUploader(
             SerializationFormat.LINE_PROTOCOL -> {
                 events.joinToString(separator = LINE_SEPARATOR) { it.toLineProtocol() }
                     .toByteArray(Charsets.UTF_8)
-                }
+            }
             SerializationFormat.PROTOBUF_ENVELOPE_V2 -> error("Handled before legacy serialization")
+            SerializationFormat.PROTOBUF_ENVELOPE_V3 -> error("Handled before legacy serialization")
         }
         return sendHttpPost(payload, ackExpectation = null)
     }
 
     /** Splits a versioned logical upload by encoded bytes and requires an exact ACK for each part. */
     private fun uploadVersionedBatches(events: List<ApmEvent>): Boolean {
+        // Direct callers retain whole-batch Boolean semantics; durable workers isolate rows first.
+        if (events.any { rejectionReason(it) != null }) return false
+        val schemaVersion = selectedEnvelopeSchemaVersion()
         val encodedBatches = encodeWithinBudget(events) ?: return false
         for (batch in encodedBatches) {
+            if (stopped) return false
             val accepted = sendHttpPost(
                 payload = batch.payload,
-                ackExpectation = AckExpectation(batch.batchId, batch.eventCount)
+                ackExpectation = AckExpectation(schemaVersion, batch.batchId, batch.eventCount)
             )
             if (!accepted) {
                 // Earlier parts may already be ACKed; at-least-once retry safely resends them by eventId.
@@ -140,12 +198,23 @@ class HttpApmUploader(
      * 单事件超出预算时返回 null 并记录失败。
      */
     private fun encodeWithinBudget(events: List<ApmEvent>): List<EncodedApmBatch>? {
-        val encodedBatches = ApmBatchEnvelopeSerializer.serializeWithinBudget(
-            events = events,
-            resource = resourceContext,
-            maxBatchBytes = maxBatchBytes,
-            sentAtMs = System.currentTimeMillis()
-        )
+        val encodedBatches = when (serializationFormat) {
+            SerializationFormat.PROTOBUF_ENVELOPE_V2 ->
+                ApmBatchEnvelopeSerializer.serializeWithinBudget(
+                    events = events,
+                    resource = resourceContext,
+                    maxBatchBytes = maxBatchBytes,
+                    sentAtMs = System.currentTimeMillis()
+                )
+            SerializationFormat.PROTOBUF_ENVELOPE_V3 ->
+                ApmBatchEnvelopeSerializer.serializeWithinBudgetV3(
+                    events = events,
+                    resource = resourceContext,
+                    maxBatchBytes = maxBatchBytes,
+                    sentAtMs = System.currentTimeMillis()
+                )
+            else -> error("Versioned batch encoding requires an explicit envelope format")
+        }
         if (encodedBatches == null) {
             logger.e("Versioned APM event exceeds maxBatchBytes=$maxBatchBytes")
         }
@@ -159,6 +228,7 @@ class HttpApmUploader(
      * @return true 表示服务端接受（HTTP 2xx），false 表示失败
      */
     private fun sendHttpPost(payload: ByteArray, ackExpectation: AckExpectation?): Boolean {
+        if (stopped) return false
         var connection: HttpURLConnection? = null
         try {
             // Resolve credentials before opening the connection. Provider failures keep durable
@@ -176,12 +246,18 @@ class HttpApmUploader(
                     SerializationFormat.PROTOBUF -> CONTENT_TYPE_PROTOBUF
                     SerializationFormat.LINE_PROTOCOL -> CONTENT_TYPE_TEXT
                     SerializationFormat.PROTOBUF_ENVELOPE_V2 -> ApmWireProtocol.CONTENT_TYPE_ENVELOPE_V2
+                    SerializationFormat.PROTOBUF_ENVELOPE_V3 -> ApmWireProtocol.CONTENT_TYPE_ENVELOPE_V3
                 }
                 setRequestProperty(HEADER_CONTENT_TYPE, contentType)
                 setRequestProperty(HEADER_ACCEPT, CONTENT_TYPE_JSON)
                 doOutput = true
                 doInput = true
                 useCaches = false
+            }
+
+            synchronized(lifecycleLock) {
+                if (stopped) return false
+                activeConnections.add(connection)
             }
 
             // 设置自定义 Headers（鉴权、设备信息等）
@@ -192,7 +268,7 @@ class HttpApmUploader(
                 // Protocol-owned headers let collectors reject unsupported schemas before parsing.
                 connection.setRequestProperty(
                     ApmWireProtocol.HEADER_SCHEMA_VERSION,
-                    ApmWireProtocol.ENVELOPE_SCHEMA_VERSION.toString()
+                    ackExpectation.schemaVersion.toString()
                 )
                 connection.setRequestProperty(ApmWireProtocol.HEADER_SDK_VERSION, ApmWireProtocol.SDK_VERSION)
                 connection.setRequestProperty(ApmWireProtocol.HEADER_BATCH_ID, ackExpectation.batchId)
@@ -207,6 +283,7 @@ class HttpApmUploader(
             }
 
             // 写入请求体（可选 Gzip 压缩）
+            if (stopped) return false
             val outputStream: OutputStream = connection.outputStream
             if (enableGzip) {
                 // Gzip 压缩模式；8 KiB 内部缓冲避免默认 512 字节对 socket 流的频繁小写入
@@ -225,6 +302,7 @@ class HttpApmUploader(
 
             // 读取响应码
             val responseCode = connection.responseCode
+            if (stopped) return false
 
             // 读尽并关闭响应流：不排空响应体会阻止 HttpURLConnection
             // 归还底层连接（keep-alive 失效），错误路径还可能泄漏连接
@@ -244,7 +322,7 @@ class HttpApmUploader(
                 // 成功：2xx
                 responseCode in HTTP_SUCCESS_MIN..HTTP_SUCCESS_MAX -> {
                     if (ackExpectation == null || hasMatchingAck(connection, ackExpectation)) {
-                        true
+                        !stopped
                     } else {
                         logger.w("Versioned batch received 2xx without an exact whole-batch ACK")
                         false
@@ -270,10 +348,24 @@ class HttpApmUploader(
             // 网络异常（DNS、连接超时、读取超时等）：
             // 交换未完成，此时断开连接释放底层 socket
             logger.e("HTTP upload error: ${e.message}")
-            connection?.disconnect()
+            connection?.let(::disconnectSafely)
             return false
+        } finally {
+            if (stopped) connection?.let(::disconnectSafely)
+            synchronized(lifecycleLock) {
+                activeConnections.remove(connection)
+            }
         }
         // 正常完成的交换不调用 disconnect()，让底层连接回到 keep-alive 池复用
+    }
+
+    /** Cancels one platform connection without allowing a recoverable close failure to skip others. */
+    private fun disconnectSafely(connection: HttpURLConnection) {
+        try {
+            connection.disconnect()
+        } catch (error: Exception) {
+            logger.e("HTTP cancellation failed", error)
+        }
     }
 
     /** Returns true only when the collector echoes the exact schema, batch identity, and event count. */
@@ -285,9 +377,20 @@ class HttpApmUploader(
         val eventCount = parseCanonicalPositiveInt(
             connection.getHeaderField(ApmWireProtocol.HEADER_EVENT_COUNT)
         )
-        return schema == ApmWireProtocol.ENVELOPE_SCHEMA_VERSION &&
+        return schema == expectation.schemaVersion &&
             batchId == expectation.batchId &&
             eventCount == expectation.eventCount
+    }
+
+    /** Returns the exact schema selected by the configured explicit envelope format. */
+    private fun selectedEnvelopeSchemaVersion(): Int {
+        return when (serializationFormat) {
+            SerializationFormat.PROTOBUF_ENVELOPE_V2 ->
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V2
+            SerializationFormat.PROTOBUF_ENVELOPE_V3 ->
+                ApmWireProtocol.ENVELOPE_SCHEMA_VERSION_V3
+            else -> error("No explicit envelope schema selected")
+        }
     }
 
     /** Parses an ACK integer only from its canonical unsigned decimal representation. */
@@ -382,7 +485,7 @@ class HttpApmUploader(
             stream?.use { input ->
                 val buffer = ByteArray(DRAIN_BUFFER_SIZE)
                 // 循环读取直到 EOF，内容直接丢弃，只为让连接可复用
-                while (input.read(buffer) != -1) {
+                while (!stopped && input.read(buffer) != -1) {
                     // 丢弃响应内容
                 }
             }
@@ -421,6 +524,23 @@ class HttpApmUploader(
     }
 
     companion object {
+        /** Distinguishes the finite set of connections being cancelled for a stopped uploader. */
+        private val cancellationSequence = AtomicLong()
+
+        /** Named daemon/background factory owned by uploader, which deliberately does not depend on core. */
+        private val cancellationThreadFactory = ThreadFactory { runnable ->
+            Thread({
+                try {
+                    android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND)
+                } catch (_: RuntimeException) {
+                    // Plain JVM tests do not implement Android process priority APIs.
+                }
+                runnable.run()
+            }, "apm-http-cancel-${cancellationSequence.incrementAndGet()}").apply {
+                isDaemon = true
+                priority = Thread.MIN_PRIORITY
+            }
+        }
         /** HTTP 方法：POST。 */
         private const val METHOD_POST = "POST"
 
@@ -526,6 +646,8 @@ class HttpApmUploader(
 
     /** Expected collector acknowledgement for one physical versioned request. */
     private data class AckExpectation(
+        /** Exact explicit envelope schema sent in body and request header. */
+        val schemaVersion: Int,
         /** Stable batch identity sent in both body and request header. */
         val batchId: String,
         /** Complete event count required in the response ACK. */

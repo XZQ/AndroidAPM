@@ -27,6 +27,20 @@ import org.robolectric.RuntimeEnvironment
 @RunWith(RobolectricTestRunner::class)
 class SQLiteEventStoreTest {
 
+    /** Permanent rejection uses the same exact ownership predicate and accounting as successful ACK. */
+    @Test
+    fun `discard claim cannot delete another owners rows`() {
+        store.append(event("rejected"))
+        val now = System.currentTimeMillis()
+        val old = store.claimPending("old", 1, now, 10L)
+        val current = store.claimPending("current", 1, now + 11L, 1_000L)
+        assertEquals(old.map { it.id }, current.map { it.id })
+        assertEquals(0, store.discardClaim("old", old.map { it.id }))
+        assertEquals(1, store.pendingCount())
+        assertEquals(1, store.discardClaim("current", current.map { it.id }))
+        assertEquals(0, store.pendingCount())
+    }
+
     /** 数据库助手。 */
     private lateinit var dbHelper: EventDbHelper
 
