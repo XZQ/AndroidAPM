@@ -26,6 +26,61 @@ import org.junit.Test
  */
 class EventAggregatorTest {
 
+    /** Ten occurrences produce one original and a fresh immutable delta of nine. */
+    @Test
+    fun `ordinary alert duplicates preserve total count and occurrence across codec`() {
+        val aggregator = EventAggregator(windowMs = Long.MAX_VALUE)
+        val identity = ApmOccurrenceContext("1", "1", "build", "release", "installation")
+        val first = createAlertEvent("Failure", "at sample.Work.run(Work.kt:7)").withOccurrenceContext(identity)
+        val output = mutableListOf<ApmEvent>()
+        repeat(10) { index ->
+            output += aggregator.process(first.copy(eventId = "alert-$index").withOccurrenceContext(identity))
+        }
+        output += aggregator.flush()
+        val rows = output.map { ApmEventCodec.decode(ApmEventCodec.encode(it)) }
+        assertEquals(2, rows.size)
+        assertEquals(10, rows.sumOf { (it.fields["count"] as? Int) ?: 1 })
+        assertEquals(9, rows.last().fields["count"])
+        assertEquals("duplicate_delta", rows.last().extras["aggregation.kind"])
+        assertEquals("alert-0", rows.last().extras["aggregation.source_event_id"])
+        assertEquals(rows.size, rows.map { it.eventId }.toSet().size)
+        assertTrue(rows.all { it.occurrence == identity })
+        assertTrue("count" !in rows.first().fields)
+        assertTrue(aggregator.flush().isEmpty())
+    }
+
+    /** Expiry and eviction both deliver the pending delta instead of silently deleting it. */
+    @Test
+    fun `alert expiry and capacity eviction flush unsent counts`() {
+        val first = createAlertEvent("Failure", "at sample.Work.run(Work.kt:7)")
+        val expiring = EventAggregator(windowMs = 1L)
+        val expiredOutput = expiring.process(first) + expiring.process(first.copy(eventId = "duplicate")) +
+            expiring.flushExpired(Long.MAX_VALUE)
+        assertEquals(2, expiredOutput.sumOf { (it.fields["count"] as? Int) ?: 1 })
+        assertTrue(expiring.flush().isEmpty())
+
+        val bounded = EventAggregator(windowMs = Long.MAX_VALUE, maxBuckets = 1)
+        val output = bounded.process(first) + bounded.process(first.copy(eventId = "duplicate")) +
+            bounded.process(first.copy(name = "another", eventId = "another")) + bounded.flush()
+        assertEquals(3, output.sumOf { (it.fields["count"] as? Int) ?: 1 })
+        assertEquals(1, output.count { it.extras["aggregation.kind"] == "duplicate_delta" })
+    }
+
+    /** Unparseable stacks, hash collisions, exceptions and module/process dimensions never collapse. */
+    @Test
+    fun `unrelated ordinary alerts cannot share an empty or lossy fingerprint`() {
+        val aggregator = EventAggregator(windowMs = Long.MAX_VALUE)
+        val events = listOf(
+            createAlertEvent("A", "TypeA: failed"), createAlertEvent("B", "TypeB: failed"),
+            createAlertEvent("A", "at Aa"), createAlertEvent("A", "at BB"),
+            createAlertEvent("B", "at Aa"), createAlertEvent("A", "at Aa").copy(module = "other"),
+            createAlertEvent("A", "at Aa").copy(processName = "worker")
+        )
+        val output = events.flatMap(aggregator::process) + aggregator.flush()
+        assertEquals(events.size, output.size)
+        assertTrue(output.all { "count" !in it.fields })
+    }
+
     /** A short initial population must not dominate a much larger slow population, in either order. */
     @Test
     fun `percentiles represent the full window across distribution shifts`() {

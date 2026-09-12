@@ -38,16 +38,9 @@ class StackFingerprinter(
     }
 
     /** Performs one deterministic check at the supplied monotonic time. */
+    @Synchronized
     internal fun checkAt(event: ApmEvent, nowElapsedMs: Long): DedupResult {
-        val stackTrace = event.fields["stack_trace"]?.toString()
-            ?: event.fields["stacktrace"]?.toString()
-
-        // 没有栈信息的事件不做去重
-        if (stackTrace.isNullOrBlank()) {
-            return DedupResult.New
-        }
-
-        val fingerprint = computeFingerprint(stackTrace)
+        val fingerprint = fingerprintOf(event) ?: return DedupResult.New
         val now = nowElapsedMs
 
         // 清理过期的指纹条目
@@ -67,17 +60,22 @@ class StackFingerprinter(
     }
 
     /**
-     * 计算栈指纹。
-     * 取栈的前 [fingerprintLines] 行，拼接后做哈希。
+     * Returns a bounded canonical key, not a lossy hashCode. Missing/unrecognized stacks bypass
+     * deduplication; module, event and exception identity prevent unrelated failures from merging.
      */
-    private fun computeFingerprint(stackTrace: String): String {
-        val lines = stackTrace.lines()
-            .map { it.trim() }
-            .filter { it.isNotEmpty() && it.startsWith("at ") }
-            .take(fingerprintLines)
-            .joinToString("|")
-
-        return lines.hashCode().toString()
+    internal fun fingerprintOf(event: ApmEvent): String? {
+        val stack = STACK_FIELDS.firstNotNullOfOrNull { event.fields[it] as? String } ?: return null
+        if (stack.isBlank() || stack.length > MAX_STACK_CHARS) return null
+        val frames = stack.lineSequence().map(String::trim).filter { it.startsWith(FRAME_PREFIX) }
+            .take(fingerprintLines.coerceIn(1, MAX_FINGERPRINT_LINES)).toList()
+        if (frames.isEmpty()) return null
+        val exceptionHeader = stack.lineSequence().map(String::trim)
+            .firstOrNull { it.isNotEmpty() && !it.startsWith(FRAME_PREFIX) }.orEmpty()
+        val parts = listOf(event.module, event.name, exceptionHeader) +
+            EXCEPTION_FIELDS.map { event.fields[it] as? String ?: "" } + frames
+        if (parts.any { it.length > MAX_STACK_CHARS }) return null
+        // Length prefixes make even hostile delimiter-containing names unambiguous.
+        return buildString { parts.forEach { append(it.length).append(':').append(it) } }
     }
 
     /** 淘汰过期的指纹条目。 */
@@ -108,7 +106,7 @@ class StackFingerprinter(
     ) {
         /** 增加计数。 */
         fun increment(now: Long) {
-            count++
+            if (count < Int.MAX_VALUE) count++
             lastSeenElapsedMs = now
         }
     }
@@ -123,6 +121,17 @@ class StackFingerprinter(
     }
 
     companion object {
+        /** Supported ordinary-alert stack spellings; critical Crash/ANR bypass aggregation. */
+        internal val STACK_FIELDS = listOf("stack_trace", "stacktrace", "stackTrace")
+        /** Explicit exception identity spellings used by existing module integrations. */
+        private val EXCEPTION_FIELDS = listOf("exception", "exception_class", "exceptionClass")
+        /** Canonical JVM frame prefix. */
+        private const val FRAME_PREFIX = "at "
+        /** Bounds retained canonical keys for standalone public use. */
+        private const val MAX_STACK_CHARS = 16 * 1024
+        /** Prevents arbitrary constructor input from retaining an unbounded frame list. */
+        private const val MAX_FINGERPRINT_LINES = 64
+
         /** 默认栈指纹行数。 */
         private const val DEFAULT_FINGERPRINT_LINES = 3
 

@@ -18,6 +18,17 @@ import org.junit.Test
  */
 class StackFingerprinterTest {
 
+    /** No-frame text and Java hash collisions must not be mistaken for identical failures. */
+    @Test
+    fun `canonical fingerprint isolates unrecognized stacks and hash collisions`() {
+        val fingerprinter = StackFingerprinter()
+        for (stack in listOf("TypeA: failed", "TypeB: failed", "at Aa", "at BB")) {
+            assertTrue(fingerprinter.check(createEvent(stack)) is StackFingerprinter.DedupResult.New)
+        }
+        assertTrue(fingerprinter.check(createEvent("at Aa").copy(module = "other")) is StackFingerprinter.DedupResult.New)
+        assertTrue(fingerprinter.check(createEvent("TypeB: failed\nat Aa")) is StackFingerprinter.DedupResult.New)
+    }
+
     @Test
     fun `first event with stack trace is not duplicate`() {
         val fingerprinter = StackFingerprinter()

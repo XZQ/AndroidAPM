@@ -20,7 +20,7 @@ import kotlin.random.Random
  * - 数值字段计算 P50/P90/P99/min/max/count
  * - 聚合后输出一条 [AggregatedEvent]，大幅减少上报量
  *
- * ALERT 类事件（crash/ANR）通过 [StackFingerprinter] 去重。
+ * 普通 ALERT 通过 [StackFingerprinter] 分组并输出重复次数增量；关键 Crash/ANR 另走同步通道。
  * FILE 类事件不聚合，直接上报。
  *
  * 线程安全：所有方法通过 synchronized 保护内部状态。
@@ -54,6 +54,9 @@ class EventAggregator(
      * Keys include occurrence identity and dimensions; the existing bucket limit bounds cardinality.
      */
     private val buckets = LinkedHashMap<AggregationKey, AggregationBucket>()
+
+    /** Bounded ordinary-alert windows; the first event is delivered immediately. */
+    private val alertBuckets = LinkedHashMap<AlertKey, AlertBucket>()
 
     /** Aggregation window exposed to the dispatch scheduler. */
     val windowDurationMs: Long
@@ -91,7 +94,7 @@ class EventAggregator(
      */
     @Synchronized
     fun flush(): List<ApmEvent> {
-        if (buckets.isEmpty()) {
+        if (buckets.isEmpty() && alertBuckets.isEmpty()) {
             return emptyList()
         }
 
@@ -106,6 +109,8 @@ class EventAggregator(
         }
 
         buckets.clear()
+        alertBuckets.values.forEach { it.deltaEvent()?.let(results::add) }
+        alertBuckets.clear()
         return results
     }
 
@@ -117,7 +122,7 @@ class EventAggregator(
      */
     @Synchronized
     fun flushExpired(nowElapsedMs: Long = ApmClock.monotonicTimeMillis()): List<ApmEvent> {
-        val results = mutableListOf<ApmEvent>()
+        val results = flushExpiredAlerts(nowElapsedMs)
         val nowTimestampMs = ApmClock.wallTimeMillis()
         val iterator = buckets.entries.iterator()
         while (iterator.hasNext()) {
@@ -209,27 +214,103 @@ class EventAggregator(
         return output ?: emptyList()
     }
 
-    /**
-     * 处理 ALERT 事件去重。
-     * 首次出现正常上报，重复的出现增加首次事件的 count 字段。
-     */
+    /** Delivers first occurrence immediately and retains only an unsent duplicate delta. */
     private fun deduplicateAlert(event: ApmEvent): List<ApmEvent> {
-        return when (val result = stackFingerprinter.check(event)) {
-            is StackFingerprinter.DedupResult.New -> {
-                // 首次出现，正常上报
-                listOf(event)
-            }
-            is StackFingerprinter.DedupResult.Duplicate -> {
-                // 重复事件，在 extras 中记录重复次数但不上报
-                if (!skipDebugLogs) {
-                    logger?.d("Deduplicated ${event.module}/${event.name}, count=${result.totalCount}")
-                }
-                emptyList()
-            }
+        val template = snapshotEvent(event)
+        if (ApmEventSizeEstimator.estimate(template) > MAX_AGGREGATION_EVENT_BYTES ||
+            template.fields.keys.any { it in WINDOW_FIELD_NAMES } ||
+            template.extras.keys.any { it in ALERT_RESERVED_EXTRAS }
+        ) return listOf(event)
+        val fingerprint = stackFingerprinter.fingerprintOf(template) ?: return listOf(event)
+        val dimensions = template.fields.filterKeys { it !in StackFingerprinter.STACK_FIELDS }
+        val key = AlertKey(AggregationKey(template, dimensions, emptySet()), fingerprint)
+        val now = ApmClock.monotonicTimeMillis()
+        val output = flushExpiredAlerts(now)
+        val existing = alertBuckets[key]
+        if (existing != null) {
+            // Flush before saturation so no represented occurrence count is silently lost.
+            if (existing.duplicateCount == Int.MAX_VALUE) existing.deltaEvent()?.let(output::add)
+            existing.addDuplicate(template.timestamp)
+            return output
+        }
+        if (alertBuckets.size >= maxBuckets.coerceAtLeast(1)) {
+            val oldest = alertBuckets.entries.first()
+            alertBuckets.remove(oldest.key)
+            oldest.value.deltaEvent()?.let(output::add)
+        }
+        alertBuckets[key] = AlertBucket(template, now)
+        output += event
+        return output
+    }
+
+    /** Fixed windows expire even under continuous duplicates, with monotonic time only. */
+    private fun flushExpiredAlerts(nowElapsedMs: Long): MutableList<ApmEvent> {
+        val output = mutableListOf<ApmEvent>()
+        val iterator = alertBuckets.values.iterator()
+        while (iterator.hasNext()) {
+            val bucket = iterator.next()
+            if (nowElapsedMs - bucket.startElapsedMs < windowMs) continue
+            iterator.remove()
+            bucket.deltaEvent()?.let(output::add)
+        }
+        return output
+    }
+
+    /** Alert equality includes release/process/context and non-stack fields, not only call frames. */
+    private data class AlertKey(
+        /** Frozen occurrence and complete non-stack dimensions. */ val dimensions: AggregationKey,
+        /** Canonical bounded stack and exception identity. */ val fingerprint: String
+    )
+
+    /** Holds a bounded first-event template and the number of duplicates not yet delivered. */
+    private class AlertBucket(
+        /** Sanitized immutable first occurrence, including its original eventId. */ val template: ApmEvent,
+        /** Fixed monotonic window origin. */ val startElapsedMs: Long
+    ) {
+        /** Delta excludes the already emitted first event and every previously emitted summary. */
+        var duplicateCount = 0
+            private set
+        /** Earliest duplicate wall timestamp in the current delta. */
+        private var firstDuplicateMs = Long.MAX_VALUE
+        /** Latest duplicate wall timestamp in the current delta. */
+        private var lastDuplicateMs = Long.MIN_VALUE
+
+        /** Adds one unsent occurrence without replacing the already delivered first row. */
+        fun addDuplicate(timestampMs: Long) {
+            duplicateCount++
+            firstDuplicateMs = minOf(firstDuplicateMs, timestampMs)
+            lastDuplicateMs = maxOf(lastDuplicateMs, timestampMs)
+        }
+
+        /** Creates a fresh immutable eventId for one delta; zero duplicates produce no event. */
+        fun deltaEvent(): ApmEvent? {
+            if (duplicateCount == 0) return null
+            val result = template.copy(
+                eventId = java.util.UUID.randomUUID().toString(),
+                timestamp = lastDuplicateMs,
+                fields = template.fields + mapOf(
+                    "count" to duplicateCount, "window_start_ms" to firstDuplicateMs,
+                    "window_end_ms" to lastDuplicateMs
+                ),
+                extras = template.extras + mapOf(
+                    ALERT_AGGREGATION_KIND to "duplicate_delta", ALERT_SOURCE_EVENT_ID to template.eventId
+                )
+            )
+            duplicateCount = 0
+            firstDuplicateMs = Long.MAX_VALUE
+            lastDuplicateMs = Long.MIN_VALUE
+            return template.occurrence?.let(result::withOccurrenceContext) ?: result
         }
     }
 
     companion object {
+        /** Describes unsent duplicate count rather than a cumulative update to an existing row. */
+        private const val ALERT_AGGREGATION_KIND = "aggregation.kind"
+        /** Immutable first-event identity retained as a diagnostic link. */
+        private const val ALERT_SOURCE_EVENT_ID = "aggregation.source_event_id"
+        /** Host-owned markers must not be overwritten by generated summaries. */
+        private val ALERT_RESERVED_EXTRAS = setOf(ALERT_AGGREGATION_KIND, ALERT_SOURCE_EVENT_ID)
+
         /** 默认聚合窗口：5 分钟。 */
         private const val DEFAULT_WINDOW_MS = 300_000L
 

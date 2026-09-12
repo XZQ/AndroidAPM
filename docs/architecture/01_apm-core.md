@@ -319,3 +319,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 ## 2026-09-12 百分位采样
 
 百分位抽样改为 Algorithm R，使用有界均匀随机索引替换 reservoir，修复旧公式在 65,536 个样本以内几乎只替换第 0 槽的问题。生产使用正常随机源，测试注入固定 seed；min/max/sum 保持全量统计，百分位仍是默认 256 点的近似值。内部 population 使用 Long，既有 Int count 达上限后饱和而不溢出。回归覆盖 10,000 样本分布突变及反转、256/257/65,535/65,536/65,537/100,000 边界。 本项 core 30 suites / 241 tests、lint、apiCheck 和文档检查通过。
+
+## 2026-09-12 普通 ALERT 重复增量
+
+普通 ALERT 的首条事件立即交付；窗口内重复次数通过 count 增量摘要交付，摘要使用新 eventId 并保留 occurrence/维度，extras 标记 duplicate_delta 与首条 eventId。固定窗口过期、容量淘汰、普通关闭 flush 都输出尚未交付的增量，不修改已发出的行。消费方对该标记求和 count，不能把它当累计更新。去重键使用完整有界规范文本与模块/事件/异常身份，避免 hashCode 碰撞；聚合层还隔离进程、release、scene、context 等维度，无 at 栈帧或元数据冲突时直接通过。支持 stack_trace/stacktrace/stackTrace；内置 Crash/ANR 的 critical 同步通道仍绕过聚合。本次不把普通 ALERT 的问题误记为内置 Java Crash 丢次数。 本项 core 30 suites / 245 tests、lint、apiCheck 和文档检查通过。
