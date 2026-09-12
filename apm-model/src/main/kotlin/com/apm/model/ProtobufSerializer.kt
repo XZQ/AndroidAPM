@@ -65,6 +65,7 @@ object ProtobufSerializer {
         typedFields: Boolean,
         includeOccurrence: Boolean
     ): ByteArray {
+        if (typedFields) validateDecimalFieldBudget(event, MAX_DECIMAL_TEXT_CHARS)
         // 容量预估摊薄默认 32 字节缓冲的多次扩容；字符数下界足够作为增长提示
         val buffer = ByteArrayOutputStream(estimateEventBytes(event))
         val writer = ProtobufWriter(buffer)
@@ -145,6 +146,22 @@ object ProtobufSerializer {
         frame.loadBias?.let { writer.writeInt64(NATIVE_FRAME_LOAD_BIAS, it) }
         writer.flush()
         return buffer.toByteArray()
+    }
+
+    /**
+     * Rejects exponent expansion before allocating plain text. The total decimal text must fit
+     * both the caller's byte budget and the 2 MiB per-event allocation limit; other fields and
+     * envelope overhead remain subject to the serializer's exact encoded-byte checks.
+     */
+    fun validateDecimalFieldBudget(event: ApmEvent, maxPlainChars: Int) {
+        require(maxPlainChars > 0) { "Decimal text budget must be positive" }
+        var remaining = minOf(maxPlainChars, MAX_DECIMAL_TEXT_CHARS).toLong()
+        for (value in event.fields.values) {
+            if (value is java.math.BigDecimal) {
+                remaining -= decimalPlainTextLength(value)
+                require(remaining >= 0L) { "Decimal plain text exceeds the event wire budget" }
+            }
+        }
     }
 
     /** Validates strict V3 identity without encoding, allowing durable replay to isolate invalid rows. */

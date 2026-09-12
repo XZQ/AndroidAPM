@@ -92,9 +92,33 @@ data class ApmTypedValue(
                 is Double -> ApmTypedValue(ApmScalarType.DOUBLE, source.toString())
                 is Char -> ApmTypedValue(ApmScalarType.CHAR, source.toString())
                 is java.math.BigInteger -> ApmTypedValue(ApmScalarType.BIG_INTEGER, source.toString())
-                is java.math.BigDecimal -> ApmTypedValue(ApmScalarType.BIG_DECIMAL, source.toPlainString())
+                is java.math.BigDecimal -> {
+                    require(decimalPlainTextLength(source) <= MAX_DECIMAL_TEXT_CHARS) {
+                        "Decimal plain text exceeds the wire allocation limit"
+                    }
+                    ApmTypedValue(ApmScalarType.BIG_DECIMAL, source.toPlainString())
+                }
                 else -> ApmTypedValue(ApmScalarType.STRING, source.toString())
             }
         }
     }
 }
+
+/** Maximum expanded decimal text per event, consistent with the durable event hard bound. */
+internal const val MAX_DECIMAL_TEXT_CHARS = 2 * 1024 * 1024
+
+/** Computes exact plain-text length without expanding an exponent, including extreme Int scales. */
+internal fun decimalPlainTextLength(value: java.math.BigDecimal): Long {
+    val scale = value.scale().toLong()
+    val precision = value.precision().toLong()
+    val sign = if (value.signum() < 0) 1L else 0L
+    return if (scale <= 0L) {
+        // BigDecimal renders zero with negative scale as a single zero, without padding.
+        if (value.signum() == 0) 1L else sign + precision - scale
+    } else {
+        sign + maxOf(precision + 1L, scale + DECIMAL_FRACTION_PREFIX_CHARS)
+    }
+}
+
+/** Leading zero and decimal separator for a value smaller than one. */
+private const val DECIMAL_FRACTION_PREFIX_CHARS = 2L

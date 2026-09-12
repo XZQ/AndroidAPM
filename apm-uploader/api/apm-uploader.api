@@ -106,6 +106,7 @@ public final class com/apm/uploader/RetryingApmUploader$Companion {
 }
 
 public final class com/apm/uploader/UploadRejectionReason : java/lang/Enum {
+	public static final field DECIMAL_BUDGET_EXCEEDED Lcom/apm/uploader/UploadRejectionReason;
 	public static final field OCCURRENCE_INVALID Lcom/apm/uploader/UploadRejectionReason;
 	public static final field OCCURRENCE_REQUIRED Lcom/apm/uploader/UploadRejectionReason;
 	public static final field OCCURRENCE_UNSUPPORTED Lcom/apm/uploader/UploadRejectionReason;

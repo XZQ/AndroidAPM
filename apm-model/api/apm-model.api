@@ -221,6 +221,7 @@ public final class com/apm/model/ProtobufSerializer {
 	public static final field INSTANCE Lcom/apm/model/ProtobufSerializer;
 	public final fun serialize (Lcom/apm/model/ApmEvent;)[B
 	public final fun serializeBatch (Ljava/util/List;)[B
+	public final fun validateDecimalFieldBudget (Lcom/apm/model/ApmEvent;I)V
 	public final fun validateOccurrence (Lcom/apm/model/ApmOccurrenceContext;)V
 }
 

@@ -67,5 +67,7 @@ enum class UploadRejectionReason {
     /** An existing occurrence violates the strict V3 contract. */
     OCCURRENCE_INVALID,
     /** V2 cannot carry the supplied V3 occurrence. */
-    OCCURRENCE_UNSUPPORTED
+    OCCURRENCE_UNSUPPORTED,
+    /** Decimal exponent expansion cannot fit the versioned event's bounded wire allocation. */
+    DECIMAL_BUDGET_EXCEEDED
 }

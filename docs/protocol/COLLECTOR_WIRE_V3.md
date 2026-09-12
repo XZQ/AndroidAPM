@@ -168,3 +168,7 @@ HTTP 2xx 只有同时返回以下精确响应 Header 才表示该物理 batch �
 2026-08-28，`tools/verify_collector_e2e.py` 使用实际 `HttpApmUploader` 和实际 FastAPI/uvicorn Gateway，经 Gzip 分别发送并重放两个 2-event V2/V3 batch。测试用 SQLite migration 到 server head 后只有 4 个唯一 eventId，并独立核对 exact ACK、V2 typed scalar、V3 occurrence/native frame、低质量 request/batch 声明不覆盖 occurrence、tenant-scoped HMAC/key version 以及 installation 明文不落 `payload_json`。
 
 该结果冻结本地跨语言 wire/持久化闭环，不代表 PostgreSQL 并发与事务、TLS ingress、代理丢 ACK、真实 SigNoz、R8/LLVM、通知、备份恢复、故障注入或 72h soak 已验收。
+
+## 2026-09-12 Decimal 展开预算
+
+BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。

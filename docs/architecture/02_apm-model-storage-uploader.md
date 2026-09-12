@@ -264,3 +264,7 @@ claimPending(owner, lease)
 `apm-uploader`：retry policy、priority comparator、Retrying uploader 容量/关闭、worker/scheduler 实际执行线程的名称/daemon/priority、真实 HTTP socket/Gzip/batch/Retry-After（含溢出饱和）、逐请求 Token、Header 注入防护、HTTPS endpoint 轮换、V2/V3 byte split、media type 与 canonical exact ACK 固定语料。
 
 `apm-core`：PersistentUploadWorker success/failure/fallback、UploaderFactory retry ownership、strict V3 occurrence 门禁，以及普通/critical/IPC hand-off 前的 occurrence 绑定与 Native frame 合并。
+
+## 2026-09-12 Decimal 展开预算
+
+BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。 本项 model 5 / 60、core 30 / 239、uploader 4 / 31 测试无失败；model/uploader apiCheck、uploader lint、24 基线及文档检查通过。独立 -Xmx32m JVM 对原 203-byte durable / 1E+100000000 探针返回有界拒绝，未发生 OOM。

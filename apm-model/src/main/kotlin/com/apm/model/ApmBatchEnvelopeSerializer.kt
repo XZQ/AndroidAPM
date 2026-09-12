@@ -120,6 +120,15 @@ object ApmBatchEnvelopeSerializer {
             return emptyList()
         }
 
+        // A tiny durable decimal may expand to gigabytes. Validate the complete logical batch
+        // before encoding any event so a later bad row cannot waste earlier encoding allocations.
+        for (event in events) {
+            try {
+                ProtobufSerializer.validateDecimalFieldBudget(event, maxBatchBytes)
+            } catch (_: IllegalArgumentException) {
+                return null
+            }
+        }
         // 单次编码：字节数组同时服务于贡献计算与最终写入
         val encodedEvents = ArrayList<ByteArray>(events.size)
         val contributions = IntArray(events.size)

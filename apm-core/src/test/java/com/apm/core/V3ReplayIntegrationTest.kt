@@ -40,7 +40,7 @@ import java.util.zip.GZIPInputStream
 class V3ReplayIntegrationTest {
     /** A legacy row is explicitly discarded while valid raw and aggregated V3 rows receive exact ACK. */
     @Test
-    fun `legacy outbox row cannot poison sanitized aggregate and current v3 batch`() {
+    fun `incompatible and oversized outbox rows cannot poison valid v3 delivery`() {
         val database = SQLiteEventStore(EventDbHelper(RuntimeEnvironment.getApplication(),
             name = "v3-replay-${System.nanoTime()}.db"))
         val legacySource = ApmEvent("legacy", "offline")
@@ -59,10 +59,15 @@ class V3ReplayIntegrationTest {
         aggregator.process(snapshotEvent(metric))
         val aggregate = PiiSanitizer().sanitize(aggregator.flush().single())
         val current = ApmEvent("sample", "current", fields = mapOf("value" to 7)).withOccurrenceContext(occurrence)
-        database.appendBatch(listOf(legacy, aggregate, current))
+        // A compact durable exponent must be discarded without materializing its huge plain text.
+        val oversized = ApmEvent("model", "decimal", fields = mapOf(
+            "value" to java.math.BigDecimal("1E+100000000")
+        )).withOccurrenceContext(occurrence)
+        database.appendBatch(listOf(legacy, aggregate, current, oversized))
         val initialRows = database.readPending(10)
         val legacyId = initialRows.single { it.event.eventId == legacy.eventId }.id
-        val validIds = initialRows.filter { it.event.occurrence != null }.map { it.id }.toSet()
+        val oversizedId = initialRows.single { it.event.eventId == oversized.eventId }.id
+        val validIds = initialRows.filter { it.id != legacyId && it.id != oversizedId }.map { it.id }.toSet()
         val aggregateRow = initialRows.single { it.event.eventId == aggregate.eventId }
         assertEquals(12.5, aggregateRow.event.fields["ms_p50"])
         assertEquals("r***@example.invalid", aggregateRow.event.fields["detail"])
@@ -137,10 +142,10 @@ class V3ReplayIntegrationTest {
                 serverThread.join(5_000L)
                 assertNull(serverError.get())
                 assertEquals(validIds, acknowledged.toSet())
-                assertEquals(listOf(legacyId), discarded.toList())
+                assertEquals(setOf(legacyId, oversizedId), discarded.toSet())
                 assertTrue(retried.isEmpty())
                 assertEquals(0, database.pendingCount())
-                assertEquals(1L, monitor.getDropCount(SdkDropReason.UPLOAD_PROTOCOL_REJECTED))
+                assertEquals(2L, monitor.getDropCount(SdkDropReason.UPLOAD_PROTOCOL_REJECTED))
                 assertEquals("3", requestHeaders.get()["x-apm-schema-version"])
                 assertEquals("2", requestHeaders.get()["x-apm-event-count"])
                 assertFalse(wire.get().toString(Charsets.UTF_8).contains("review.user@example.invalid"))

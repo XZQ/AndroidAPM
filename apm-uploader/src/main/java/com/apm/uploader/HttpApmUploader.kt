@@ -102,6 +102,15 @@ class HttpApmUploader(
 
     /** Rejects identity-incompatible durable rows without changing their historical identity. */
     override fun rejectionReason(event: ApmEvent): UploadRejectionReason? {
+        if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2 ||
+            serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3
+        ) {
+            try {
+                ProtobufSerializer.validateDecimalFieldBudget(event, maxBatchBytes)
+            } catch (_: IllegalArgumentException) {
+                return UploadRejectionReason.DECIMAL_BUDGET_EXCEEDED
+            }
+        }
         if (serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V2) {
             return if (event.occurrence != null) UploadRejectionReason.OCCURRENCE_UNSUPPORTED else null
         }

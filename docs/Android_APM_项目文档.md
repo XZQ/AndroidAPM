@@ -24,6 +24,8 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 
 ## 2026-09-12 审查修复进度
 
+3. BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。 本项 model 5 / 60、core 30 / 239、uploader 4 / 31 测试无失败；model/uploader apiCheck、uploader lint、24 基线及文档检查通过。独立 -Xmx32m JVM 对原 203-byte durable / 1E+100000000 探针返回有界拒绝，未发生 OOM。
+
 2. 聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。 本项 core 30 suites / 239 tests、lint、apiCheck 和文档校验通过。
 
 1. 撤回同意与最终存储交接现在共享进程内屏障；异步批次、同步关键事件和停止后的 dormant cleanup 均受约束。脱敏等宿主回调在屏障外执行，返回后检查永久关闭的会话门禁；再次 grant/init 不会复活旧调用。已开始的自定义 store/transport 若超过 3 秒仍未退出，清理返回 storageCleared=false，禁止另开 helper 绕过，并可稍后重试。普通 stop 仍先有界 drain，再封闭旧会话。新增真实 SQLite 回归覆盖异步/同步迟到写入、新授权及 dormant 路径，另覆盖重入和交接等待超时。 本项 clean core 测试 30 suites / 236 tests 全通过；storage 6 / 43 保持通过，core lint 无问题、core apiCheck 与文档校验通过。

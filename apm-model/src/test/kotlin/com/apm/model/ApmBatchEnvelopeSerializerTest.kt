@@ -10,6 +10,54 @@ import org.junit.Test
 
 /** Versioned protobuf envelope, typed scalar, resource, and stable identity tests. */
 class ApmBatchEnvelopeSerializerTest {
+    /** Exact arithmetic covers sign, zero, trailing zeros and positive/negative scales. */
+    @Test
+    fun `decimal plain text estimator agrees with bounded canonical output`() {
+        for (digits in listOf("0", "1", "-1", "1234500", "-1234500")) {
+            for (scale in -20..20) {
+                val value = BigDecimal(BigInteger(digits), scale)
+                assertEquals(value.toPlainString().length.toLong(), decimalPlainTextLength(value))
+                assertEquals(value.toPlainString(), ApmTypedValue.from(value).value)
+            }
+        }
+        assertEquals(1L, decimalPlainTextLength(BigDecimal(BigInteger.ZERO, Int.MIN_VALUE)))
+    }
+
+    /** Extreme exponents remain tiny durable scalars and are rejected before any plain expansion. */
+    @Test
+    fun `budget splitter rejects compact decimals with huge plain text`() {
+        for (scale in listOf(Int.MIN_VALUE, -100_000_000, 100_000_000, Int.MAX_VALUE)) {
+            val event = ApmEvent("model", "decimal", fields = mapOf("value" to BigDecimal(BigInteger.ONE, scale)))
+            val durable = ApmEventCodec.encode(event)
+            assertTrue(durable.size < 1024)
+            // Java's decimal parser rejects the exponent implied by Int.MIN_VALUE scale;
+            // test that wire guard directly, while representable exponents exercise durable replay.
+            val decoded = if (scale == Int.MIN_VALUE) {
+                assertThrows(NumberFormatException::class.java) { ApmEventCodec.decode(durable) }
+                event
+            } else ApmEventCodec.decode(durable)
+            assertThrows(IllegalArgumentException::class.java) { ApmTypedValue.from(decoded.fields["value"]) }
+            assertEquals(null, ApmBatchEnvelopeSerializer.serializeWithinBudget(
+                listOf(decoded), resource(), 1024, FIXED_SENT_AT_MS
+            ))
+            val v3 = decoded.withOccurrenceContext(ApmOccurrenceContext("1", "1", "build", "release", "installation"))
+            assertEquals(null, ApmBatchEnvelopeSerializer.serializeWithinBudgetV3(
+                listOf(v3), resource(), 1024, FIXED_SENT_AT_MS
+            ))
+        }
+    }
+
+    /** The guard applies to total decimal expansion, with an exact inclusive boundary. */
+    @Test
+    fun `decimal budget sums fields before allocation`() {
+        val value = BigDecimal("1E+10")
+        val event = ApmEvent("model", "decimal", fields = mapOf("a" to value, "b" to value))
+        ProtobufSerializer.validateDecimalFieldBudget(event, 22)
+        assertThrows(IllegalArgumentException::class.java) {
+            ProtobufSerializer.validateDecimalFieldBudget(event, 21)
+        }
+    }
+
     /** Every durable scalar has an explicit wire discriminator and canonical text. */
     @Test
     fun `typed values preserve all supported scalar types`() {
