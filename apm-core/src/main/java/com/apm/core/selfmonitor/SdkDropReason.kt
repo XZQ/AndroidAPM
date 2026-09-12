@@ -43,5 +43,7 @@ enum class SdkDropReason {
     /** Published IPC files exhausted the process-shared directory byte budget. */
     IPC_DIRECTORY_BYTE_BUDGET,
     /** Local protocol preflight permanently rejected a durable row before network transmission. */
-    UPLOAD_PROTOCOL_REJECTED
+    UPLOAD_PROTOCOL_REJECTED,
+    /** A historical observation cannot be safely attributed under the strict V3 occurrence contract. */
+    HISTORICAL_OCCURRENCE_UNAVAILABLE
 }

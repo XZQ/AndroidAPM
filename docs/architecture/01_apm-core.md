@@ -316,6 +316,8 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 
 `ApmClock` 把 epoch timestamp 与单调 elapsed measurement 分开：事件/持久化协议继续输出 epoch，dispatcher/upload latency、诊断冷却、限流、指纹去重和聚合过期使用单调时间并把负 duration 归零。公共 `emit` 与直接事件入口都在进入异步队列或 IPC 协调器前复制 fields/globalContext/extras。
 
+2026-09-12 历史交接：跨制品 synthetic `captureExitOccurrence` 提供不含 Native frames 的当前五字段快照，用于退出前记录；`emitHistorical` 对历史事件保留原 process/time/occurrence，避免重绑当前 release。严格 V3 拒绝无效 occurrence 并计入 `HISTORICAL_OCCURRENCE_UNAVAILABLE`。返回 true 只说明身份验证通过并尝试分发，不证明队列/IPC 已接受或持久化成功。历史调用仍使用原 dispatcher/IPC 的停止与撤回门禁，不能复活旧会话。当前现场 emit/critical 的身份绑定契约保持。
+
 ## 2026-09-12 百分位采样
 
 百分位抽样改为 Algorithm R，使用有界均匀随机索引替换 reservoir，修复旧公式在 65,536 个样本以内几乎只替换第 0 槽的问题。生产使用正常随机源，测试注入固定 seed；min/max/sum 保持全量统计，百分位仍是默认 256 点的近似值。内部 population 使用 Long，既有 Int count 达上限后饱和而不溢出。回归覆盖 10,000 样本分布突变及反转、256/257/65,535/65,536/65,537/100,000 边界。 本项 core 30 suites / 241 tests、lint、apiCheck 和文档检查通过。

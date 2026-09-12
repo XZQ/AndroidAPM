@@ -31,7 +31,7 @@ class ExitReasonCollectorTest {
         val emitted = mutableListOf<Triple<String, ApmSeverity, Map<String, Any?>>>()
 
         /** emit 回调。 */
-        fun emit(name: String, severity: ApmSeverity, fields: Map<String, Any?>) {
+        fun emit(record: ExitRecord, name: String, severity: ApmSeverity, fields: Map<String, Any?>) {
             emitted += Triple(name, severity, fields)
         }
     }

@@ -12,6 +12,8 @@ import com.apm.uploader.ApmUploader
 import kotlin.io.path.createTempDirectory
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RuntimeEnvironment
@@ -20,6 +22,81 @@ import org.robolectric.RobolectricTestRunner
 /** Non-uploader-process critical IPC hand-off accounting tests. */
 @RunWith(RobolectricTestRunner::class)
 class ApmContextCriticalHandoffTest {
+    /** Historical records bypass current-release binding while retaining normal dispatcher behavior. */
+    @Test
+    fun `historical v3 handoff preserves old identity process time and event id`() {
+        val store = CapturingStore()
+        val dispatcher = ApmDispatcher(store, NoOpUploader, NoOpLogger)
+        try {
+            val current = ApmOccurrenceContext("2", "2", "new-build", "release", "test-new-install")
+            val old = ApmOccurrenceContext("1", "1", "old-build", "release", "test-old-install")
+            val context = historicalContext(dispatcher, current)
+            val event = ApmEvent(
+                module = "crash", name = "app_exit", timestamp = 1_700_000_000_000L,
+                processName = "app:worker", threadName = "unknown", priority = ApmPriority.HIGH
+            ).withOccurrenceContext(old)
+
+            assertEquals(current, context.captureExitOccurrence())
+            assertTrue(context.emitHistorical(event))
+            dispatcher.shutdown()
+
+            assertEquals(old, store.event?.occurrence)
+            assertEquals(event.eventId, store.event?.eventId)
+            assertEquals(event.processName, store.event?.processName)
+            assertEquals(event.timestamp, store.event?.timestamp)
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    /** Incomplete history is counted explicitly before persistence and never labeled as current. */
+    @Test
+    fun `historical v3 unknown identity is rejected and counted exactly once`() {
+        val store = CapturingStore()
+        val monitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(store, NoOpUploader, NoOpLogger, selfMonitor = monitor)
+        try {
+            val context = historicalContext(dispatcher).also { it.selfMonitor = monitor }
+            val unknown = ApmEvent(module = "crash", name = "app_exit", priority = ApmPriority.HIGH)
+            assertFalse(context.emitHistorical(unknown))
+            assertFalse(context.emitHistorical(unknown.withOccurrenceContext(ApmOccurrenceContext(appBuild = "partial"))))
+            dispatcher.shutdown()
+
+            assertNull(store.event)
+            assertEquals(2L, monitor.getTotalEmitCount())
+            assertEquals(2L, monitor.getTotalDropCount())
+            assertEquals(2L, monitor.getDropCount(SdkDropReason.HISTORICAL_OCCURRENCE_UNAVAILABLE))
+            assertEquals(2L, monitor.getDropCount(ApmPriority.HIGH))
+        } finally {
+            dispatcher.shutdown()
+        }
+    }
+
+    /** A late valid historical callback cannot reopen the dispatcher of a stopped SDK session. */
+    @Test
+    fun `historical handoff cannot write through a stopped context`() {
+        val store = CapturingStore()
+        val monitor = SdkSelfMonitor()
+        val dispatcher = ApmDispatcher(store, NoOpUploader, NoOpLogger, selfMonitor = monitor)
+        val context = historicalContext(dispatcher).also { it.selfMonitor = monitor }
+        dispatcher.shutdown()
+        val event = ApmEvent(module = "crash", name = "app_exit", priority = ApmPriority.HIGH)
+            .withOccurrenceContext(context.captureExitOccurrence()!!)
+        context.emitHistorical(event)
+        assertNull(store.event)
+        assertEquals(1L, monitor.getDropCount(SdkDropReason.DISPATCHER_SHUTDOWN))
+    }
+
+    /** Builds a strict runtime with a current identity intentionally different from historical rows. */
+    private fun historicalContext(
+        dispatcher: ApmDispatcher,
+        occurrence: ApmOccurrenceContext = ApmOccurrenceContext("2", "2", "new-build", "release", "test-new-install")
+    ): ApmContext = ApmContext(
+        application = RuntimeEnvironment.getApplication(),
+        config = ApmConfig(serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3),
+        processName = "app", logger = NoOpLogger, dispatcher = dispatcher, occurrenceContext = occurrence
+    )
+
     /** V3 freezes the init-time release while retaining module-provided native frame identity. */
     @Test
     fun `v3 context binds occurrence before durable critical handoff`() {

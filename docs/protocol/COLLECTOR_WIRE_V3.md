@@ -39,7 +39,13 @@ Apm.init(
 
 当前 `ApmInitProvider` 只能调用二参数 `Apm.init(application, config)`，无法提供 occurrence snapshot；若配置 V3，该路径会 fail closed。V3 宿主必须采用手动初始化并通过 manifest merger `tools:node="remove"` 移除 Provider，不能把 Provider 捕获并记录的初始化失败当作已启用采集。
 
-初始化时 SDK 会复制 occurrence 和 Native frame list。所有经 `ApmContext` 发出的 V3 事件在异步、IPC 或 SQLite hand-off 前绑定该 host release/build/installation；监控模块可以在事件自身的 occurrence 中补充该事件的 Native frames，但不能覆盖 host 身份。
+初始化时 SDK 会复制 occurrence 和 Native frame list。经 `ApmContext.emit/emitCriticalSync` 发出的现场 V3 事件在异步、IPC 或 SQLite hand-off 前绑定该 host release/build/installation；监控模块可以在事件自身的 occurrence 中补充该事件的 Native frames，但不能覆盖 host 身份。跨制品历史交接 `emitHistorical` 是显式例外：只允许已验证的记录自身 occurrence，不绑定当前初始化身份。
+
+### ApplicationExitInfo 历史身份（2026-09-12）
+
+V3 的 `app_exit` 使用 Android 系统记录中的历史进程、退出时间和退出前保存的 occurrence。`CrashModule` 默认在 API 30+ 的进程摘要槽写入完整五字段（最多 128 字节，含匿名 installationId）；原始记录缺失摘要、内容超限或无法验证时，在入队前明确丢弃并计入 `HISTORICAL_OCCURRENCE_UNAVAILABLE`。未知历史不会冒用当前 build，不会重发为 V2，也不会通过协议新增伪造的 unknown release。
+
+宿主已占用平台槽时使用 `CrashModule(CrashConfig(), writeExitIdentitySummary = false)` 关闭 SDK 写入/清理。模块停止或撤回时仅尝试清空当前进程的 SDK 摘要；OS 已保留的历史记录不受 SDK 本地存储清理控制。完整约束见 `docs/architecture/04_apm-crash.md`。该修复不改变 V3 wire schema、durable codec 或数据库 schema。
 
 ## 3. 请求
 

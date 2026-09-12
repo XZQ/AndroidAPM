@@ -30,6 +30,7 @@ public final class com/apm/crash/CrashModule : com/apm/core/ApmModule {
 	public fun <init> ()V
 	public fun <init> (Lcom/apm/crash/CrashConfig;)V
 	public synthetic fun <init> (Lcom/apm/crash/CrashConfig;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lcom/apm/crash/CrashConfig;Z)V
 	public fun getName ()Ljava/lang/String;
 	public fun onInitialize (Lcom/apm/core/ApmContext;)V
 	public fun onStart ()V

@@ -1,14 +1,19 @@
 package com.apm.crash
 
+import android.app.ActivityManager
+import android.content.Context
 import android.os.Build
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
+import com.apm.model.SerializationFormat
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Executes one crash hand-off without breaking the host's uncaught-exception chain.
@@ -45,6 +50,23 @@ internal inline fun executeCriticalCrashHandoff(
  */
 class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
 
+    /**
+     * Allows hosts that reserve Android's process-state summary slot to disable SDK writes.
+     * Existing constructors remain unchanged; history without an SDK identity stays unattributed.
+     */
+    constructor(config: CrashConfig, writeExitIdentitySummary: Boolean) : this(config) {
+        this.writeExitIdentitySummary = writeExitIdentitySummary
+    }
+
+    /** Frozen constructor option; V3 exit collection owns the slot unless explicitly disabled. */
+    private var writeExitIdentitySummary = true
+    /** Whether this session wrote the process-state summary and must clear it on stop/revoke. */
+    private var wroteExitIdentitySummary = false
+    /** Cancels late collector callbacks across stop/reinitialize without using the global Apm emitter. */
+    private val exitSession = AtomicLong()
+    /** Current background collector, retained only until stop for cooperative cancellation. */
+    private var exitCollectorThread: Thread? = null
+
     override val name: String = MODULE_NAME
 
     /** 原始的 UncaughtExceptionHandler，崩溃上报后委托给它。 */
@@ -61,8 +83,9 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
      * 注册自定义 UncaughtExceptionHandler。
      * 保存原始 handler，崩溃发生时先上报再委托。
      */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableJavaCrash && !config.enableNativeCrash) {
+        if (!config.enableJavaCrash && !config.enableNativeCrash && !config.collectExitInfo) {
             return
         }
 
@@ -97,32 +120,52 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
         if (!config.collectExitInfo || Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
             return
         }
-        val application = apmContext?.application ?: return
+        val context = apmContext ?: return
+        val application = context.application
+        val session = exitSession.incrementAndGet()
+        if (writeExitIdentitySummary && context.config.serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+            try {
+                val manager = application.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                val summary = context.captureExitOccurrence()?.let(ExitOccurrenceSummary::encode)
+                manager?.setProcessStateSummary(summary)
+                wroteExitIdentitySummary = manager != null
+                if (summary == null) context.logger.w("Exit identity cannot fit the platform summary; future exit remains unknown")
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_EXIT_SUMMARY, error)
+            }
+        }
 
         val collector = ExitReasonCollector(
             source = AndroidExitInfoSource(application),
             timestampStore = PrefsExitTimestampStore(application),
             maxTraceBytes = config.maxExitTraceBytes,
-            emit = { eventName, severity, fields ->
-                // 退出原因是历史事实，HIGH 优先级保证及时送达但不与现场崩溃抢占 CRITICAL
-                Apm.emit(
-                    module = MODULE_NAME,
-                    name = eventName,
-                    kind = ApmEventKind.ALERT,
-                    severity = severity,
-                    priority = ApmPriority.HIGH,
-                    fields = fields
-                )
+            isActive = { exitSession.get() == session },
+            emit = { record, eventName, severity, fields ->
+                // Serialize final admission with module stop, including dynamic disable without an
+                // SDK shutdown. Slow source/trace reads stay outside this lock.
+                synchronized(this@CrashModule) {
+                    if (exitSession.get() == session) {
+                        val event = ApmEvent(
+                            module = MODULE_NAME, name = eventName, kind = ApmEventKind.ALERT,
+                            severity = severity, priority = ApmPriority.HIGH,
+                            timestamp = record.timestampMs, processName = record.processName,
+                            threadName = UNKNOWN_HISTORICAL_THREAD, fields = fields
+                        )
+                        val historical = if (context.config.serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+                            record.occurrence?.let(event::withOccurrenceContext) ?: event
+                        } else event
+                        // A slow old collector must never emit into a newly initialized runtime.
+                        context.emitHistorical(historical)
+                    }
+                }
             }
         )
-        // 后台线程执行，避免阻塞模块启动
-        Thread(
+        exitCollectorThread = Thread(
             {
                 try {
                     collector.collectOnce()
-                } catch (e: Exception) {
-                    // 采集失败不影响其他崩溃能力，记入自监控
-                    Apm.recordInternalError(ERROR_TAG_EXIT_INFO, e)
+                } catch (error: Exception) {
+                    Apm.recordInternalError(ERROR_TAG_EXIT_INFO, error)
                 }
             },
             EXIT_COLLECTOR_THREAD_NAME
@@ -133,7 +176,20 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
     }
 
     /** 恢复原始 handler。 */
+    @Synchronized
     override fun onStop() {
+        exitSession.incrementAndGet()
+        exitCollectorThread?.interrupt()
+        exitCollectorThread = null
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && wroteExitIdentitySummary) {
+            try {
+                val manager = apmContext?.application?.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                manager?.setProcessStateSummary(null)
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_EXIT_SUMMARY, error)
+            }
+            wroteExitIdentitySummary = false
+        }
         if (config.enableJavaCrash && Thread.getDefaultUncaughtExceptionHandler() is CrashHandler) {
             Thread.setDefaultUncaughtExceptionHandler(previousHandler)
         }
@@ -191,6 +247,11 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
     }
 
     companion object {
+        /** Historical emitter thread is not provided by ApplicationExitInfo. */
+        private const val UNKNOWN_HISTORICAL_THREAD = "unknown"
+        /** Platform summary failures carry no identity values in diagnostics. */
+        private const val ERROR_TAG_EXIT_SUMMARY = "crash_exit_identity_summary"
+
         /** 自监控 tag：崩溃处理器内部上报失败。 */
         private const val ERROR_TAG_CRASH_HANDLER_EMIT = "crash_handler_emit"
 

@@ -1,6 +1,7 @@
 package com.apm.crash
 
 import com.apm.model.ApmSeverity
+import com.apm.model.ApmOccurrenceContext
 import java.io.InputStream
 
 /**
@@ -18,7 +19,11 @@ internal data class ExitRecord(
     val reasonCode: Int,
     val description: String?,
     val importance: Int,
-    val traceSupplier: (() -> InputStream?)? = null
+    val traceSupplier: (() -> InputStream?)? = null,
+    /** Historical OS process name, never replaced by the collecting process. */
+    val processName: String = "unknown",
+    /** Complete occurrence recorded before exit, or unknown for legacy/foreign/oversized summaries. */
+    val occurrence: ApmOccurrenceContext? = null
 )
 
 /**
@@ -68,16 +73,19 @@ internal class ExitReasonCollector(
     private val timestampStore: ExitTimestampStore,
     /** ANR trace 附带内容的最大字节数。 */
     private val maxTraceBytes: Int = DEFAULT_MAX_TRACE_BYTES,
-    /** 事件上报回调：(事件名, 严重级别, 字段)。 */
-    private val emit: (String, ApmSeverity, Map<String, Any?>) -> Unit
+    /** Session cancellation gate checked before and after potentially slow historical trace reads. */
+    private val isActive: () -> Boolean = { true },
+    /** Historical record and normalized event payload, delivered without current runtime rebinding. */
+    private val emit: (ExitRecord, String, ApmSeverity, Map<String, Any?>) -> Unit
 ) {
 
     /**
      * 执行一次采集。
      * 读取历史退出记录，跳过已处理时间戳之前的记录，逐条上报后
-     * 持久化最新处理位置。方法自身吞掉所有异常（尽力而为语义由调用方兜底）。
+     * 持久化最新处理位置。调用方隔离可恢复异常；取消时停止读取和交付。
      */
     fun collectOnce() {
+        if (!isActive()) return
         val lastProcessed = timestampStore.lastProcessedMs()
         val records = source.latestExitRecords(MAX_EXIT_RECORDS)
         var newestProcessed = lastProcessed
@@ -88,7 +96,10 @@ internal class ExitReasonCollector(
             if (record.timestampMs <= lastProcessed) {
                 continue
             }
-            emit(EVENT_APP_EXIT, severityFor(record.reasonCode), buildFields(record))
+            if (!isActive()) return
+            val fields = buildFields(record)
+            if (!isActive()) return
+            emit(record, EVENT_APP_EXIT, severityFor(record.reasonCode), fields)
             newestProcessed = maxOf(newestProcessed, record.timestampMs)
         }
 
@@ -109,7 +120,9 @@ internal class ExitReasonCollector(
             FIELD_EXIT_TIMESTAMP to record.timestampMs,
             FIELD_REASON_CODE to record.reasonCode,
             FIELD_REASON_NAME to reasonName(record.reasonCode),
-            FIELD_IMPORTANCE to record.importance
+            FIELD_IMPORTANCE to record.importance,
+            FIELD_PROCESS_NAME to record.processName,
+            FIELD_OCCURRENCE_STATUS to if (record.occurrence == null) OCCURRENCE_UNKNOWN else OCCURRENCE_RECORDED
         )
         // 系统描述非空时附带
         record.description?.takeIf(String::isNotBlank)?.let {
@@ -191,6 +204,14 @@ internal class ExitReasonCollector(
         internal const val DEFAULT_MAX_TRACE_BYTES = 64 * 1024
 
         // --- 字段名 ---
+        /** OS-recorded historical process. */
+        private const val FIELD_PROCESS_NAME = "exitProcessName"
+        /** Explicit history quality independent of the collector's current release. */
+        private const val FIELD_OCCURRENCE_STATUS = "occurrenceStatus"
+        /** History predates summary recording, or the summary is unusable. */
+        private const val OCCURRENCE_UNKNOWN = "UNKNOWN"
+        /** All five occurrence fields were recovered from the OS record. */
+        private const val OCCURRENCE_RECORDED = "RECORDED"
         /** 字段：退出时间戳。 */
         private const val FIELD_EXIT_TIMESTAMP = "exitTimestamp"
         /** 字段：退出原因码。 */

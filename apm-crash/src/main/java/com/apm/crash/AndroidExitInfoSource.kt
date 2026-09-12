@@ -34,6 +34,8 @@ internal class AndroidExitInfoSource(private val context: Context) : ExitInfoSou
                 reasonCode = info.reason,
                 description = info.description,
                 importance = info.importance,
+                processName = info.processName?.takeIf(String::isNotBlank) ?: UNKNOWN_PROCESS,
+                occurrence = ExitOccurrenceSummary.decode(info.processStateSummary),
                 // 仅 ANR 记录携带系统 trace 流
                 traceSupplier = if (info.reason == ExitReasonCollector.REASON_ANR) {
                     { runCatching { info.traceInputStream }.getOrNull() }
@@ -47,6 +49,8 @@ internal class AndroidExitInfoSource(private val context: Context) : ExitInfoSou
     companion object {
         /** pid 过滤参数：0 表示读取所有历史 pid 的记录。 */
         private const val ALL_PIDS = 0
+        /** A missing OS process name cannot be inferred from the current process. */
+        private const val UNKNOWN_PROCESS = "unknown"
     }
 }
 

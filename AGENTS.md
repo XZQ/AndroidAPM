@@ -18,6 +18,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
+2026-09-12 review closure, item 8: 历史 app_exit 保留系统记录的退出时间/进程，使用退出前写入平台摘要的完整 occurrence，不绑定当前 release。摘要最多 128 字节，五字段不能完整容纳或历史摘要不可验证时，strict V3 在入队前明确丢弃并计入 HISTORICAL_OCCURRENCE_UNAVAILABLE，同时推进处理水位，不伪造身份或降级 V2。新增 CrashModule(CrashConfig, Boolean) overload 可关闭平台摘要写入/清理；原 CrashConfig constructor/copy/component 保持。模块 stop/撤回仅尝试清当前进程摘要，不能删除 OS 已保留的退出记录。后台 trace 读取与最终交接受会话取消门禁约束，原 context 不会进入新 init。 本项 JDK 17.0.14 下 core 30 suites / 248 tests、crash 6 suites / 27 tests，均零失败/错误/跳过；两模块 apiCheck 通过。core lint 无问题；crash lint 为零错误和一条既有 UseRequiresApi 建议（保留原 TargetApi，模块未引入该注解依赖）。24 份 ABI 基线和文档 46 Markdown / 70 links 检查通过。
+
 2026-09-12 review closure, item 7: 普通 ALERT 的首条事件立即交付；窗口内重复次数通过 count 增量摘要交付，摘要使用新 eventId 并保留 occurrence/维度，extras 标记 duplicate_delta 与首条 eventId。固定窗口过期、容量淘汰、普通关闭 flush 都输出尚未交付的增量，不修改已发出的行。消费方对该标记求和 count，不能把它当累计更新。去重键使用完整有界规范文本与模块/事件/异常身份，避免 hashCode 碰撞；聚合层还隔离进程、release、scene、context 等维度，无 at 栈帧或元数据冲突时直接通过。支持 stack_trace/stacktrace/stackTrace；内置 Crash/ANR 的 critical 同步通道仍绕过聚合。本次不把普通 ALERT 的问题误记为内置 Java Crash 丢次数。 本项 core 30 suites / 245 tests、lint、apiCheck 和文档检查通过。
 
 2026-09-12 review closure, item 6: 默认 OkHttp EventListener 在 callEnd/callFailed 结算唯一请求 summary，totalMs 包括 body 消费/关闭；requestBodyEnd/responseBodyEnd 提供已完成阶段的实际字节数，失败 body 耗时同样保留。与拦截器同时接入时按 Call/模块协商所有权，避免重复。单独拦截器或显式 reportSummary=false 的兼容组合，在流 EOF/已知长度完成/close/IOException 时只结算一次；它无法观察未进入拦截器的提前取消，因此推荐 listener。headers/body/total 保留独立口径，不在 headers 到达时计为成功。宿主仍负责消费或关闭 body，SDK 不主动读取正文。 本项 clean network 4 suites / 27 tests、lint（无问题）、apiCheck 与文档检查通过。
@@ -37,13 +39,13 @@ Review hardening on `2026-09-07` closes eight reproduced issues: HTTP shutdown g
 
 Fresh full gate on `2026-09-07` under JDK `17.0.14` supersedes the historical full-gate entries below: `python tools/verify_ci.py` passed end to end, including forced Android `101` suites / `700` tests, model `5` / `57`, plugin `1` / `18`, all with zero failures/errors/skips; root/plugin API checks, all `24` baselines, four strict dependency-metadata sets, `5` release-candidate verifier tests and `41` benchmark/device-lab host tests; `25` candidate coordinates / `22` AAR / `26` JAR / `25` POM and isolated consumer `--refresh-dependencies clean assembleDebug` with ASM transformation. Focused core/storage/uploader/network/fps lint reports zero issues; sample debug, benchmark release and AndroidTest Kotlin compilation pass. Real cross-repository `verify_collector_e2e.py` also passes V2/V3 Gzip/exact ACK/typed and occurrence persistence/installation HMAC/replay deduplication against temporary SQLite. Final docs verification covers `46` Markdown files / `70` links. Candidate evidence records `sourceDirty=true`; no external Maven release, physical device or production PostgreSQL/TLS/SigNoz acceptance is claimed.
 
-- Documentation synchronization date: `2026-09-07`
+- Documentation synchronization date: `2026-09-12`
 - Branch: `develop`; use `git log --oneline -n 10` for the current tip
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `168` (`163` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `111`
+- Main source files: `169` (`164` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `113`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.

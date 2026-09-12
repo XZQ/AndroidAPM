@@ -4,7 +4,7 @@
 
 > 当前边界：本仓库负责 Android 端采集、保护、持久化和传输，不包含生产 Collector、查询/告警后台、Native 符号化服务或托管平台。
 
-本轮完整客户端门禁通过：Android/model/plugin 共 775 项测试零失败，ABI、依赖校验、Maven 候选与独立消费、文档和真实 V2/V3 Collector 联调均通过；本地证据不替代真机及生产验收。
+最近一次完整客户端门禁（2026-09-07）通过：Android/model/plugin 共 775 项测试零失败，ABI、依赖校验、Maven 候选与独立消费、文档和真实 V2/V3 Collector 联调均通过；本地证据不替代真机及生产验收。
 
 本轮可靠性修复（2026-09-07）：HTTP 支持活动请求取消，撤回结果通过 `uploadWorkerStopped` 报告退出证据；上传退避不会被新事件通知打断。V3 聚合保留发生身份与维度，统计值为数值类型。旧 outbox 缺失发生身份的行在内置 SQLite/V3 路径单独拒绝并计数，避免阻塞新事件。
 
@@ -12,10 +12,11 @@
 
 ## 当前基线
 
-- 同步日期：2026-09-07
+- 同步日期：2026-09-12
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 168 个主源码文件：163 Kotlin + 4 C + 1 proto
-- 111 个测试/benchmark 文件
+- 169 个主源码文件：164 Kotlin + 4 C + 1 proto
+- 113 个测试/benchmark 文件
+
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -552,3 +553,5 @@ Apache License 2.0，详见 [LICENSE](LICENSE)。
 2026-09-12 聚合隐私修复：聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。
 
 2026-09-12 OkHttp 结算修复：默认 OkHttp EventListener 在 callEnd/callFailed 结算唯一请求 summary，totalMs 包括 body 消费/关闭；requestBodyEnd/responseBodyEnd 提供已完成阶段的实际字节数，失败 body 耗时同样保留。与拦截器同时接入时按 Call/模块协商所有权，避免重复。单独拦截器或显式 reportSummary=false 的兼容组合，在流 EOF/已知长度完成/close/IOException 时只结算一次；它无法观察未进入拦截器的提前取消，因此推荐 listener。headers/body/total 保留独立口径，不在 headers 到达时计为成功。宿主仍负责消费或关闭 body，SDK 不主动读取正文。
+
+2026-09-12 历史退出归属修复：`app_exit` 使用系统记录的历史进程和退出前保存的版本/构建/安装身份。V3 默认使用 Android 128 字节进程摘要槽；完整身份无法恢复时明确丢弃并记录 `HISTORICAL_OCCURRENCE_UNAVAILABLE`，不冒用当前 release。宿主已有其他组件占用该槽时，通过 `CrashModule(CrashConfig(), writeExitIdentitySummary = false)` 关闭 SDK 写入/清理。系统已保存的历史摘要可能包含匿名 installationId，SDK 撤回清理不能删除 OS 历史记录。接入与覆盖边界详见 `docs/architecture/04_apm-crash.md`。

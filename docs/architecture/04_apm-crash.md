@@ -1,6 +1,6 @@
 # apm-crash 模块
 
-> 同步日期：2026-07-31｜模块名：`crash`
+> 同步日期：2026-09-12｜模块名：`crash`
 
 ## 目的与入口
 
@@ -33,6 +33,18 @@ Native target 具备 16 KiB page-size linker alignment。
 
 `collectExitInfo=true` 默认开启；API 30+ 读取 ANR、crash、low-memory/system kill 等原因。trace 最大读取 64 KiB，并用 timestamp store 避免重复消费。
 
+`app_exit` 使用系统记录的退出时间和历史进程名，线程名为 `unknown`，不携带采集时的业务上下文。严格 V3 使用退出前写入 `ActivityManager.setProcessStateSummary` 的完整 occurrence 五字段：serviceVersion、versionCode、appBuild、variant、匿名 installationId；不把当前 release 或 Native frames 填入历史记录。摘要使用带版本标记的严格 UTF-8 编码，总长度最多 128 字节。任一字段无法完整容纳、摘要缺失/损坏/属于其他组件时，历史身份为未知；V3 在入队前拒绝该记录并计入 `HISTORICAL_OCCURRENCE_UNAVAILABLE`，且推进处理水位，避免每次启动反复丢弃同一记录。不会自动降级 V2。显式 V2/旧协议保留 `occurrenceStatus=UNKNOWN` 的历史事实。
+
+V3 且 `collectExitInfo=true` 时默认使用当前进程的系统摘要槽，启动写入一次，模块停止/撤回同意时尝试清空。宿主已有其他组件使用该槽时，必须通过新增 overload 关闭 SDK 写入：
+
+```kotlin
+Apm.register(CrashModule(CrashConfig(), writeExitIdentitySummary = false))
+```
+
+关闭写入也关闭 SDK 对该槽的清理；已有系统历史记录仍可读取。该选项不改变 `CrashConfig` 原 constructor/copy/component ABI。系统已保存的退出记录可能包含匿名 installationId，SDK 不能删除这些 OS 历史记录；`storageCleared` 仅证明 SDK 存储清理，不代表系统退出历史被擦除。多进程接入由宿主在各进程分别初始化和传播同意状态。
+
+后台采集器在 trace 读取前后检查会话状态，最终交接与模块停止互斥，并捕获原 `ApmContext`。迟到读取不能通过全局 emitter 进入重新初始化的会话。历史采集仍是 best effort：系统留存、时间戳水位、队列/存储预算和旧记录保留期会限制覆盖率，不承诺退出历史的精确计数或完整补报。
+
 ## 配置默认值
 
 | 配置 | 默认 |
@@ -57,7 +69,7 @@ Native target 具备 16 KiB page-size linker alignment。
 
 ## 测试
 
-`CrashConfigTest`, `CrashCriticalHandoffTest`, `NativeCrashMonitorJniContractTest`, `ExitReasonCollectorTest` 覆盖配置、同步 hand-off 成功/false/recoverable/fatal 与原 handler 委托、JNI 名称/绑定和退出原因映射；真实 signal/tombstone/symbolization 需真机验证。
+`CrashConfigTest`, `CrashCriticalHandoffTest`, `NativeCrashMonitorJniContractTest`, `ExitReasonCollectorTest` 覆盖配置、同步 hand-off 成功/false/recoverable/fatal 与原 handler 委托、JNI 名称/绑定和退出原因映射。`ExitOccurrenceSummaryTest` 覆盖 UTF-8/128 字节与损坏输入；`CrashExitHistoryTest` 通过真实模块/dispatcher 和 Robolectric 系统历史，覆盖旧 release/worker 身份、未知身份计数、显式 V2、摘要写入 opt-out、超限、撤回清理和阻塞 trace 的停止/重启。真实 signal/tombstone/symbolization 需真机验证。
 
 ## 时间语义
 

@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-09-07｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-09-12｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -17,6 +17,8 @@
 本轮最终验证（2026-09-07，JDK 17.0.14）：`python tools/verify_ci.py` 完整通过；强制重跑 Android 101 suites / 700 tests、model 5 suites / 57 tests、独立 plugin 1 suite / 18 tests，全部 0 failures/errors/skipped。根与 plugin API check、24 份基线、4 组严格依赖元数据、5 项发布候选 verifier 测试、41 项 benchmark/device-lab host 测试通过；本地候选验证 25 坐标 / 22 AAR / 26 JAR / 25 POM，独立 Maven consumer 使用 `--refresh-dependencies` 完成 clean assembleDebug 和 ASM transformation。core/storage/uploader/network/fps lint 均无问题，sample debug、benchmark release 与 AndroidTest Kotlin 编译通过。`verify_collector_e2e.py` 对参考服务端实际工作树完成真实 V2/V3 Gzip HTTP、exact ACK、typed/occurrence 持久化、installation HMAC 和重放去重验证。候选来自尚未提交的工作树，manifest 的 sourceDirty=true；这不是外部 Maven 发布或真机/生产 PostgreSQL/TLS/SigNoz 验收。
 
 ## 事实源
+
+2026-09-12 八项审查修复已分别验证；本轮新增历史退出语义：历史 app_exit 保留系统记录的退出时间/进程，使用退出前写入平台摘要的完整 occurrence，不绑定当前 release。摘要最多 128 字节，五字段不能完整容纳或历史摘要不可验证时，strict V3 在入队前明确丢弃并计入 HISTORICAL_OCCURRENCE_UNAVAILABLE，同时推进处理水位，不伪造身份或降级 V2。新增 CrashModule(CrashConfig, Boolean) overload 可关闭平台摘要写入/清理；原 CrashConfig constructor/copy/component 保持。模块 stop/撤回仅尝试清当前进程摘要，不能删除 OS 已保留的退出记录。后台 trace 读取与最终交接受会话取消门禁约束，原 context 不会进入新 init。 完整源码与逐项验证见主项目文档。整合后的全仓门禁另行记录，不能用本轮模块检查替代 2026-09-07 的历史全门禁。
 
 1. 当前源码/构建文件
 2. 当前测试与构建输出
@@ -38,8 +40,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 168：163 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 111 |
+| 主源码 | 169：164 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 文件 | 113 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |

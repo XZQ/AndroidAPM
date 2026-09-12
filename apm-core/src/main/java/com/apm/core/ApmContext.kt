@@ -6,6 +6,7 @@ import com.apm.core.diagnostics.HostIntegrationRegistry
 import com.apm.model.ApmEvent
 import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmPriority
+import com.apm.model.ProtobufSerializer
 import com.apm.model.SerializationFormat
 import com.apm.core.selfmonitor.SdkDropReason
 import com.apm.core.selfmonitor.SdkSelfMonitor
@@ -49,6 +50,41 @@ class ApmContext internal constructor(
         } else {
             dispatcher.dispatch(occurrenceBoundEvent)
         }
+    }
+
+    /** Cross-artifact snapshot for future process-exit attribution; native frames are event-specific. */
+    @JvmSynthetic
+    fun captureExitOccurrence(): ApmOccurrenceContext? =
+        if (config.serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+            occurrenceContext?.copy(nativeFrames = emptyList())
+        } else null
+
+    /**
+     * Cross-artifact historical handoff. Preserves recorded process/time/identity rather than binding
+     * today's runtime. Strict V3 rejects unknown identity explicitly; it never emits a fake release.
+     * True means identity validation passed and dispatch was attempted. Queue/IPC admission and
+     * durable acknowledgement are separate outcomes; this method does not confirm either.
+     */
+    @JvmSynthetic
+    fun emitHistorical(event: ApmEvent): Boolean {
+        if (config.serializationFormat == SerializationFormat.PROTOBUF_ENVELOPE_V3) {
+            val valid = try {
+                ProtobufSerializer.validateOccurrence(event.occurrence)
+                true
+            } catch (_: IllegalArgumentException) {
+                false
+            }
+            if (!valid) {
+                selfMonitor?.recordEmit()
+                selfMonitor?.recordDrop(event.priority, SdkDropReason.HISTORICAL_OCCURRENCE_UNAVAILABLE)
+                logger.w("Historical event omitted: occurrence identity unavailable")
+                return false
+            }
+        }
+        if (processCoordinator != null && !isUploaderProcess) {
+            processCoordinator.writeEvent(event)
+        } else dispatcher.dispatch(event)
+        return true
     }
 
     /**

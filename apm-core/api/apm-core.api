@@ -140,8 +140,10 @@ public abstract interface class com/apm/core/ApmConfigProvider {
 }
 
 public final class com/apm/core/ApmContext {
+	public final synthetic fun captureExitOccurrence ()Lcom/apm/model/ApmOccurrenceContext;
 	public final fun emit (Lcom/apm/model/ApmEvent;)V
 	public final fun emitCriticalSync (Lcom/apm/model/ApmEvent;)Z
+	public final synthetic fun emitHistorical (Lcom/apm/model/ApmEvent;)Z
 	public final fun getApplication ()Landroid/app/Application;
 	public final fun getConfig ()Lcom/apm/core/ApmConfig;
 	public final fun getLogger ()Lcom/apm/core/ApmLogger;
@@ -658,6 +660,7 @@ public final class com/apm/core/selfmonitor/SdkDropReason : java/lang/Enum {
 	public static final field DISPATCHER_SHUTDOWN Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field DYNAMIC_SAMPLING Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field EVENT_PROCESSING_FAILURE Lcom/apm/core/selfmonitor/SdkDropReason;
+	public static final field HISTORICAL_OCCURRENCE_UNAVAILABLE Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field IPC_DIRECTORY_BYTE_BUDGET Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field IPC_FILE_BYTE_BUDGET Lcom/apm/core/selfmonitor/SdkDropReason;
 	public static final field IPC_HANDOFF_FAILURE Lcom/apm/core/selfmonitor/SdkDropReason;
