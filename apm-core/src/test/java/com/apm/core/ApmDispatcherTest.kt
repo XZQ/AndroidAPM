@@ -91,6 +91,29 @@ class ApmDispatcherTest {
         dispatcher.shutdown()
     }
 
+    /** Window residue is sanitized on input; stateful host rules must never see generated output. */
+    @Test
+    fun `aggregation sanitizes original inputs exactly once including shutdown flush`() {
+        val store = RecordingStore()
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val rules = listOf(com.apm.core.privacy.SanitizationRule { value ->
+            if (value.startsWith("benign")) "benign-${calls.incrementAndGet()}" else value
+        })
+        val dispatcher = ApmDispatcher(
+            store = store, uploader = RecordingUploader(), logger = RecordingLogger(),
+            piiSanitizer = PiiSanitizer(rules), aggregator = EventAggregator()
+        )
+        dispatcher.dispatch(createEvent("aggregate-private",
+            fields = mapOf("ms" to 12, "sessionId" to 424242L, "detail" to "benign")))
+        dispatcher.shutdown()
+        val result = com.apm.model.ApmEventCodec.decode(com.apm.model.ApmEventCodec.encode(store.events.single()))
+        assertEquals(1, calls.get())
+        assertEquals("benign-1", result.fields["detail"])
+        assertEquals("***", result.fields["sessionId"])
+        assertTrue("sessionId_min" !in result.fields)
+        assertEquals(12.0, result.fields["ms_p50"])
+    }
+
     /** uploader 拒绝事件时应计入 SDK 自监控丢弃数。 */
     @Test
     fun `dispatch records drop when uploader rejects event`() {

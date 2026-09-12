@@ -26,6 +26,34 @@ import org.junit.Test
  */
 class EventAggregatorTest {
 
+    /** Sensitive numeric names stay available to name-based redaction without statistic suffixes. */
+    @Test
+    fun `aggregation cannot turn sensitive numeric identifiers into metrics`() {
+        val sensitive = mapOf("sessionId" to 424242L, "phone" to 424242L, "auth_token" to 424242L)
+        val aggregator = EventAggregator()
+        aggregator.process(ApmEvent("privacy", "sample", fields = sensitive + ("ms" to 12.0)))
+        val result = ApmEventCodec.decode(ApmEventCodec.encode(
+            PiiSanitizer().sanitize(aggregator.flush().single())
+        ))
+        for (key in sensitive.keys) {
+            assertEquals("***", result.fields[key])
+            assertTrue(result.fields.keys.none { it.startsWith(key + "_") })
+        }
+        assertEquals(12.0, result.fields["ms_p50"])
+    }
+
+    /** Numeric-looking text is a dimension, including leading zero identifiers and response codes. */
+    @Test
+    fun `numeric text remains an exact grouping dimension`() {
+        val aggregator = EventAggregator()
+        for (code in listOf("0200", "0500")) {
+            aggregator.process(ApmEvent("network", "latency", fields = mapOf("code" to code, "ms" to 12)))
+        }
+        val results = aggregator.flush()
+        assertEquals(setOf("0200", "0500"), results.map { it.fields["code"] }.toSet())
+        assertTrue(results.all { "code_min" !in it.fields && it.fields["ms_sample_count"] == 1 })
+    }
+
     /** Aggregates retain event-time identity/dimensions and remain typed across privacy and codec. */
     @Test
     fun `aggregate preserves occurrence dimensions and typed statistics under any locale`() {

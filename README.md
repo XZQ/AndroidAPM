@@ -549,3 +549,5 @@ python tools/verify_release_candidate.py
 ## License
 
 Apache License 2.0，详见 [LICENSE](LICENSE)。
+
+2026-09-12 聚合隐私修复：聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。

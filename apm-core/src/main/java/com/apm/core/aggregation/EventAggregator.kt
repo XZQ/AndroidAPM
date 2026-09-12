@@ -8,6 +8,7 @@ import com.apm.model.ApmSeverity
 import com.apm.core.ApmLogger
 import com.apm.core.ApmEventSizeEstimator
 import com.apm.core.snapshotEvent
+import com.apm.core.privacy.PiiSanitizer
 import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmPriority
 
@@ -35,6 +36,9 @@ class EventAggregator(
     /** Maximum percentile samples retained per numeric field. */
     private val maxSamplesPerField: Int = DEFAULT_MAX_SAMPLES_PER_FIELD
 ) {
+    /** Reuses the sanitizer's bounded, name-only classifier without executing text rules. */
+    private val fieldClassifier = PiiSanitizer(emptyList())
+
     /** 栈指纹去重器，用于 ALERT 类事件去重。 */
     private val stackFingerprinter = StackFingerprinter()
 
@@ -139,7 +143,9 @@ class EventAggregator(
         if (ApmEventSizeEstimator.estimate(template) > MAX_AGGREGATION_EVENT_BYTES ||
             template.fields.size > MAX_AGGREGATION_FIELDS
         ) return listOf(event)
-        val numericFields = template.fields.filterValues { numericMetricValue(it) != null }.keys
+        val numericFields = template.fields.filter { (key, value) ->
+            !fieldClassifier.isSensitiveFieldName(key) && numericMetricValue(value) != null
+        }.keys
         if (numericFields.isEmpty()) return listOf(event)
         val dimensions = template.fields.filterKeys { it !in numericFields }
         // Numeric-only streams allocate no generated-name list; only matching dimension suffixes
@@ -184,7 +190,7 @@ class EventAggregator(
         }
 
         // 将事件的数值字段加入桶
-        bucket.addSample(template.fields)
+        bucket.addSample(template.fields, numericFields)
 
         // 检查窗口是否到期
         if (nowElapsedMs - bucket.windowStartElapsedMs >= windowMs) {
@@ -286,7 +292,6 @@ private data class AggregationKey(
 /** Finite numeric values only; NaN/infinity and text-only records retain the ordinary event path. */
 private fun numericMetricValue(value: Any?): Double? = when (value) {
     is Number -> value.toDouble().takeIf(Double::isFinite)
-    is String -> value.toDoubleOrNull()?.takeIf(Double::isFinite)
     else -> null
 }
 
@@ -312,11 +317,12 @@ private class AggregationBucket(
 
     /**
      * 添加一个事件的数值字段作为采样。
-     * 只提取可转为 Double 的字段值。
+     * 只提取已通过字段名保护的显式 Number；数字文本保留为维度。
      */
-    fun addSample(fields: Map<String, Any?>) {
+    fun addSample(fields: Map<String, Any?>, numericFields: Set<String>) {
         var added = false
-        for ((key, value) in fields) {
+        for (key in numericFields) {
+            val value = fields[key]
             val numericValue = numericMetricValue(value) ?: continue
             if (this.fields.size >= MAX_FIELDS_PER_BUCKET && key !in this.fields) {
                 continue

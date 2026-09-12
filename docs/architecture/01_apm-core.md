@@ -6,6 +6,10 @@
 
 撤回同意与最终存储交接现在共享进程内屏障；异步批次、同步关键事件和停止后的 dormant cleanup 均受约束。脱敏等宿主回调在屏障外执行，返回后检查永久关闭的会话门禁；再次 grant/init 不会复活旧调用。已开始的自定义 store/transport 若超过 3 秒仍未退出，清理返回 storageCleared=false，禁止另开 helper 绕过，并可稍后重试。普通 stop 仍先有界 drain，再封闭旧会话。新增真实 SQLite 回归覆盖异步/同步迟到写入、新授权及 dormant 路径，另覆盖重入和交接等待超时。 本项 clean core 测试 30 suites / 236 tests 全通过；storage 6 / 43 保持通过，core lint 无问题、core apiCheck 与文档校验通过。
 
+## 2026-09-12 聚合脱敏边界
+
+聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。 本项 core 30 suites / 239 tests、lint、apiCheck 和文档校验通过。
+
 ## 1. 职责
 
 `apm-core` 是 SDK 控制面和数据面入口：
@@ -135,13 +139,13 @@ resolve lazy event
 
 单个 queued event 的 lazy factory、聚合、限流或脱敏出现 recoverable `Exception` 时只丢弃该事件并记录 internal error，后续事件继续；批量存储的 recoverable 异常会把整批计入 drop，但不会让 worker 退出。`VirtualMachineError` 等 fatal VM error 不转换为 drop。
 
-默认关闭聚合或处理 pre-aggregated 事件时，worker 直接把单个 resolved event 送入限流/脱敏，不再为每条事件创建 `listOf(event)`；非 durable store 在存储没有拒绝项时也不再创建空的 rejected-id `HashSet`。只有真实聚合扩展或真实拒绝集合才承担对应 collection 分配。每批落盘缓冲在 worker 循环中复用（入口清空）；模块占用计数递增使用 `merge` 单次哈希查找；聚合吞没路径（事件入桶且无桶到期）不再分配输出 list。
+默认关闭聚合时，worker 直接把单个 resolved event 送入限流/脱敏；pre-aggregated 事件只再做限流，不再为每条事件创建 `listOf(event)`；非 durable store 在存储没有拒绝项时也不再创建空的 rejected-id `HashSet`。只有真实聚合扩展或真实拒绝集合才承担对应 collection 分配。每批落盘缓冲在 worker 循环中复用（入口清空）；模块占用计数递增使用 `merge` 单次哈希查找；聚合吞没路径（事件入桶且无桶到期）不再分配输出 list。
 
 启用 self-monitor 时，worker 用单调纳秒测量 `resolve`、`sampling`、`aggregate`、`rateLimit`、`sanitize` 和 `storeHandoff`。每阶段维护固定 22 桶直方图及 count/sum/max，记录路径无逐样本对象分配；周期 snapshot 通过短同步区间取得一致 count、向上取整平均微秒、保守 P95 桶上界和最大微秒后清零。`storeHandoff` 是 batch append，因此其 count 与按 event/expanded-event 运行的其他阶段不应直接比较；聚合/脱敏禁用或 pre-aggregated bypass 时相应阶段可以为零。关闭 self-monitor 时计时 helper 直接执行原 block，不读取单调时钟。这些字段不改变 worker 顺序、采样、限流或 AutoThrottle 决策。
 
 ### 聚合维护
 
-启用聚合时，`apm-aggregation` 定期 flush 过期窗口。聚合输出以 `preAggregated` 标记重新入队，避免二次聚合。关闭时剩余聚合数据先脱敏，再写 store/交 uploader。
+启用聚合时，`apm-aggregation` 定期 flush 过期窗口。聚合输出以 `preAggregated` 标记重新入队，避免二次聚合。桶只保留已脱敏输入；周期和关闭 flush 直接写 store/交 uploader，避免重复执行宿主规则。
 
 ## 6. PersistentUploadWorker
 

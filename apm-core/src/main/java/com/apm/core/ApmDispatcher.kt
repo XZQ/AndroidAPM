@@ -54,7 +54,7 @@ internal data class ConsentStorageCleanupResult(
 
 /**
  * APM 事件分发器。
- * 负责聚合 → 限流检查 → PII 脱敏 → 本地存储 → 上传的五阶段流水线。
+ * 负责采样 → PII 脱敏/可选聚合 → 限流检查 → 本地存储 → 上传流水线。
  *
  * 线程模型（性能关键设计）：
  * - 调用线程（常为主线程）只做：shutdown 检查 + 发射计数 + 有界队列入队，
@@ -617,7 +617,7 @@ internal class ApmDispatcher(
     }
 
     /**
-     * 在 worker 线程处理一批事件：聚合 → 限流 → 脱敏 → 批量存储 → 上传。
+     * 在 worker 线程处理一批事件：采样 → 脱敏/聚合 → 限流 → 批量存储 → 上传。
      *
      * @param batch 本轮取出的队列元素
      * @param toPersist 复用的落盘缓冲，方法入口清空；调用方保证单线程串行使用
@@ -641,14 +641,16 @@ internal class ApmDispatcher(
                 if (aggregator != null && !queued.preAggregated) {
                     // Aggregation may swallow or expand an event. This is the only path that
                     // requires a collection; the default aggregation-disabled path stays scalar.
+                    // Sanitize original names/values once, before statistics can change their type.
+                    val sanitized = sanitizeForDelivery(resolved)
                     val expanded = measureDispatcherStage(DispatcherStage.AGGREGATE) {
-                        aggregator.process(resolved)
+                        aggregator.process(sanitized)
                     }
                     for (event in expanded) {
-                        processResolvedEvent(event, toPersist)
+                        processResolvedEvent(event, toPersist, alreadySanitized = true)
                     }
                 } else {
-                    processResolvedEvent(resolved, toPersist)
+                    processResolvedEvent(resolved, toPersist, alreadySanitized = queued.preAggregated)
                 }
             } catch (error: Exception) {
                 // One malformed or failing monitor event must not terminate the shared worker.
@@ -779,7 +781,8 @@ internal class ApmDispatcher(
                 val remaining = agg.flush()
                 for (event in remaining) {
                     try {
-                        val sanitized = piiSanitizer?.sanitizeFrozen(event) ?: event
+                        // Every bucket input was already sanitized; custom rules must not run twice.
+                        val sanitized = event
                         EventDeliveryBarrier.handoff({ deliveryClosed }) {
                             val appendResult = store.appendWithResult(sanitized)
                             recordStorageResult(appendResult)
@@ -907,7 +910,11 @@ internal class ApmDispatcher(
     }
 
     /** Applies rate limiting and optional sanitization to one scalar pipeline event. */
-    private fun processResolvedEvent(event: ApmEvent, toPersist: MutableList<ApmEvent>) {
+    private fun processResolvedEvent(
+        event: ApmEvent,
+        toPersist: MutableList<ApmEvent>,
+        alreadySanitized: Boolean = false
+    ) {
         // ERROR/FATAL bypass rate limiting so critical signals remain deliverable.
         val passesRateLimit = measureDispatcherStage(DispatcherStage.RATE_LIMIT) {
             passesRateLimit(event)
@@ -916,14 +923,18 @@ internal class ApmDispatcher(
             return
         }
         // PII sanitization always precedes storage and upload.
-        toPersist += if (piiSanitizer != null) {
+        toPersist += if (alreadySanitized) event else sanitizeForDelivery(event)
+    }
+
+    /** Protects original field identities once before aggregation or direct delivery. */
+    private fun sanitizeForDelivery(event: ApmEvent): ApmEvent =
+        if (piiSanitizer != null) {
             measureDispatcherStage(DispatcherStage.SANITIZE) {
                 piiSanitizer.sanitizeFrozen(event)
             }
         } else {
             event
         }
-    }
 
     /**
      * Measures one fixed dispatcher stage only when SDK self-monitoring is active.

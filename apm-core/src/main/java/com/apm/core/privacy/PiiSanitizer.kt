@@ -238,7 +238,7 @@ class PiiSanitizer(
     }
 
     /** Returns true for normalized field names that strongly imply direct PII or credentials. */
-    private fun isSensitiveFieldName(key: String): Boolean {
+    internal fun isSensitiveFieldName(key: String): Boolean {
         val cached = sensitiveNameDecisions[key]
         if (cached != null) return cached
 
