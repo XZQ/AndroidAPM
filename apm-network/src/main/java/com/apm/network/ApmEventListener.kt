@@ -26,7 +26,7 @@ class ApmEventListener(
     /** 慢请求阈值（毫秒）。 */
     private val slowThresholdMs: Long,
     /** Whether this listener also owns the request summary event. */
-    private val reportSummary: Boolean = false
+    private val reportSummary: Boolean = true
 ) : EventListener() {
 
     /** 按 Call 存储的计时数据。 */
@@ -68,10 +68,16 @@ class ApmEventListener(
         var statusCode: Int = STATUS_CODE_UNKNOWN,
         /** Most recent connection failure detail. */
         var connectionError: String? = null
-    )
+    ) {
+        /** Actual request-body bytes from the terminal exchange; outside the public data-class ABI. */
+        internal var requestBodyBytes: Long = 0L
+        /** Actual response-body bytes reported by OkHttp. */
+        internal var responseBodyBytes: Long = 0L
+    }
 
     override fun callStart(call: Call) {
         networkModule.recordIntegrationObservation()
+        if (reportSummary) ListenerSummaryOwners.register(call, networkModule)
         // 容量保护：若 callEnd/callFailed 因异常路径未触发，防止 map 无限增长泄漏
         if (callTimings.size >= MAX_TRACKED_CALLS) {
             evictOldestTiming()
@@ -92,6 +98,7 @@ class ApmEventListener(
         // 找到 callStartNs 最小（最早开始）的记录并移除
         val oldest = callTimings.entries.minByOrNull { it.value.callStartNs } ?: return
         callTimings.remove(oldest.key)
+        if (reportSummary) ListenerSummaryOwners.remove(oldest.key, networkModule)
     }
 
     override fun dnsStart(call: Call, domainName: String) {
@@ -149,6 +156,11 @@ class ApmEventListener(
         }
     }
 
+    /** Captures actual request bytes without calling host RequestBody.contentLength again. */
+    override fun requestBodyEnd(call: Call, byteCount: Long) {
+        callTimings[call]?.requestBodyBytes = byteCount
+    }
+
     override fun responseBodyStart(call: Call) {
         callTimings[call]?.responseBodyStartNs = ApmClock.monotonicTimeNanos()
     }
@@ -160,10 +172,12 @@ class ApmEventListener(
     override fun responseBodyEnd(call: Call, byteCount: Long) {
         callTimings[call]?.let {
             it.responseBodyMs = elapsedMs(it.responseBodyStartNs)
+            it.responseBodyBytes = byteCount
         }
     }
 
     override fun callEnd(call: Call) {
+        if (reportSummary) ListenerSummaryOwners.remove(call, networkModule)
         val timing = callTimings.remove(call) ?: return
         val totalMs = elapsedMs(timing.callStartNs)
         // Route attempts may fail before another address succeeds. Only callFailed describes
@@ -172,7 +186,11 @@ class ApmEventListener(
     }
 
     override fun callFailed(call: Call, ioe: IOException) {
+        if (reportSummary) ListenerSummaryOwners.remove(call, networkModule)
         val timing = callTimings.remove(call) ?: return
+        if (timing.responseBodyStartNs > 0L && timing.responseBodyMs == 0L) {
+            timing.responseBodyMs = elapsedMs(timing.responseBodyStartNs)
+        }
         val totalMs = elapsedMs(timing.callStartNs)
         reportNetworkStats(timing, totalMs, ioe.message ?: ioe.javaClass.simpleName)
     }
@@ -184,13 +202,15 @@ class ApmEventListener(
      */
     private fun reportNetworkStats(timing: CallTiming, totalMs: Long, error: String?) {
         val statusCode = if (error != null) STATUS_CODE_NETWORK_ERROR else timing.statusCode
-        // The interceptor normally owns the summary to avoid double counting.
+        // callEnd/callFailed own the default summary; the interceptor detects this ownership at entry.
         if (reportSummary) {
             networkModule.onRequestComplete(
                 url = timing.url,
                 method = timing.method,
                 statusCode = statusCode,
                 durationMs = totalMs,
+                requestSize = timing.requestBodyBytes,
+                responseSize = timing.responseBodyBytes,
                 error = error
             )
         }
@@ -239,10 +259,34 @@ class ApmEventListener(
          * 创建 EventListener.Factory。
          * 用于 OkHttp Builder 的 eventListenerFactory 方法。
          */
-        fun factory(networkModule: NetworkModule, slowThresholdMs: Long = 3000L, reportSummary: Boolean = false): EventListener.Factory {
+        fun factory(networkModule: NetworkModule, slowThresholdMs: Long = 3000L, reportSummary: Boolean = true): EventListener.Factory {
             return EventListener.Factory {
                 ApmEventListener(networkModule, slowThresholdMs, reportSummary)
             }
         }
+    }
+}
+
+/** Weak per-call ownership prevents the compatibility interceptor from reporting a second summary. */
+internal object ListenerSummaryOwners {
+    /** Values contain no Call or listener references, so abandoned calls can be garbage collected. */
+    private val owners = java.util.WeakHashMap<Call, MutableSet<NetworkModule>>()
+
+    /** Registers summary ownership before the interceptor starts. */
+    @Synchronized
+    fun register(call: Call, module: NetworkModule) {
+        owners.getOrPut(call) { HashSet() }.add(module)
+    }
+
+    /** Captured once by the interceptor before a terminal callback can remove the entry. */
+    @Synchronized
+    fun owns(call: Call, module: NetworkModule): Boolean = owners[call]?.contains(module) == true
+
+    /** Removes finished or evicted tracking without retaining completed request objects. */
+    @Synchronized
+    fun remove(call: Call, module: NetworkModule) {
+        val modules = owners[call] ?: return
+        modules.remove(module)
+        if (modules.isEmpty()) owners.remove(call)
     }
 }

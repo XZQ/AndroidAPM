@@ -13,13 +13,12 @@ val module = NetworkModule()
 Apm.register(module)
 
 OkHttpClient.Builder()
-    .addInterceptor(ApmNetworkInterceptor(module))
     .eventListenerFactory(ApmEventListener.factory(module))
 
 module.onRequestComplete(url, method, statusCode, durationMs)
 ```
 
-Interceptor 负责请求汇总；EventListener 默认 `reportSummary=false`，只负责 DNS/TCP/TLS/headers/body 阶段，避免双重汇总。也可由集成方调整所有权。
+默认 OkHttp EventListener 在 callEnd/callFailed 结算唯一请求 summary，totalMs 包括 body 消费/关闭；requestBodyEnd/responseBodyEnd 提供已完成阶段的实际字节数，失败 body 耗时同样保留。与拦截器同时接入时按 Call/模块协商所有权，避免重复。单独拦截器或显式 reportSummary=false 的兼容组合，在流 EOF/已知长度完成/close/IOException 时只结算一次；它无法观察未进入拦截器的提前取消，因此推荐 listener。headers/body/total 保留独立口径，不在 headers 到达时计为成功。宿主仍负责消费或关闭 body，SDK 不主动读取正文。 本项 clean network 4 suites / 27 tests、lint（无问题）、apiCheck 与文档检查通过。
 
 非 OkHttp 调用可在完成连接配置后显式执行：
 
@@ -75,8 +74,10 @@ OkHttp 为 compileOnly/API 集成依赖；模块不创建网络线程，回调�
 
 ## 测试
 
-Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override、请求与 phase URL/error 截断，以及 HttpURLConnection 成功/HTTP error/transport exception/宿主异常/report failure/fatal 边界。内部 sink 和假 connection 使字段、severity、执行次数与异常身份可在 JVM 中直接断言；真实 OkHttp/HttpURLConnection/连接池/代理/TLS/重定向/OEM 网络行为仍需集成测试。
+Config/NetworkStats 之外，行为测试直接覆盖停止态 no-op、成功/失败/慢请求分类、累计统计、固定窗口 aggregate、phase threshold/error override、请求与 phase URL/error 截断，以及 HttpURLConnection 成功/HTTP error/transport exception/宿主异常/report failure/fatal 边界。内部 sink 和假 connection 使字段、severity、执行次数与异常身份可在 JVM 中直接断言；真实 loopback OkHttp 的暂停 body、body 截断、成功/HTTP error、提前取消及四种集成组合已有回归；代理/TLS/OEM 网络行为仍需真实环境验证。
 
 ## 时间语义
 
 OkHttp interceptor/EventListener 和 HttpURLConnection helper 的总耗时、DNS/connect/TLS/request/response phase 使用 `ApmClock` 单调时间；HTTP-date 与 collector timestamp 仍遵守 epoch/协议语义。
+
+本项增加 requestBodyEnd override（additive ABI，CallTiming constructor/copy/component 未变）。sample 当前使用手动 onRequestComplete 示例，其语义不变。

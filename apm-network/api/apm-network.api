@@ -10,6 +10,7 @@ public final class com/apm/network/ApmEventListener : okhttp3/EventListener {
 	public fun connectStart (Lokhttp3/Call;Ljava/net/InetSocketAddress;Ljava/net/Proxy;)V
 	public fun dnsEnd (Lokhttp3/Call;Ljava/lang/String;Ljava/util/List;)V
 	public fun dnsStart (Lokhttp3/Call;Ljava/lang/String;)V
+	public fun requestBodyEnd (Lokhttp3/Call;J)V
 	public fun requestHeadersEnd (Lokhttp3/Call;Lokhttp3/Request;)V
 	public fun requestHeadersStart (Lokhttp3/Call;)V
 	public fun responseBodyEnd (Lokhttp3/Call;J)V

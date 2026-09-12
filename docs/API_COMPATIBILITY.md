@@ -67,3 +67,5 @@ ABI 门禁能捕获类、方法、字段及 JVM 签名的删除或不兼容变�
 ## 2026-09-12 Decimal 展开预算
 
 BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。
+
+2026-09-12 OkHttp：EventListener reportSummary 的默认行为修正为 true；已有参数/构造签名不变，显式 false 仍是仅阶段模式。新增 requestBodyEnd override；配套拦截器按请求所有权避免双计数，单独使用则观察 body 终态。

@@ -15,7 +15,7 @@
 - 同步日期：2026-09-07
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 168 个主源码文件：163 Kotlin + 4 C + 1 proto
-- 110 个测试/benchmark 文件
+- 111 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
@@ -303,7 +303,6 @@ val networkModule = NetworkModule()
 Apm.register(networkModule)
 
 val client = OkHttpClient.Builder()
-    .addInterceptor(ApmNetworkInterceptor(networkModule))
     .eventListenerFactory(ApmEventListener.factory(networkModule))
     .build()
 ```
@@ -551,3 +550,5 @@ python tools/verify_release_candidate.py
 Apache License 2.0，详见 [LICENSE](LICENSE)。
 
 2026-09-12 聚合隐私修复：聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。
+
+2026-09-12 OkHttp 结算修复：默认 OkHttp EventListener 在 callEnd/callFailed 结算唯一请求 summary，totalMs 包括 body 消费/关闭；requestBodyEnd/responseBodyEnd 提供已完成阶段的实际字节数，失败 body 耗时同样保留。与拦截器同时接入时按 Call/模块协商所有权，避免重复。单独拦截器或显式 reportSummary=false 的兼容组合，在流 EOF/已知长度完成/close/IOException 时只结算一次；它无法观察未进入拦截器的提前取消，因此推荐 listener。headers/body/total 保留独立口径，不在 headers 到达时计为成功。宿主仍负责消费或关闭 body，SDK 不主动读取正文。

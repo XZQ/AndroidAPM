@@ -39,7 +39,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 168：163 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 110 |
+| 测试/benchmark 文件 | 111 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
