@@ -29,7 +29,7 @@ data class LeakResult(
     val scene: String = "",
     /** 疑似导致泄漏的字段列表（如 ViewModel 持有的 Context/View 字段）。 */
     val suspectFields: List<String> = emptyList(),
-    /** GC Root 引用链（从 root 到泄漏对象的路径）。 */
+    /** 经堆转储分析确认的 GC Root 路径；轻量生命周期检测仅填 suspectFields，不填此字段。 */
     val referenceChain: List<String> = emptyList(),
     /** 检测时间戳。 */
     val timestamp: Long = ApmClock.wallTimeMillis()

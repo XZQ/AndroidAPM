@@ -12,6 +12,7 @@ import androidx.lifecycle.ProcessLifecycleOwner
 import com.apm.core.Apm
 import com.apm.core.ApmContext
 import com.apm.core.ApmModule
+import com.apm.memory.leak.LeakCheckQueue
 import com.apm.memory.leak.ActivityLeakDetector
 import com.apm.memory.leak.FragmentLeakDetector
 import com.apm.memory.leak.ViewModelLeakDetector
@@ -55,6 +56,8 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     private var samplingEnabled: Boolean = true
 
     // --- Phase 2: 泄漏检测 ---
+    /** One bounded background queue shared by all lifecycle leak detectors in this session. */
+    private var leakChecks: LeakCheckQueue? = null
     /** Activity 泄漏检测器。 */
     private var activityLeakDetector: ActivityLeakDetector? = null
     /** ViewModel 泄漏检测器。 */
@@ -114,6 +117,7 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     /**
      * 启动模块。注册生命周期回调，启动各子功能。
      */
+    @Synchronized
     override fun onStart() {
         if (started || !samplingEnabled) {
             return
@@ -128,10 +132,15 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
         // 启动定时采样
         scheduler.start(config.foregroundIntervalMs)
 
+        // Activity/Fragment lifecycle bursts share one delayed GC request and one watch budget.
+        if (config.enableActivityLeak || config.enableFragmentLeak) {
+            leakChecks = LeakCheckQueue(config.leakCheckDelayMs)
+        }
         // Phase 2: Activity 泄漏检测
         if (config.enableActivityLeak) {
             activityLeakDetector = ActivityLeakDetector(
                 checkDelayMs = config.leakCheckDelayMs,
+                checkQueue = leakChecks,
                 onLeakFound = { reporter.onLeakFound(it) }
             )
             apmContext.application.registerActivityLifecycleCallbacks(activityLeakDetector)
@@ -164,6 +173,7 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     /**
      * 停止模块。释放所有资源。
      */
+    @Synchronized
     override fun onStop() {
         if (!started) {
             return
@@ -191,6 +201,8 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
             }
         }
         fragmentLeakDetectors.clear()
+        leakChecks?.shutdown()
+        leakChecks = null
 
         // 释放 OOM/Dump 资源
         hprofDumper?.shutdown()
@@ -238,9 +250,10 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     // --- ActivityLifecycleCallbacks ---
 
     /** Activity 创建时注册 Fragment 泄漏检测器。 */
+    @Synchronized
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
-        if (config.enableFragmentLeak && activity is FragmentActivity) {
-            val detector = FragmentLeakDetector(activity) { result ->
+        if (started && config.enableFragmentLeak && activity is FragmentActivity) {
+            val detector = FragmentLeakDetector(activity, checkQueue = leakChecks) { result ->
                 reporter.onLeakFound(result)
             }
             detector.register(activity.supportFragmentManager)
@@ -260,6 +273,7 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
     /** Activity 销毁时检查 ViewModel 泄漏，并清理 Fragment 检测器。 */
+    @Synchronized
     override fun onActivityDestroyed(activity: Activity) {
         // 清理该 Activity 的 Fragment 泄漏检测器
         fragmentLeakDetectors.remove(activity)?.let { detector ->

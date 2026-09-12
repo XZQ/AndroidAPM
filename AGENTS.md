@@ -18,6 +18,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
+2026-09-12 review closure, item 4: Activity/Fragment 泄漏检查改为模块会话共享的一个后台队列，最多 128 个弱引用观察项、一个待执行回调，同批只请求一次 GC，GC 请求至少间隔 5 秒。目标 class/scene 在销毁时复制，队列和延迟闭包不强持有 Activity/Fragment；Fragment 仅 onFragmentDestroyed 触发检查，View 销毁与返回栈正常保留不触发。unregister/shutdown 清空所属观察项，GC 期间取消也禁止迟到结果。轻量反射仅输出 bounded suspectFields，referenceChain 留空；它是疑似保留检测，不是 GC Root 证明，也不覆盖独立 View 泄漏。后台 GC 仍可能暂停应用线程，真机开销需实际验收。 本项 memory 7 suites / 33 tests 和 apiCheck 通过；lint 0 errors，保留 MemorySampler 的 2 条既有 ObsoleteSdkInt 警告；文档检查通过。
+
 2026-09-12 review closure, item 3: BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。 本项 model 5 / 60、core 30 / 239、uploader 4 / 31 测试无失败；model/uploader apiCheck、uploader lint、24 基线及文档检查通过。独立 -Xmx32m JVM 对原 203-byte durable / 1E+100000000 探针返回有界拒绝，未发生 OOM。
 
 2026-09-12 review closure, item 2: 聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。 本项 core 30 suites / 239 tests、lint、apiCheck 和文档校验通过。
@@ -34,8 +36,8 @@ Fresh full gate on `2026-09-07` under JDK `17.0.14` supersedes the historical fu
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `167` (`162` Kotlin + `4` C + `1` proto)
-- Test/benchmark files: `109`
+- Main source files: `168` (`163` Kotlin + `4` C + `1` proto)
+- Test/benchmark files: `110`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`
 - The root build, both included builds, and the isolated Maven consumer use Java `17` toolchains without rejecting newer Gradle-compatible JDK runtimes; Java and Kotlin compilation targets Java `17` bytecode.

@@ -14,8 +14,8 @@
 
 - 同步日期：2026-09-07
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
-- 167 个主源码文件：162 Kotlin + 4 C + 1 proto
-- 109 个测试/benchmark 文件
+- 168 个主源码文件：163 Kotlin + 4 C + 1 proto
+- 110 个测试/benchmark 文件
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
 

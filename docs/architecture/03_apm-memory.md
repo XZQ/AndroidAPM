@@ -59,3 +59,7 @@
 ## 时间语义
 
 采样和文件产物 timestamp 保持 Unix epoch；Hprof 分析 duration 与 OOM 冷却窗口使用 `ApmClock` 单调时间，避免系统时间回拨产生负耗时或绕过冷却。
+
+## 2026-09-12 生命周期泄漏检查
+
+Activity/Fragment 泄漏检查改为模块会话共享的一个后台队列，最多 128 个弱引用观察项、一个待执行回调，同批只请求一次 GC，GC 请求至少间隔 5 秒。目标 class/scene 在销毁时复制，队列和延迟闭包不强持有 Activity/Fragment；Fragment 仅 onFragmentDestroyed 触发检查，View 销毁与返回栈正常保留不触发。unregister/shutdown 清空所属观察项，GC 期间取消也禁止迟到结果。轻量反射仅输出 bounded suspectFields，referenceChain 留空；它是疑似保留检测，不是 GC Root 证明，也不覆盖独立 View 泄漏。后台 GC 仍可能暂停应用线程，真机开销需实际验收。 本项 memory 7 suites / 33 tests 和 apiCheck 通过；lint 0 errors，保留 MemorySampler 的 2 条既有 ObsoleteSdkInt 警告；文档检查通过。
