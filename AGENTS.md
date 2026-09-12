@@ -18,6 +18,8 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 
 ## Current Verified Baseline
 
+2026-09-12 review closure, item 1: 撤回同意与最终存储交接现在共享进程内屏障；异步批次、同步关键事件和停止后的 dormant cleanup 均受约束。脱敏等宿主回调在屏障外执行，返回后检查永久关闭的会话门禁；再次 grant/init 不会复活旧调用。已开始的自定义 store/transport 若超过 3 秒仍未退出，清理返回 storageCleared=false，禁止另开 helper 绕过，并可稍后重试。普通 stop 仍先有界 drain，再封闭旧会话。新增真实 SQLite 回归覆盖异步/同步迟到写入、新授权及 dormant 路径，另覆盖重入和交接等待超时。 本项 clean core 测试 30 suites / 236 tests 全通过；storage 6 / 43 保持通过，core lint 无问题、core apiCheck 与文档校验通过。
+
 Review hardening on `2026-09-07` closes eight reproduced issues: HTTP shutdown gates/cancels active requests and reports worker termination evidence; persistent backoff uses a monotonic deadline unaffected by new-work signals; V3 occurrence preflight isolates incompatible rows through optional owner-aware discard with `UPLOAD_PROTOCOL_REJECTED` accounting; admission freezes supported scalar fields and bounded mutable text while replacing arbitrary objects without executing host `toString`; email masking uses a linear scanner; aggregation preserves occurrence/dimensions and numeric statistics under bounded grouping; FrameMetrics uses actual work/deadline rather than idle intervals; OkHttp final call outcome is independent of failed route attempts. No SQLite schema migration or existing public constructor/copy/component change is required. Existing custom store/uploader interfaces remain unchanged; new capabilities are optional interfaces. `ConsentRevocationResult.uploadWorkerStopped` is nullable evidence and a legacy data-class copy resets it to unknown. Historical rows without occurrence are explicitly discarded/counted on the built-in strict V3 path, never relabeled with the current release or silently downgraded to V2.
 
 
@@ -28,7 +30,7 @@ Fresh full gate on `2026-09-07` under JDK `17.0.14` supersedes the historical fu
 - Runtime tip: use `git log --oneline -n 10`; the signed remote-config milestone and docs share one delivery commit
 - Build units: `27`
 - Composition: `25` root Gradle subprojects (`5` foundation + `15` monitoring + `2` extension + `1` distribution bundle + `apm-sample-app` + non-published `apm-benchmark`) and `2` included builds (`apm-plugin`, `build-logic`)
-- Main source files: `166` (`161` Kotlin + `4` C + `1` proto)
+- Main source files: `167` (`162` Kotlin + `4` C + `1` proto)
 - Test/benchmark files: `109`
 - Toolchain: Java `17`; Gradle runtime JDK `17+`; Gradle `8.13`, AGP `8.13.2`, Kotlin `2.2.21`
 - Android: compileSdk `34`, minSdk `24`, targetSdk `34`; JVM bytecode target `17`

@@ -38,7 +38,7 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 166：161 Kotlin + 4 C + 1 proto |
+| 主源码 | 167：162 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 109 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |

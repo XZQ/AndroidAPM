@@ -192,6 +192,14 @@ internal class ApmDispatcher(
     @Volatile
     private var shutdown = false
 
+    /** Permanent gate for this session; unlike shutdown, graceful draining may precede closure. */
+    @Volatile
+    private var deliveryClosed = false
+
+    /** Whether denied late transfers are counted as consent drops. */
+    @Volatile
+    private var consentRevoked = false
+
     /** Durable outbox worker, present only for a [PendingEventStore]. */
     private val persistentUploadWorker = (store as? PendingEventStore)?.let { pendingStore ->
         PersistentUploadWorker(
@@ -329,6 +337,11 @@ internal class ApmDispatcher(
             return
         }
         try {
+            // A producer may have passed the outer check before revocation cleared the queue.
+            if (shutdown) {
+                selfMonitor?.recordDrop(queued.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
+                return
+            }
             // A single event can never fit this queue regardless of priority or evictions.
             if (queued.estimatedBytes > effectiveMaxQueuedBytes) {
                 if (!skipDebugLogs) {
@@ -552,7 +565,12 @@ internal class ApmDispatcher(
         }
         return try {
             val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
-            val appendResult = store.appendWithResult(sanitizedEvent)
+            val appendResult = EventDeliveryBarrier.handoff({ deliveryClosed }) {
+                store.appendWithResult(sanitizedEvent)
+            } ?: run {
+                recordClosedDelivery(event)
+                return false
+            }
             recordStorageResult(appendResult)
             if (appendResult.acceptedEventCount <= 0) {
                 return false
@@ -647,37 +665,41 @@ internal class ApmDispatcher(
         }
 
         try {
-            val startTime = ApmClock.monotonicTimeMillis()
-            // 单事务批量落盘
-            val appendResult = measureDispatcherStage(DispatcherStage.STORE_HANDOFF) {
-                store.appendBatchWithResult(toPersist)
-            }
-            recordStorageResult(appendResult)
-            if (appendResult.acceptedEventCount <= 0) {
-                return
-            }
-
-            if (persistentUploadWorker != null) {
-                // The durable row is the ownership hand-off point.
-                persistentUploadWorker.signal()
-            } else {
-                // 内存路径逐条交给 uploader（其内部自带队列/批量）
-                val rejectedEventIds = appendResult.rejectedEvents
-                    .takeIf { rejected -> rejected.isNotEmpty() }
-                    ?.mapTo(hashSetOf(), ApmEvent::eventId)
-                for (event in toPersist) {
-                    if (rejectedEventIds != null && event.eventId in rejectedEventIds) {
-                        continue
-                    }
-                    if (!uploader.upload(event)) {
-                        logger.w("Uploader rejected ${event.module}/${event.name}")
-                        // 上传被拒绝计入丢弃
-                        selfMonitor?.recordDrop(event.priority, SdkDropReason.UPLOADER_REJECTED)
-                    }
+            val delivered = EventDeliveryBarrier.handoff({ deliveryClosed }) {
+                val startTime = ApmClock.monotonicTimeMillis()
+                // 单事务批量落盘
+                val appendResult = measureDispatcherStage(DispatcherStage.STORE_HANDOFF) {
+                    store.appendBatchWithResult(toPersist)
                 }
-                // 记录整批处理延迟
-                selfMonitor?.recordUploadLatency(ApmClock.elapsedMillisSince(startTime))
-            }
+                recordStorageResult(appendResult)
+                if (appendResult.acceptedEventCount <= 0) {
+                    return@handoff true
+                }
+
+                if (persistentUploadWorker != null) {
+                    // The durable row is the ownership hand-off point.
+                    persistentUploadWorker.signal()
+                } else {
+                    // 内存路径逐条交给 uploader（其内部自带队列/批量）
+                    val rejectedEventIds = appendResult.rejectedEvents
+                        .takeIf { rejected -> rejected.isNotEmpty() }
+                        ?.mapTo(hashSetOf(), ApmEvent::eventId)
+                    for (event in toPersist) {
+                        if (rejectedEventIds != null && event.eventId in rejectedEventIds) {
+                            continue
+                        }
+                        if (!uploader.upload(event)) {
+                            logger.w("Uploader rejected ${event.module}/${event.name}")
+                            // 上传被拒绝计入丢弃
+                            selfMonitor?.recordDrop(event.priority, SdkDropReason.UPLOADER_REJECTED)
+                        }
+                    }
+                    // 记录整批处理延迟
+                    selfMonitor?.recordUploadLatency(ApmClock.elapsedMillisSince(startTime))
+                }
+                true
+            } ?: false
+            if (!delivered) toPersist.forEach(::recordClosedDelivery)
         } catch (error: Exception) {
             logger.e("Failed to dispatch batch of ${toPersist.size} events", error)
             Apm.recordInternalError(ERROR_PERSIST_BATCH, error)
@@ -758,13 +780,15 @@ internal class ApmDispatcher(
                 for (event in remaining) {
                     try {
                         val sanitized = piiSanitizer?.sanitizeFrozen(event) ?: event
-                        val appendResult = store.appendWithResult(sanitized)
-                        recordStorageResult(appendResult)
-                        if (appendResult.acceptedEventCount > 0) {
-                            if (persistentUploadWorker != null) {
-                                persistentUploadWorker.signal()
-                            } else {
-                                uploader.upload(sanitized)
+                        EventDeliveryBarrier.handoff({ deliveryClosed }) {
+                            val appendResult = store.appendWithResult(sanitized)
+                            recordStorageResult(appendResult)
+                            if (appendResult.acceptedEventCount > 0) {
+                                if (persistentUploadWorker != null) {
+                                    persistentUploadWorker.signal()
+                                } else {
+                                    uploader.upload(sanitized)
+                                }
                             }
                         }
                     } catch (e: Exception) {
@@ -775,12 +799,14 @@ internal class ApmDispatcher(
             }
         }
 
+        // A worker or synchronous caller can still be inside host code after the bounded drain.
+        deliveryClosed = true
         if (persistentUploadWorker != null) {
             shutdownPhase("persistent uploader") { persistentUploadWorker.shutdown() }
         } else {
             shutdownPhase("uploader") { uploader.shutdown() }
         }
-        shutdownPhase("store") { store.close() }
+        EventDeliveryBarrier.erase { shutdownPhase("store") { store.close() } }
     }
 
     /**
@@ -793,6 +819,8 @@ internal class ApmDispatcher(
      * @return counts and success state for the process-local privacy erase
      */
     internal fun shutdownForConsentRevocation(): ConsentStorageCleanupResult {
+        consentRevoked = true
+        deliveryClosed = true
         shutdown = true
         shutdownPhase("aggregation executor") { aggregationExecutor?.shutdownNow() }
         running = false
@@ -819,27 +847,42 @@ internal class ApmDispatcher(
             }
         }
 
-        val storedEventCount = try {
-            (store as? PendingEventStore)?.pendingCount()
-        } catch (error: Exception) {
-            logger.e("Failed to count pending events before consent erase", error)
-            Apm.recordInternalError(ERROR_CONSENT_PENDING_COUNT, error)
-            null
-        }
-        val storageCleared = try {
-            store.clear()
-            true
-        } catch (error: Exception) {
-            logger.e("Failed to clear event storage after consent revocation", error)
-            Apm.recordInternalError(ERROR_CONSENT_STORAGE_CLEAR, error)
-            false
-        }
-        shutdownPhase("store") { store.close() }
-        return ConsentStorageCleanupResult(
+        return EventDeliveryBarrier.erase {
+            val storedEventCount = try {
+                (store as? PendingEventStore)?.pendingCount()
+            } catch (error: Exception) {
+                logger.e("Failed to count pending events before consent erase", error)
+                Apm.recordInternalError(ERROR_CONSENT_PENDING_COUNT, error)
+                null
+            }
+            val storageCleared = try {
+                store.clear()
+                true
+            } catch (error: Exception) {
+                logger.e("Failed to clear event storage after consent revocation", error)
+                Apm.recordInternalError(ERROR_CONSENT_STORAGE_CLEAR, error)
+                false
+            }
+            shutdownPhase("store") { store.close() }
+            ConsentStorageCleanupResult(
+                discardedQueuedEventCount = discardedQueuedEvents,
+                clearedStoredEventCount = storedEventCount,
+                storageCleared = storageCleared,
+                uploadWorkerStopped = uploadWorkerStopped
+            )
+        } ?: ConsentStorageCleanupResult(
             discardedQueuedEventCount = discardedQueuedEvents,
-            clearedStoredEventCount = storedEventCount,
-            storageCleared = storageCleared,
+            clearedStoredEventCount = null,
+            storageCleared = false,
             uploadWorkerStopped = uploadWorkerStopped
+        )
+    }
+
+    /** Counts an event that returned from host code after this session's delivery gate closed. */
+    private fun recordClosedDelivery(event: ApmEvent) {
+        selfMonitor?.recordDrop(
+            event.priority,
+            if (consentRevoked) SdkDropReason.CONSENT_REVOKED else SdkDropReason.DISPATCHER_SHUTDOWN
         )
     }
 

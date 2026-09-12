@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-09-07｜27 个构建单元｜166 个主源码文件（161 Kotlin + 4 C + 1 proto）｜109 个测试/benchmark 文件
+> 文档同步：2026-09-07｜27 个构建单元｜167 个主源码文件（162 Kotlin + 4 C + 1 proto）｜109 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -21,6 +21,10 @@ monitor module
 ```
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
+
+## 2026-09-12 审查修复进度
+
+1. 撤回同意与最终存储交接现在共享进程内屏障；异步批次、同步关键事件和停止后的 dormant cleanup 均受约束。脱敏等宿主回调在屏障外执行，返回后检查永久关闭的会话门禁；再次 grant/init 不会复活旧调用。已开始的自定义 store/transport 若超过 3 秒仍未退出，清理返回 storageCleared=false，禁止另开 helper 绕过，并可稍后重试。普通 stop 仍先有界 drain，再封闭旧会话。新增真实 SQLite 回归覆盖异步/同步迟到写入、新授权及 dormant 路径，另覆盖重入和交接等待超时。 本项 clean core 测试 30 suites / 236 tests 全通过；storage 6 / 43 保持通过，core lint 无问题、core apiCheck 与文档校验通过。
 
 ## 2026-09-07 审查修复
 
@@ -71,7 +75,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 166：161 Kotlin + 4 C + 1 proto |
+| 主源码 | 167：162 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 109 |
 | Kotlin | 2.2.21 |
 | AGP | 8.13.2 |

@@ -769,7 +769,10 @@ object Apm {
         } finally {
             ApmDiagnostics.shutdown()
         }
-        val dormantCleanup = resolvedApplication?.let(::clearDormantTelemetryForConsentRevocation)
+        // Do not reopen shared files if an in-flight handoff prevented proven active cleanup.
+        val dormantCleanup = if (storageCleanup.storageCleared) {
+            resolvedApplication?.let(::clearDormantTelemetryForConsentRevocation)
+        } else null
         return ConsentRevocationResult(
             wasInitialized = true,
             discardedQueuedEventCount = storageCleanup.discardedQueuedEventCount,
@@ -789,7 +792,19 @@ object Apm {
     /** Clears every supported persisted event path when no active runtime owns the stores. */
     private fun clearDormantTelemetryForConsentRevocation(
         application: Application
-    ): ConsentRevocationResult {
+    ): ConsentRevocationResult = EventDeliveryBarrier.erase {
+        clearDormantTelemetryUnderBarrier(application)
+    } ?: ConsentRevocationResult(
+        wasInitialized = false,
+        discardedQueuedEventCount = 0,
+        clearedStoredEventCount = null,
+        clearedIpcFileCount = 0,
+        ipcFilesCleared = false,
+        storageCleared = false
+    )
+
+    /** Opens dormant stores only while earlier session handoffs are excluded. */
+    private fun clearDormantTelemetryUnderBarrier(application: Application): ConsentRevocationResult {
         var sqliteCount: Int? = null
         val sqliteCleared = try {
             val sqliteStore = SQLiteEventStore(EventDbHelper(application))
