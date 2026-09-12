@@ -4,6 +4,8 @@
 
 ## 结论
 
+最终整合验收（2026-09-12，JDK 17.0.14，源码 62665ae）：python tools/verify_ci.py 完整通过。强制重跑 Android 105 suites / 739 tests、model 5 / 60、included plugin 1 / 18，共 817 tests，均 0 failures/errors/skips。根/plugin apiCheck、全部 24 ABI 基线、4 组严格依赖元数据、5 项发布候选 verifier 测试与 41 项 benchmark/device-lab host 测试通过。本地 Maven 候选为 25 coordinates / 22 AAR / 26 JAR / 25 POM，manifest 的 sourceRevision=62665aecc0388df355439a9531c88badb816d3c5、sourceDirty=false；独立 consumer 使用 --refresh-dependencies clean assembleDebug 完成 ASM transformation。sample debug、benchmark release 与 AndroidTest Kotlin 编译通过。verify_collector_e2e.py 对 AndroidAPM-Server 的干净提交 24f5b8b4a6a2de12e29887421362e53558783133 完成真实 V2/V3 Gzip HTTP、exact ACK、typed/occurrence 持久化、installation HMAC 与重放去重。文档检查为 46 Markdown / 70 links。各项受影响模块 lint 无错误；保留 memory 的两条 ObsoleteSdkInt 与 crash 的一条 UseRequiresApi 既有警告。无物理设备连接；该结果不代表真机长稳、Native signal 或生产 PostgreSQL/TLS/SigNoz 接受，也未向外部 Maven 发布。
+
 当前仓库是已成型的 Android APM 客户端 SDK：15 个监控模块、5 个基础模块、2 个扩展模块、一个单依赖分发 Bundle、一个示例应用、一个非发布 benchmark 模块、一个 ASM 插件 included build 和一个 convention-plugin included build。
 
 端上事件管线、单依赖 `apm-bundle` 分发、strict production profile/显式 consent/撤回清理、V2 batch-declared 兼容和 V3 occurrence-bound typed/resource/batch/size/exact-ACK 契约、Crash/ANR 同步 critical hand-off、按 drop reason/priority 的损失证据、稳定 eventId、durable codec V4 与 V1/V2/V3 读取、SQLite durable outbox、并发 upload lease、dispatcher/IPC/SQLite 跨层条数与字节预算、动态短期鉴权、签名远程配置/kill switch/采样/限流/endpoint、优先级感知背压与单模块高水位隔离、业务上下文同步契约/异步 LKG 缓存、带迟滞恢复的 AutoThrottle、默认 PII 保护、配置/payload/occurrence 快照、批量上传、显式监控接入、25 坐标发布候选/Gradle 插件 marker/依赖 checksum/制品 manifest/SPDX SBOM，以及固定 time/allocation 预算与 fail-closed verifier 已有测试和本地构建证明。生产 PostgreSQL/TLS/SigNoz、真实通知/符号化工具、外部 Maven staging/promotion、云端 runner 和真机长稳数值属于外部建设，统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 管理。
@@ -18,7 +20,7 @@
 
 ## 事实源
 
-2026-09-12 八项审查修复已分别验证；本轮新增历史退出语义：历史 app_exit 保留系统记录的退出时间/进程，使用退出前写入平台摘要的完整 occurrence，不绑定当前 release。摘要最多 128 字节，五字段不能完整容纳或历史摘要不可验证时，strict V3 在入队前明确丢弃并计入 HISTORICAL_OCCURRENCE_UNAVAILABLE，同时推进处理水位，不伪造身份或降级 V2。新增 CrashModule(CrashConfig, Boolean) overload 可关闭平台摘要写入/清理；原 CrashConfig constructor/copy/component 保持。模块 stop/撤回仅尝试清当前进程摘要，不能删除 OS 已保留的退出记录。后台 trace 读取与最终交接受会话取消门禁约束，原 context 不会进入新 init。 完整源码与逐项验证见主项目文档。整合后的全仓门禁另行记录，不能用本轮模块检查替代 2026-09-07 的历史全门禁。
+2026-09-12 八项审查修复已分别验证；本轮新增历史退出语义：历史 app_exit 保留系统记录的退出时间/进程，使用退出前写入平台摘要的完整 occurrence，不绑定当前 release。摘要最多 128 字节，五字段不能完整容纳或历史摘要不可验证时，strict V3 在入队前明确丢弃并计入 HISTORICAL_OCCURRENCE_UNAVAILABLE，同时推进处理水位，不伪造身份或降级 V2。新增 CrashModule(CrashConfig, Boolean) overload 可关闭平台摘要写入/清理；原 CrashConfig constructor/copy/component 保持。模块 stop/撤回仅尝试清当前进程摘要，不能删除 OS 已保留的退出记录。后台 trace 读取与最终交接受会话取消门禁约束，原 context 不会进入新 init。 完整源码与逐项验证见主项目文档；本轮整合门禁已通过，结果见本文开头。
 
 1. 当前源码/构建文件
 2. 当前测试与构建输出
