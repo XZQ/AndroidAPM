@@ -11,6 +11,7 @@ import com.apm.core.snapshotEvent
 import com.apm.core.privacy.PiiSanitizer
 import com.apm.model.ApmOccurrenceContext
 import com.apm.model.ApmPriority
+import kotlin.random.Random
 
 /**
  * 客户端事件聚合器。
@@ -333,7 +334,7 @@ private class AggregationBucket(
             added = true
         }
         if (added) {
-            eventCount++
+            if (eventCount < Int.MAX_VALUE) eventCount++
         }
     }
 
@@ -377,12 +378,17 @@ private class AggregationBucket(
 /**
  * Streaming numeric summary with a bounded percentile reservoir.
  */
-private class NumericAccumulator(private val reservoirSize: Int) {
+internal class NumericAccumulator(
+    /** Maximum retained percentile sample count. */
+    private val reservoirSize: Int,
+    /** Uniform source; tests inject a fixed seed without making production input-order predictable. */
+    private val random: Random = Random.Default
+) {
     /** Bounded percentile sample reservoir. */
     private val reservoir = ArrayList<Double>(reservoirSize)
 
     /** Number of values observed. */
-    private var count = 0
+    private var count = 0L
 
     /** Sum of all observed values. */
     private var sum = 0.0
@@ -399,7 +405,7 @@ private class NumericAccumulator(private val reservoirSize: Int) {
      * @param value numeric value
      */
     fun add(value: Double) {
-        count++
+        if (count < Long.MAX_VALUE) count++
         sum += value
         min = kotlin.math.min(min, value)
         max = kotlin.math.max(max, value)
@@ -407,11 +413,11 @@ private class NumericAccumulator(private val reservoirSize: Int) {
             reservoir += value
             return
         }
-        // Deterministic reservoir replacement keeps memory fixed and tests stable.
-        val mixed = (count.toLong() * RESERVOIR_MULTIPLIER) xor (count.toLong() ushr RESERVOIR_SHIFT)
-        val candidateIndex = ((mixed and Long.MAX_VALUE) % count).toInt()
-        if (candidateIndex < reservoirSize) {
-            reservoir[candidateIndex] = value
+        // Algorithm R: each of the n observations has k/n probability of surviving in k slots.
+        // Random.nextLong(bound) avoids modulo bias and the old count-multiple degeneracy.
+        val candidateIndex = random.nextLong(count)
+        if (candidateIndex < reservoirSize.toLong()) {
+            reservoir[candidateIndex.toInt()] = value
         }
     }
 
@@ -426,15 +432,8 @@ private class NumericAccumulator(private val reservoirSize: Int) {
             min = min,
             max = max,
             sum = sum,
-            sampleCount = count
+            // The public Int counter saturates while sampling continues with its Long population.
+            sampleCount = count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
         )
-    }
-
-    companion object {
-        /** Deterministic mixing constant used by reservoir replacement. */
-        private const val RESERVOIR_MULTIPLIER = 1_103_515_245L
-
-        /** Bit shift used to mix sequential sample counts. */
-        private const val RESERVOIR_SHIFT = 16
     }
 }

@@ -26,6 +26,46 @@ import org.junit.Test
  */
 class EventAggregatorTest {
 
+    /** A short initial population must not dominate a much larger slow population, in either order. */
+    @Test
+    fun `percentiles represent the full window across distribution shifts`() {
+        for (reverse in listOf(false, true)) {
+            val aggregator = EventAggregator(windowMs = Long.MAX_VALUE)
+            val inputs = List(10_000) { if (it < 256) 1.0 else 1_000.0 }
+            for (value in if (reverse) inputs.asReversed() else inputs) {
+                aggregator.process(ApmEvent("latency", "request", fields = mapOf("ms" to value)))
+            }
+            val fields = aggregator.flush().single().fields
+            assertEquals(10_000, fields["count"])
+            assertEquals(10_000, fields["ms_sample_count"])
+            for (percentile in listOf("ms_p50", "ms_p90", "ms_p99")) {
+                assertEquals(1_000.0, fields[percentile])
+            }
+            assertEquals(1.0, fields["ms_min"])
+            assertEquals(1_000.0, fields["ms_max"])
+        }
+    }
+
+    /** A fixed-seed ramp exercises full reservoirs and the old 16-bit arithmetic boundary. */
+    @Test
+    fun `uniform reservoir stays representative across population boundaries`() {
+        val accumulator = NumericAccumulator(256, kotlin.random.Random(42))
+        val checkpoints = setOf(256, 257, 65_535, 65_536, 65_537, 100_000)
+        for (value in 1..100_000) {
+            accumulator.add(value.toDouble())
+            if (value in checkpoints) {
+                val stats = accumulator.snapshot()
+                assertEquals(value, stats.sampleCount)
+                assertEquals(1.0, stats.min, 0.0)
+                assertEquals(value.toDouble(), stats.max, 0.0)
+                assertEquals(value.toDouble() * (value + 1) / 2, stats.sum, 0.0)
+                assertTrue("p50 at $value: ${stats.p50}", stats.p50 in (value * 0.35)..(value * 0.65))
+                assertTrue("p90 at $value: ${stats.p90}", stats.p90 in (value * 0.75)..value.toDouble())
+                assertTrue("p99 at $value: ${stats.p99}", stats.p99 in (value * 0.90)..value.toDouble())
+            }
+        }
+    }
+
     /** Sensitive numeric names stay available to name-based redaction without statistic suffixes. */
     @Test
     fun `aggregation cannot turn sensitive numeric identifiers into metrics`() {

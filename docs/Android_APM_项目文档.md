@@ -24,6 +24,8 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 
 ## 2026-09-12 审查修复进度
 
+5. 百分位抽样改为 Algorithm R，使用有界均匀随机索引替换 reservoir，修复旧公式在 65,536 个样本以内几乎只替换第 0 槽的问题。生产使用正常随机源，测试注入固定 seed；min/max/sum 保持全量统计，百分位仍是默认 256 点的近似值。内部 population 使用 Long，既有 Int count 达上限后饱和而不溢出。回归覆盖 10,000 样本分布突变及反转、256/257/65,535/65,536/65,537/100,000 边界。 本项 core 30 suites / 241 tests、lint、apiCheck 和文档检查通过。
+
 4. Activity/Fragment 泄漏检查改为模块会话共享的一个后台队列，最多 128 个弱引用观察项、一个待执行回调，同批只请求一次 GC，GC 请求至少间隔 5 秒。目标 class/scene 在销毁时复制，队列和延迟闭包不强持有 Activity/Fragment；Fragment 仅 onFragmentDestroyed 触发检查，View 销毁与返回栈正常保留不触发。unregister/shutdown 清空所属观察项，GC 期间取消也禁止迟到结果。轻量反射仅输出 bounded suspectFields，referenceChain 留空；它是疑似保留检测，不是 GC Root 证明，也不覆盖独立 View 泄漏。后台 GC 仍可能暂停应用线程，真机开销需实际验收。 本项 memory 7 suites / 33 tests 和 apiCheck 通过；lint 0 errors，保留 MemorySampler 的 2 条既有 ObsoleteSdkInt 警告；文档检查通过。
 
 3. BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。 本项 model 5 / 60、core 30 / 239、uploader 4 / 31 测试无失败；model/uploader apiCheck、uploader lint、24 基线及文档检查通过。独立 -Xmx32m JVM 对原 203-byte durable / 1E+100000000 探针返回有界拒绝，未发生 OOM。

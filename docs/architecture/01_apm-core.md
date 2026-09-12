@@ -315,3 +315,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 ## 时间与快照语义
 
 `ApmClock` 把 epoch timestamp 与单调 elapsed measurement 分开：事件/持久化协议继续输出 epoch，dispatcher/upload latency、诊断冷却、限流、指纹去重和聚合过期使用单调时间并把负 duration 归零。公共 `emit` 与直接事件入口都在进入异步队列或 IPC 协调器前复制 fields/globalContext/extras。
+
+## 2026-09-12 百分位采样
+
+百分位抽样改为 Algorithm R，使用有界均匀随机索引替换 reservoir，修复旧公式在 65,536 个样本以内几乎只替换第 0 槽的问题。生产使用正常随机源，测试注入固定 seed；min/max/sum 保持全量统计，百分位仍是默认 256 点的近似值。内部 population 使用 Long，既有 Int count 达上限后饱和而不溢出。回归覆盖 10,000 样本分布突变及反转、256/257/65,535/65,536/65,537/100,000 边界。 本项 core 30 suites / 241 tests、lint、apiCheck 和文档检查通过。
