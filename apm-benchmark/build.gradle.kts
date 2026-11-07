@@ -152,7 +152,7 @@ java {
 
 android {
     namespace = "com.apm.benchmark"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         minSdk = 24

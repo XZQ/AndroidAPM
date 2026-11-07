@@ -13,7 +13,7 @@ java {
 
 android {
     namespace = "com.apm.sample"
-    compileSdk = 34
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "com.apm.sample"

@@ -7,7 +7,7 @@ plugins {
 }
 
 /** 统一编译 SDK 版本，升级时仅改此处。 */
-val apmCompileSdk = 34
+val apmCompileSdk = 35
 
 /** 统一最低支持 SDK 版本。 */
 val apmMinSdk = 24
