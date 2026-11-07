@@ -734,8 +734,9 @@ class ApmDispatcherTest {
         /** 异步断言前的短暂等待。 */
         private const val WAIT_BRIEFLY_MS = 100L
 
-        /** 等待异步上传完成的超时秒数。 */
-        private const val AWAIT_TIMEOUT_SECONDS = 5L
+        /** 等待异步上传完成的超时秒数；与 consent lifecycle 测试保持同一量级，
+         *  为全量门禁并发执行时的线程调度留出余量。 */
+        private const val AWAIT_TIMEOUT_SECONDS = 10L
 
         /** 秒到毫秒换算。 */
         private const val MILLIS_PER_SECOND = 1000L

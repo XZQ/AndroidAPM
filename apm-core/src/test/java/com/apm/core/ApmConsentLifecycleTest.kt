@@ -198,18 +198,23 @@ class ApmConsentLifecycleTest {
         val module = BlockingLifecycleModule()
         var active = true
         Apm.register(module)
-        Apm.init(application, strictConfig().copy(
-            bizContextProvider = BizContextProvider {
-                active = false
-                mapOf(TEST_FIELD to BLOCKING_VALUE)
-            }
-        ))
-        val accepted = module.context.emitInSession(ApmEvent(module = TEST_MODULE, name = TEST_EVENT), true) { handoff ->
-            if (active) handoff() else false
-        }
-        assertFalse(accepted)
+        // This gate rejects the only emit, so the runtime never materializes a version-4
+        // WAL database. Opening a second SQLiteOpenHelper afterwards would see version 0
+        // and fail a read-only upgrade under Robolectric's legacy SQLite shadow.
+        // Materialize and hold the inspector first so the SDK opens an existing schema.
         val inspector = SQLiteEventStore(EventDbHelper(application))
         try {
+            assertEquals(0, inspector.pendingCount())
+            Apm.init(application, strictConfig().copy(
+                bizContextProvider = BizContextProvider {
+                    active = false
+                    mapOf(TEST_FIELD to BLOCKING_VALUE)
+                }
+            ))
+            val accepted = module.context.emitInSession(ApmEvent(module = TEST_MODULE, name = TEST_EVENT), true) { handoff ->
+                if (active) handoff() else false
+            }
+            assertFalse(accepted)
             assertEquals(0, inspector.pendingCount())
         } finally {
             inspector.close()
