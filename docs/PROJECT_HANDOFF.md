@@ -1,8 +1,10 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-11-07｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-11-08｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
+
+2026-11-08 compileSdk 35 迁移、测试密度补强与文档冗余清理（JDK 17.0.21+9，基于 a2625ec 之后的本轮提交）：`compileSdk` 34→35 共四处（`build-logic` 的 `apmCompileSdk` 约定、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`），本地 SDK 已补装 platform-35；`targetSdk` 保持 34（sample 应用行为不变），androidx 依赖未随 compileSdk 升级，`apiCheck` 与 24 份 ABI 基线零变化。AGP 8.13.2 / Gradle 8.13 / Kotlin 2.2.21 保持不变（AGP 9 需 Gradle 9.6+，留作独立变更）。测试密度补强四个零直接覆盖文件：`QueryPlanAnalyzerTest`（sqlite 规则矩阵与门控）、`ApmSlowMethodTracerTest`（配对/嵌套/unwind/容量/线程隔离）、`StackSamplingProfilerTest`（Robolectric 门控与生命周期）、`FrameMetricsWindowAccumulatorTest`（空窗口/重置/淘汰/容量）；`apm-slow-method` 新增 `testImplementation(libs.robolectric)`（复用既有坐标，四组指纹不变）。test/main 行数比：apm-slow-method 0.32→0.81、apm-sqlite 0.37→0.66、apm-fps 0.40→0.51，全项目 0.62→0.64。验证：`apiCheck` + 全模块测试 + sample Debug + benchmark Release/AndroidTest Kotlin + 全部 `lintDebug` 在 compileSdk 35 下通过（0 errors）；memory 两条与 crash 一条既有警告维持，sample-app 新增一条 compileSdk 36 可用的信息提示。文档整理：删除 `docs/superpowers/` 10 个零引用过程文档（2,958 行），Markdown 由 47 降至 37，四处 compileSdk 表述同步为 35。外部依赖项：device-lab 脚本与矩阵/预算/host tests 已完备，设备到位即可执行长稳；生产 PostgreSQL/TLS/SigNoz 与 Maven staging 分属 Server 仓库与发布流程，非客户端仓库可独立完成项。
 
 2026-11-07 依赖时效、测试稳定性与跨仓闭环复核（JDK 17.0.21+9，基于 e0b75c1 的本轮提交）：`gradle/libs.versions.toml` 升级 lifecycle-process 2.6.2→2.8.7、fragment-ktx 1.6.2→1.8.5、okhttp 4.11.0→4.12.1（对应 CVE-2026-111943 的证书封锁）、core-ktx 1.7.0→1.13.1、appcompat 1.4.1→1.7.0、material 1.5.0→1.12.0、mockito 4.8.0→5.23.0、benchmark-junit4 1.4.1→1.5.0；以 `--write-verification-metadata sha256` 重生成根依赖指纹（569→705 components）与独立 consumer 指纹（409→437 components），四组严格依赖元数据校验通过。androidx 平台库受 compileSdk 34 / AGP 8.13.2 约束，未采用要求 compileSdk 37 / AGP 9.1 的最新版；compileSdk 与 AGP 大版本迁移留作独立变更。修复两处会在完整门禁高负载下偶发失败的测试：`ApmConsentLifecycleTest` 的 session gate 用例拒绝唯一 emit 后 WAL 库从未建立，测试随后新建的第二个 `SQLiteOpenHelper` 会读到 version 0 并触发只读升级失败，现改为在 `Apm.init` 前先建立并持有 inspector；`ApmDispatcherTest` 的异步 latch 超时由 5s 调整为与 consent 测试同一量级的 10s。`python tools/verify_ci.py` 在 JDK 17.0.21+9 与显式 `ANDROID_HOME` 下完整通过：根/plugin apiCheck、24 份 ABI 基线、四组依赖元数据、release verifier、device-lab 策略与 host tests、强制重跑的 Android/model/plugin 测试、25 坐标发布候选与独立 Maven consumer 的 ASM transformation、47 Markdown / 79 links 文档校验全部通过。本机原无 Android SDK 与 JDK 17，已分别组装 platform-34 / build-tools 34.0.0 与 Temurin 17.0.21+9；`smoke-tests/maven-consumer` 是独立 Gradle 构建，不继承主项目 `local.properties`，全量门禁必须显式提供 `ANDROID_HOME`。本机 `AndroidAPM-Server` 已具备（工作树 tip 3fea9ee；`a0d75e1` 起 readiness 校验已迁移 inbox 表，其后两个提交仅文档），`python tools/verify_collector_e2e.py --server-repo <checkout>` 重跑通过真实 V2/V3 Gzip HTTP、exact whole-batch ACK、typed/occurrence 持久化、installation HMAC 与重放去重；下方 2026-10-13 条目中「缺少 AndroidAPM-Server、未执行 Collector E2E」仅为当时环境事实，现已不成立。逐项复核结论：`coreKtx` 版本目录条目确有 sample-app 引用（访问器形式为 `libs.android.core.ktx`），非冗余，故升级而非删除；memory 的两条 ObsoleteSdkInt 与 crash 的一条 UseRequiresApi 维持保留——删除 API 23 guard 会使 Robolectric 下 `MemorySamplerTest` 失败，该 guard 是测试环境兼容保护；apm-slow-method / apm-sqlite / apm-fps 的测试密度属独立后续项，本轮未改。真机 24h/72h 长稳与功耗、生产 PostgreSQL/TLS/SigNoz 接受、外部 Maven staging/promotion 仍未执行。
 
@@ -53,7 +55,7 @@
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 8.13 / 8.13.2 / 2.2.21 |
-| Android | compileSdk 34 / minSdk 24 / targetSdk 34 |
+| Android | compileSdk 35 / minSdk 24 / targetSdk 34 |
 | JVM bytecode | Java 17 |
 
 主构建、两个 included build 和独立 Maven consumer 都使用 Java 17 toolchain，并允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Java/Kotlin 编译与发布制品统一为 Java 17 字节码。

@@ -20,7 +20,7 @@
 - 121 个测试/benchmark 文件
 
 - Kotlin 2.2.21 / AGP 8.13.2 / Gradle 8.13 / Java 17 toolchain（Gradle runtime JDK 17+）
-- compileSdk 34 / minSdk 24 / targetSdk 34 / Java 17 字节码
+- compileSdk 35 / minSdk 24 / targetSdk 34 / Java 17 字节码
 
 详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，版本与公开面规则见 [API 兼容策略](docs/API_COMPATIBILITY.md)。所有云端事项统一由独立 `AndroidAPM-Server` 仓库的 `docs/云端待建设清单.md` 维护。
 
