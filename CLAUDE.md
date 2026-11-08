@@ -12,6 +12,7 @@
 ## 项目信息
 - Multi-module Gradle (Kotlin 2.2.21, AGP 9.5.1, Gradle 9.6.0, Java 17 toolchain, Gradle runtime JDK 17+, compileSdk 36, minSdk 24)
 - JVM 字节码目标保持 Java 17；构建与验证命令见 `AGENTS.md`
+- 发布下限：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方须 AGP 9.x 与 compileSdk ≥36；Kotlin 元数据保持 2.2.0
 - `settings.gradle.kts` 对 Gradle runtime JDK 17+ fail fast；完整客户端 CI 使用 `python tools/verify_ci.py`
 - 发布型 Kotlin 制品的公开 ABI 必须通过 `apiCheck`；版本与基线更新遵守 `docs/API_COMPATIBILITY.md`
 

@@ -1,6 +1,6 @@
 # apm-bundle 单依赖分发
 
-> 同步日期：2026-07-31｜以 `apm-bundle/build.gradle.kts` 和发布 POM 为准
+> 同步日期：2026-11-08｜以 `apm-bundle/build.gradle.kts` 和发布 POM 为准
 
 ## 1. 目标
 
@@ -28,6 +28,8 @@ Bundle 通过 `api(project(...))` 暴露 22 个运行时制品：
 - `build-logic`：仅提供仓库构建约定
 - `apm-sample-app`：接入示例，不是 SDK 制品
 - `apm-benchmark`：非发布测量入口
+
+接入方下限由制品元数据决定，而不是由 Bundle 的 POM 声明：Bundle 传递的每个 AAR 都带 `minCompileSdk=36`，`com.apm:apm-plugin` 与插件 marker 依赖 AGP 9.5.1。因此宿主必须使用 AGP 9.x 与 `compileSdk ≥ 36`；使用 AGP 8.x 或更低 `compileSdk` 时，构建会在 AAR 元数据校验阶段失败，而不是在运行期降级。
 
 ## 3. 运行时边界
 

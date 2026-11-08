@@ -14,10 +14,11 @@
 
 ## 当前基线
 
-- 同步日期：2026-10-13
+- 同步日期：2026-11-08
 - 27 个构建单元：25 个 root subproject + `apm-plugin`、`build-logic` 两个 included build
 - 170 个主源码文件：165 Kotlin + 4 C + 1 proto
 - 121 个测试/benchmark 文件
+- 129 suites / 1005 tests：根 Android 123 / 922、model 5 / 60、included plugin 1 / 23，0 failures / 0 errors / 0 skips
 
 - Kotlin 2.2.21 / AGP 9.5.1 / Gradle 9.6.0 / Java 17 toolchain（Gradle runtime JDK 17+）
 - compileSdk 36 / minSdk 24 / targetSdk 34 / Java 17 字节码

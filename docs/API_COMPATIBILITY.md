@@ -1,18 +1,28 @@
 # AndroidAPM 公共 API 兼容策略
 
-> 同步日期：2026-10-13｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-08｜当前 SDK 版本：0.1.0
 
 ## 目标与范围
 
 所有发布型 Kotlin 制品都提交了公开 JVM ABI 基线，包括 22 个运行时实现模块、空实现的 `apm-bundle` 分发制品和 included build `apm-plugin`。`apm-sample-app` 与非发布的 `apm-benchmark` 不属于兼容承诺。`build-logic` 是仓库构建约定，也不作为 SDK 制品发布。
 
-项目使用 Kotlin 官方维护的 [binary-compatibility-validator](https://github.com/Kotlin/binary-compatibility-validator) 0.18.1。它会从 Android Library 的 Release 编译产物和 JVM JAR 生成 `模块/api/模块.api`，并在 `apiCheck` 中比较当前 ABI 与已提交基线。项目当前 Kotlin 2.2.21 自带的实验性 ABI 工具只在纯 JVM 模块生成了有效基线，Android Library 输出为空，因此当前不能替代该门禁；升级 Kotlin 后应重新验证 Android 输入，再依据 [Kotlin 内置 ABI 校验文档](https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html)评估迁移。
+项目使用 Kotlin 官方维护的 [binary-compatibility-validator](https://github.com/Kotlin/binary-compatibility-validator) 0.18.2。它会从 Android Library 的 Release 编译产物和 JVM JAR 生成 `模块/api/模块.api`，并在 `apiCheck` 中比较当前 ABI 与已提交基线。项目当前 Kotlin 2.2.21 自带的实验性 ABI 工具只在纯 JVM 模块生成了有效基线，Android Library 输出为空，因此当前不能替代该门禁；升级 Kotlin 后应重新验证 Android 输入，再依据 [Kotlin 内置 ABI 校验文档](https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html)评估迁移。
 
 基线完整性脚本还会 fail closed 地确认：
 
 - 24 个发布制品都有且只有一个预期基线；
 - 除不承载实现类的 `apm-bundle` 外，其余 23 个基线非空且包含公开声明；
 - sample 与 benchmark 没有被误纳入稳定 API 范围。
+
+## 消费方下限
+
+2026-11-08 的 AGP 9 迁移抬高的是**构建下限**，不是 ABI：
+
+- 所有发布 AAR 的元数据为 `minCompileSdk=36`（`compileSdk = 36`），接入方必须使用 `compileSdk ≥ 36`，否则 AAR 在解析期即被拒绝；
+- `com.apm:apm-plugin` 与 `com.apm.slow-method` 插件 marker 使用 AGP 9.5.1 构建并声明对应依赖，接入方必须使用 AGP 9.x；
+- Kotlin 元数据保持 2.2.0（`Kotlin 2.2.21`），因此默认 AGP 9 工具链（内置 Kotlin 2.2.10）可直接读取，未被同步抬高。
+
+这项下限属于发布契约的一部分：变更 `compileSdk`、AGP 主版本或 Kotlin 元数据版本时，必须在发布说明中显式声明，并同步更新本节与 `README.md` 的“当前基线”。24 份 ABI 基线本身在迁移前后零变化，`minCompileSdk` 由 AAR 元数据而非 `.api` 文件表达，因此 `apiCheck` 不会替接入方发现这项变化。
 
 ## 版本规则
 

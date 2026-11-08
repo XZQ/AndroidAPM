@@ -13,7 +13,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-07-31"
+REPORT_DATE = "2026-11-08"
 RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
@@ -79,12 +79,12 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "166", "161 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "109", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
-        ("当前完整测试", "106 suites / 757 tests", "根 Android + model；included plugin 另有 1 suite / 18 tests，全部零失败"),
+        ("主源码", "170", "165 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "121", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
+        ("当前完整测试", "128 suites / 982 tests", "根 Android 123 / 922 + model 5 / 60；included plugin 另有 1 suite / 23 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
-        ("Android", "compile 34 / min 24", "targetSdk 34"),
-        ("构建栈", "Java 17 toolchain / Gradle 8.13", "Gradle runtime JDK 17+ / AGP 8.13.2 / Kotlin 2.2.21"),
+        ("Android", "compile 36 / min 24", "targetSdk 34；AAR 元数据 minCompileSdk=36 即接入方下限"),
+        ("构建栈", "Java 17 toolchain / Gradle 9.6.0", "Gradle runtime JDK 17+ / AGP 9.5.1（内置 Kotlin）/ Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
     ]
     table = document.add_table(rows=1, cols=3)
@@ -189,6 +189,8 @@ def build_status_report() -> Document:
             "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
             "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
             "2026-07-31 已固化 API 24–28 / 29–33 / 34–36 三 lane、六组 profile 工件与 exact provenance 汇总门禁；plan-only 通过不代表真机长稳通过。"
+            "2026-11-08 完成 AGP 9.5.1 / Gradle 9.6.0 / compileSdk 36 的整链迁移，24 份 ABI 基线零变化，"
+            "但 AAR 元数据 minCompileSdk=36 与插件的 AGP 9.5.1 依赖把接入方下限抬到 AGP 9.x 与 compileSdk ≥36。"
     )
     add_summary_table(document)
 

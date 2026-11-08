@@ -1,6 +1,6 @@
 # AndroidAPM 发布与供应链门禁
 
-> 同步日期：2026-07-31｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-08｜当前 SDK 版本：0.1.0
 
 ## 发布范围
 
@@ -11,6 +11,8 @@
 - `com.apm.slow-method:com.apm.slow-method.gradle.plugin:0.1.0` 插件 marker。
 
 `apm-sample-app`、`apm-benchmark` 和 `build-logic` 不得进入发布仓库。Bundle POM 必须精确传递 22 个运行时制品；插件 marker 必须只依赖同版本 `com.apm:apm-plugin`。
+
+本次候选由 Gradle 9.6.0 / AGP 9.5.1 / Kotlin 2.2.21 与 `compileSdk 36` 构建，发布说明必须显式写出**消费方下限**：所有 AAR 的元数据为 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方须使用 AGP 9.x 与 `compileSdk ≥ 36`；Kotlin 元数据保持 2.2.0，不额外抬高编译器下限。`apiCheck` 与 ABI 基线不会发现这项变化——它由 AAR 元数据表达，因此候选门禁与发布说明都不能省略。
 
 ## 本地发布候选
 
@@ -80,6 +82,6 @@ $env:SIGNING_PASSWORD = "<secret>"
 4. 上传到目标仓库的 staging 区；
 5. 从 staging 重新消费 Bundle 和插件；
 6. 执行仓库特定 close/promotion；
-7. 推送版本 tag，并记录 tag、commit、候选 manifest、SBOM 和仓库 promotion 身份。
+7. 推送版本 tag，并记录 tag、commit、候选 manifest、SBOM 和仓库 promotion 身份；发布说明同时声明当前消费方下限（AGP 9.x / `compileSdk ≥ 36`）。
 
 任一步失败都不得继续 promotion，也不得用 `publishToMavenLocal` 或未签名候选代替外部发布证据。
