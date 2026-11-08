@@ -10,6 +10,8 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.locks.ReentrantLock
+import kotlin.concurrent.withLock
 
 /**
  * Non-blocking diagnostic recorder backed by a memory ring and an independent file writer.
@@ -43,8 +45,10 @@ internal class DiagnosticRecorder(
     private var memoryBytes = 0L
     /** Short memory-ring lock. */
     private val memoryLock = Any()
-    /** Monitor used by bounded flush calls. */
-    private val pendingLock = Object()
+    /** Lock guarding settled-write signalling for bounded flush calls. */
+    private val pendingLock = ReentrantLock()
+    /** Signalled whenever an accepted record settles; awaits happen under [pendingLock]. */
+    private val pendingSettled = pendingLock.newCondition()
     /** Records accepted into the queue but not settled by the writer. */
     private val pendingWrites = AtomicLong(0L)
     /** Whether new records may enter the file queue. */
@@ -171,14 +175,13 @@ internal class DiagnosticRecorder(
     fun flush(timeoutMs: Long): Boolean {
         val timeoutNanos = TimeUnit.MILLISECONDS.toNanos(timeoutMs.coerceAtLeast(0L))
         val deadline = ApmClock.monotonicTimeNanos() + timeoutNanos
-        synchronized(pendingLock) {
+        pendingLock.withLock {
             while (pendingWrites.get() > 0L) {
                 val remainingNanos = deadline - ApmClock.monotonicTimeNanos()
                 if (remainingNanos <= 0L) {
                     return false
                 }
-                val waitMs = TimeUnit.NANOSECONDS.toMillis(remainingNanos).coerceAtLeast(1L)
-                pendingLock.wait(waitMs)
+                pendingSettled.awaitNanos(remainingNanos.coerceAtLeast(1L))
             }
         }
         return true
@@ -401,9 +404,7 @@ internal class DiagnosticRecorder(
     /** Marks one accepted queue record as written, failed, skipped, or evicted. */
     private fun settlePendingWrite() {
         pendingWrites.decrementAndGet()
-        synchronized(pendingLock) {
-            pendingLock.notifyAll()
-        }
+        pendingLock.withLock { pendingSettled.signalAll() }
     }
 
     private companion object {
