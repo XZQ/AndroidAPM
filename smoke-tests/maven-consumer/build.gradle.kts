@@ -1,7 +1,6 @@
 plugins {
     // 插件版本统一取自主仓库的 version catalog，避免与主构建漂移
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     id("com.apm.slow-method") version "0.1.0"
 }
 
@@ -14,7 +13,7 @@ java {
 
 android {
     namespace = "com.apm.consumer.smoke"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24

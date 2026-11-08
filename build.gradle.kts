@@ -1,17 +1,14 @@
-import com.android.build.gradle.LibraryExtension
+import com.android.build.api.dsl.LibraryExtension
 import org.gradle.api.component.SoftwareComponent
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
 import org.gradle.api.publish.maven.MavenPublication
 import org.gradle.plugins.signing.SigningExtension
-import org.jetbrains.kotlin.gradle.dsl.JvmTarget
-import org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension
 
 plugins {
     // 统一走 version catalog 的插件别名，激活 libs.versions.toml 的 [plugins] 配置
     alias(libs.plugins.android.application) apply false
     alias(libs.plugins.android.library) apply false
-    alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.kotlin.jvm) apply false
     alias(libs.plugins.androidx.benchmark) apply false
     alias(libs.plugins.binary.compatibility.validator)
@@ -140,14 +137,6 @@ subprojects {
                     useInMemoryPgpKeys(inMemoryKey, System.getenv("SIGNING_PASSWORD"))
                 }
                 sign(extensions.getByType(PublishingExtension::class.java).publications)
-            }
-        }
-    }
-
-    pluginManager.withPlugin("org.jetbrains.kotlin.android") {
-        extensions.configure<KotlinAndroidProjectExtension>("kotlin") {
-            compilerOptions {
-                jvmTarget.set(JvmTarget.JVM_17)
             }
         }
     }

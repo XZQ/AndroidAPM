@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.androidx.benchmark)
 }
 
@@ -152,7 +151,7 @@ java {
 
 android {
     namespace = "com.apm.benchmark"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         minSdk = 24

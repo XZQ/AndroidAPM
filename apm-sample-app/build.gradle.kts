@@ -1,6 +1,5 @@
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     id("com.apm.slow-method")
 }
 
@@ -13,7 +12,7 @@ java {
 
 android {
     namespace = "com.apm.sample"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.apm.sample"
