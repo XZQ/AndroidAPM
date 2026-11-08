@@ -407,8 +407,12 @@ def git_value(*arguments: str) -> str:
 def dirty_source_identity(revision: str) -> str:
     """Hash tracked changes and untracked source paths into a bounded identity."""
     digest = hashlib.sha256(revision.encode("ascii"))
+    # --no-textconv keeps the identity a hash of raw repository bytes: Git's
+    # textconv helpers depend on local config and external binaries (for
+    # example `file`), so a dirty tree containing a .docx would otherwise fail
+    # or hash different bytes on different machines.
     diff = subprocess.run(
-        ["git", "diff", "--binary", "HEAD"],
+        ["git", "diff", "--binary", "--no-textconv", "HEAD"],
         cwd=REPOSITORY_ROOT,
         check=False,
         capture_output=True,
