@@ -483,6 +483,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 - `docs/architecture/`：当前模块架构事实源
 - `docs/architecture/21_apm-bundle.md`：单依赖分发的依赖集合、边界与取舍
+- `docs/CHANGELOG.md`：按日期归档的变更与验证索引；README 不再承载历史段落，只描述当前事实
 - `docs/AndroidAPM_第一性原理SDK评审_2026-07-21.md`：其他 AI 初始评审的源码闭环复核；按证据等级区分客户端架构、短时真机、长稳/OEM 和端到端产品准入，不作为生产验收证书
 - `docs/APM_Review_2026-07-08.md`：历史评审与当前处置状态
 - `docs/APM_Optimization_2026-07-08.md`：历史优化建议与落地状态
