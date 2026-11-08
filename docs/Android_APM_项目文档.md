@@ -22,9 +22,17 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-08 AGP 9 与 Gradle 9.6 迁移
+
+2026-11-08 AGP 9.5.1 / Gradle 9.6.0 全链迁移（JDK 17.0.21+9）：AGP 9.5 的下限是 Gradle 9.6.0、Build Tools 36.0.0、JDK 17，因此 `compileSdk` 一并 35→36（四处：约定插件、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`，`targetSdk` 仍 34）。AGP 9 默认启用内置 Kotlin，`org.jetbrains.kotlin.android` 从约定插件、根构建、benchmark、sample 与独立 consumer 全部移除，版本目录删除该别名；根 `subprojects` 里用 `KotlinAndroidProjectExtension` 设置 jvmTarget 的块删除，因为内置 Kotlin 的 jvmTarget 默认跟随 `compileOptions.targetCompatibility`（17）。`android.newDsl` 默认开启后，`com.android.build.gradle.LibraryExtension` 不再是扩展实例的类型（装饰实例实现新接口，强转会 ClassCastException），根构建改用 `com.android.build.api.dsl.LibraryExtension`。
+
+迁移中最关键的判断是 **Kotlin 版本不能跟着往上走**：内置 Kotlin 使用构建类路径上的 KGP，类路径没有才回落到 AGP 自带版本（9.5.1 为 2.2.10）。把 catalog 的 `kotlin` 升到 2.4.21 时，AAR 内的 `*.kotlin_module` 元数据变成 2.4.0，独立 consumer 用默认 AGP 9 工具链（2.2.10）编译立即报 `Module was compiled with an incompatible version of Kotlin`；回退 2.2.21 后一切恢复正常。元数据版本即消费方编译器下限，发布型 SDK 不应单方面抬高。同时把 `DiagnosticRecorder` 的 `java.lang.Object` 监视器换成 `ReentrantLock`+`Condition`（`awaitNanos`/`signalAll`，有界等待语义等价），去掉裸 monitor。
+
+验证：`apiCheck` 与 24 份 ABI 基线零变化；根 Android 123 suites / 922 tests、model 5 / 60、included plugin 1 / 23，共 129 suites / 1005 tests 全 0 failures/errors/skips；全模块 `lintDebug` 0 error；`:apm-sample-app:assembleDebug`（含 `com.apm.slow-method` 的 `transformDebugClassesWithAsm`）与 benchmark Release AndroidTest 编译通过；25 坐标候选（22 AAR / 26 JAR / 25 POM）与独立 Maven consumer 在严格依赖校验下完成 clean assembleDebug 与 ASM 插桩；文档 37 Markdown / 79 links。四组指纹干净重建为 473 / 218 / 206 / 281 组件（consumer 保留 `com.apm`、`com.apm.slow-method` 信任组）。**代价**：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方必须使用 AGP 9.x 与 compileSdk ≥36。
+
 ## 2026-11-08 compileSdk 35 与测试密度
 
-2026-11-08 compileSdk 35 迁移、测试密度补强与文档冗余清理（JDK 17.0.21+9，基于 a2625ec 之后的本轮提交）：`compileSdk` 34→35 共四处（`build-logic` 的 `apmCompileSdk` 约定、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`），本地 SDK 已补装 platform-35；`targetSdk` 保持 34（sample 应用行为不变），androidx 依赖未随 compileSdk 升级，`apiCheck` 与 24 份 ABI 基线零变化。AGP 8.13.2 / Gradle 8.13 / Kotlin 2.2.21 保持不变（AGP 9 需 Gradle 9.6+，留作独立变更）。测试密度补强四个零直接覆盖文件：`QueryPlanAnalyzerTest`（sqlite 规则矩阵与门控）、`ApmSlowMethodTracerTest`（配对/嵌套/unwind/容量/线程隔离）、`StackSamplingProfilerTest`（Robolectric 门控与生命周期）、`FrameMetricsWindowAccumulatorTest`（空窗口/重置/淘汰/容量）；`apm-slow-method` 新增 `testImplementation(libs.robolectric)`（复用既有坐标，四组指纹不变）。test/main 行数比：apm-slow-method 0.32→0.81、apm-sqlite 0.37→0.66、apm-fps 0.40→0.51，全项目 0.62→0.64。验证：`apiCheck` + 全模块测试 + sample Debug + benchmark Release/AndroidTest Kotlin + 全部 `lintDebug` 在 compileSdk 35 下通过（0 errors）；memory 两条 ObsoleteSdkInt 与 crash 一条 UseRequiresApi 维持保留，sample-app 新增一条 compileSdk 36 可用的信息提示。文档整理：删除 `docs/superpowers/` 10 个零引用过程文档（2,958 行），Markdown 由 47 降至 37。外部依赖项：`apm-benchmark/run_device_soak.py` 与矩阵/预算/host tests 已完备，物理设备到位即可执行 24h/72h 长稳；生产 PostgreSQL/TLS/SigNoz 验收归属 `AndroidAPM-Server`，外部 Maven staging/promotion 归属发布流程且需仓库凭据。
+2026-11-08 compileSdk 35 迁移、测试密度补强与文档冗余清理（JDK 17.0.21+9，基于 a2625ec 之后的本轮提交）：`compileSdk` 34→35 共四处（`build-logic` 的 `apmCompileSdk` 约定、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`），本地 SDK 已补装 platform-35；`targetSdk` 保持 34（sample 应用行为不变），androidx 依赖未随 compileSdk 升级，`apiCheck` 与 24 份 ABI 基线零变化。AGP 8.13.2 / Gradle 8.13 / Kotlin 2.2.21 保持不变（AGP 9 需 Gradle 9.6+；同日第二轮已完成迁移，见上方条目）。测试密度补强四个零直接覆盖文件：`QueryPlanAnalyzerTest`（sqlite 规则矩阵与门控）、`ApmSlowMethodTracerTest`（配对/嵌套/unwind/容量/线程隔离）、`StackSamplingProfilerTest`（Robolectric 门控与生命周期）、`FrameMetricsWindowAccumulatorTest`（空窗口/重置/淘汰/容量）；`apm-slow-method` 新增 `testImplementation(libs.robolectric)`（复用既有坐标，四组指纹不变）。test/main 行数比：apm-slow-method 0.32→0.81、apm-sqlite 0.37→0.66、apm-fps 0.40→0.51，全项目 0.62→0.64。验证：`apiCheck` + 全模块测试 + sample Debug + benchmark Release/AndroidTest Kotlin + 全部 `lintDebug` 在 compileSdk 35 下通过（0 errors）；memory 两条 ObsoleteSdkInt 与 crash 一条 UseRequiresApi 维持保留，sample-app 新增一条 compileSdk 36 可用的信息提示。文档整理：删除 `docs/superpowers/` 10 个零引用过程文档（2,958 行），Markdown 由 47 降至 37。外部依赖项：`apm-benchmark/run_device_soak.py` 与矩阵/预算/host tests 已完备，物理设备到位即可执行 24h/72h 长稳；生产 PostgreSQL/TLS/SigNoz 验收归属 `AndroidAPM-Server`，外部 Maven staging/promotion 归属发布流程且需仓库凭据。
 
 ## 2026-10-13 深度审查
 
@@ -113,12 +121,12 @@ JDK 17 定向验证通过 included plugin 1 suite / 23 tests、plugin `apiCheck`
 | 主源码 | 170：165 Kotlin + 4 C + 1 proto |
 | 测试/benchmark 文件 | 121 |
 | Kotlin | 2.2.21 |
-| AGP | 8.13.2 |
-| Gradle | 8.13 |
+| AGP | 9.5.1 |
+| Gradle | 9.6.0 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | JVM bytecode | Java 17 |
-| Android SDK | compileSdk 35 / minSdk 24 / targetSdk 34 |
+| Android SDK | compileSdk 36 / minSdk 24 / targetSdk 34 |
 
 不要在文档中维护“最新文档提交号”；文档提交本身会让该值立即过期。使用 `git log --oneline -n 10` 查看实际 tip。
 
