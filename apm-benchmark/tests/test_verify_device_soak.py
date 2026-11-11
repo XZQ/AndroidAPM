@@ -203,6 +203,7 @@ class DeviceSoakVerifierTest(unittest.TestCase):
     def test_schema_three_requires_complete_clean_provenance(self) -> None:
         """Current artifacts require device, source, input, and runner identity."""
         self._promote_to_schema_three()
+        self._add_consistent_raw_evidence()
         self._write_result()
 
         self.assertTrue(any("duration=" in message for message in self._verify_smoke()))
@@ -293,6 +294,99 @@ class DeviceSoakVerifierTest(unittest.TestCase):
         with self.assertRaisesRegex(
             VERIFIER.DeviceSoakVerificationError,
             "adbReconnectTimeoutSeconds",
+        ):
+            self._verify_smoke()
+
+
+    def _add_consistent_raw_evidence(self) -> None:
+        """Attach raw startup/probe inputs that reproduce the fixture summary."""
+        self.result["control"]["startupMs"] = 100
+        for segment in self.result["segments"]:
+            segment["startupMs"] = 110
+            segment["probe"]["initDurationNs"] = 50_000_000
+            segment["probe"]["operationP95Ns"] = 500_000
+
+    def test_summary_startup_init_p95_must_match_raw_evidence(self) -> None:
+        """Startup/init/P95 summaries reconcile against retained raw evidence."""
+        self._add_consistent_raw_evidence()
+        self._write_result()
+        self.assertGreater(len(self._verify_smoke()), 1)
+
+        self.result["summary"]["startupDeltaMs"] = 11
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "raw startup times",
+        ):
+            self._verify_smoke()
+
+        self.result["summary"]["startupDeltaMs"] = 10
+        self.result["summary"]["sdkInitMaxMs"] = 51
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "raw probe init durations",
+        ):
+            self._verify_smoke()
+
+        self.result["summary"]["sdkInitMaxMs"] = 50
+        self.result["summary"]["mainThreadOperationP95Us"] = 501
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "raw probe P95 values",
+        ):
+            self._verify_smoke()
+
+    def test_schema_three_requires_raw_startup_and_probe_evidence(self) -> None:
+        """Current artifacts cannot omit the raw inputs behind their summary."""
+        self._promote_to_schema_three()
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "required by result schema 3",
+        ):
+            self._verify_smoke()
+
+        self._add_consistent_raw_evidence()
+        self._write_result()
+        self.assertGreater(len(self._verify_smoke()), 1)
+
+    def test_uid_power_summary_must_match_raw_samples(self) -> None:
+        """Batterystats power rates recompute from the first/last raw UID values."""
+        self.result["segments"][0]["samples"][0]["uid_power_mah"] = 1.0
+        self.result["segments"][1]["samples"][-1]["uid_power_mah"] = 2.0
+        # 1 mAh over 30 observed seconds = 120 mAh/hour.
+        self.result["summary"]["chargeConsumptionMahPerHour"] = 120.0
+        self.result["summary"]["powerSource"] = "android-batterystats-uid"
+        self._write_result()
+        self.assertGreater(len(self._verify_smoke()), 1)
+
+        self.result["summary"]["chargeConsumptionMahPerHour"] = 119.0
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "raw UID power samples",
+        ):
+            self._verify_smoke()
+
+        self.result["summary"]["chargeConsumptionMahPerHour"] = 120.0
+        self.result["segments"][1]["samples"][-1]["uid_power_mah"] = 1.0
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "increasing raw UID evidence",
+        ):
+            self._verify_smoke()
+
+    def test_power_source_must_be_a_known_acquisition(self) -> None:
+        """An unrecognized power source cannot bypass raw-evidence reconciliation."""
+        self.result["summary"]["chargeConsumptionMahPerHour"] = 12.5
+        self.result["summary"]["powerSource"] = "magic-meter"
+        self._write_result()
+        with self.assertRaisesRegex(
+            VERIFIER.DeviceSoakVerificationError,
+            "powerSource must be",
         ):
             self._verify_smoke()
 

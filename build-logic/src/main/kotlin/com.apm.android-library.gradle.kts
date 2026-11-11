@@ -1,7 +1,8 @@
 // 仓库统一的 Android library 约定插件。
 // 收敛所有监控/基础模块重复的 android {} 配置：compileSdk、minSdk、Java 版本。
 // Kotlin 编译由 AGP 9 内置 Kotlin 支持提供，不再单独应用 kotlin-android 插件。
-// jvmTarget、consumer-rules、maven-publish 由根构建的 subprojects 块按插件类型统一注入。
+// 内置 Kotlin 的 jvmTarget 默认跟随 android.compileOptions.targetCompatibility（此处 17），
+// 不再由根构建注入；consumer-rules、maven-publish 仍由根构建的 subprojects 块按插件类型统一注入。
 plugins {
     id("com.android.library")
 }

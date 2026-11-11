@@ -156,6 +156,7 @@ class DeviceMatrixVerifierTest(unittest.TestCase):
             },
             "control": {
                 "probe": {"sdkEnabled": False},
+                "startupMs": 100,
                 "samples": [
                     {"elapsed_seconds": 0, "cpu_jiffies": 100},
                     {"elapsed_seconds": 10, "cpu_jiffies": 110},
@@ -164,11 +165,14 @@ class DeviceMatrixVerifierTest(unittest.TestCase):
             "segments": [
                 {
                     "runId": f"{profile}-1",
+                    "startupMs": 110,
                     "probe": {
                         "runId": f"{profile}-1",
                         "sdkEnabled": True,
                         "offlineCollector": True,
                         "observedDurationMs": 10_000,
+                        "initDurationNs": 50_000_000,
+                        "operationP95Ns": 500_000,
                     },
                     "samples": [
                         {"elapsed_seconds": 0, "cpu_jiffies": 100},

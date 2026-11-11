@@ -6,6 +6,7 @@ import argparse
 import json
 import math
 import re
+import statistics
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,9 @@ ATTRIBUTION_TOLERANCE = 1e-6
 MAX_ADB_RECONNECT_TIMEOUT_SECONDS = 10 * 60
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 SOURCE_REVISION_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+POWER_SOURCE_EXTERNAL_METER = "external-meter"
+POWER_SOURCE_BATTERYSTATS_UID = "android-batterystats-uid"
+SUPPORTED_POWER_SOURCES = (POWER_SOURCE_EXTERNAL_METER, POWER_SOURCE_BATTERYSTATS_UID)
 
 
 class DeviceSoakVerificationError(ValueError):
@@ -171,6 +175,93 @@ def _segment_cpu_percent(
         * 100.0
     )
     return cpu_percent, wall_seconds
+
+
+def _reconcile_raw_evidence(
+    result_schema: Any,
+    control: dict[str, Any],
+    segments: list[dict[str, Any]],
+    summary: dict[str, Any],
+    observed_seconds: float,
+) -> list[str]:
+    """Recompute startup/init/P95/power summaries from retained raw evidence.
+
+    This extends the CPU attribution contract to the remaining summary metrics so
+    a stale or edited summary cannot pass while the raw samples disagree. Current
+    schema artifacts must carry every raw input; legacy artifacts reconcile only
+    the metrics whose raw inputs are present, keeping historical evidence readable.
+    """
+    violations: list[str] = []
+    require_raw = result_schema == RESULT_SCHEMA_VERSION
+
+    def optional_number(value: Any, label: str) -> float | None:
+        # Absent legacy fields stay absent instead of being coerced to zero.
+        if value is None:
+            return None
+        return _number(value, label, minimum=0)
+
+    # Startup delta: median enabled cold start minus the control cold start.
+    control_startup = optional_number(control.get("startupMs"), "control.startupMs")
+    segment_startups = [
+        optional_number(segment.get("startupMs"), f"segments[{index}].startupMs")
+        for index, segment in enumerate(segments)
+    ]
+    if control_startup is not None and all(value is not None for value in segment_startups):
+        expected_delta = statistics.median(segment_startups) - control_startup  # type: ignore[arg-type]
+        reported_delta = _number(summary.get("startupDeltaMs"), "summary.startupDeltaMs")
+        if abs(expected_delta - reported_delta) > ATTRIBUTION_TOLERANCE:
+            violations.append("startupDeltaMs does not match raw startup times")
+    elif require_raw:
+        violations.append("raw startupMs evidence is required by result schema 3")
+
+    # SDK init and main-thread P95: worst enabled segment, exactly as the runner sums up.
+    probes = [_mapping(segment.get("probe"), f"segments[{index}].probe") for index, segment in enumerate(segments)]
+    init_values = [
+        optional_number(probe.get("initDurationNs"), f"segments[{index}].probe.initDurationNs")
+        for index, probe in enumerate(probes)
+    ]
+    p95_values = [
+        optional_number(probe.get("operationP95Ns"), f"segments[{index}].probe.operationP95Ns")
+        for index, probe in enumerate(probes)
+    ]
+    if all(value is not None for value in init_values):
+        expected_init_ms = max(init_values) / 1_000_000.0  # type: ignore[type-var]
+        if abs(expected_init_ms - _number(summary.get("sdkInitMaxMs"), "summary.sdkInitMaxMs", minimum=0)) > ATTRIBUTION_TOLERANCE:
+            violations.append("sdkInitMaxMs does not match raw probe init durations")
+    elif require_raw:
+        violations.append("raw probe initDurationNs evidence is required by result schema 3")
+    if all(value is not None for value in p95_values):
+        expected_p95_us = max(p95_values) / 1000.0  # type: ignore[type-var]
+        reported_p95_us = _number(summary.get("mainThreadOperationP95Us"), "summary.mainThreadOperationP95Us", minimum=0)
+        if abs(expected_p95_us - reported_p95_us) > ATTRIBUTION_TOLERANCE:
+            violations.append("mainThreadOperationP95Us does not match raw probe P95 values")
+    elif require_raw:
+        violations.append("raw probe operationP95Ns evidence is required by result schema 3")
+
+    # UID power: only the batterystats source is recomputable from raw samples;
+    # an external meter is a manual calibrated input with no raw device evidence.
+    if summary.get("powerSource") == POWER_SOURCE_BATTERYSTATS_UID:
+        enabled_samples = [
+            sample
+            for segment in segments
+            for sample in (segment.get("samples") if isinstance(segment.get("samples"), list) else [])
+        ]
+        first_power = optional_number(
+            _mapping(enabled_samples[0], "enabled first sample").get("uid_power_mah") if enabled_samples else None,
+            "enabled first sample uid_power_mah",
+        )
+        last_power = optional_number(
+            _mapping(enabled_samples[-1], "enabled last sample").get("uid_power_mah") if enabled_samples else None,
+            "enabled last sample uid_power_mah",
+        )
+        reported_rate = _number(summary.get("chargeConsumptionMahPerHour"), "summary.chargeConsumptionMahPerHour", minimum=0)
+        if first_power is None or last_power is None or last_power <= first_power or observed_seconds <= 0:
+            violations.append("android-batterystats-uid power lacks increasing raw UID evidence")
+        else:
+            expected_rate = (last_power - first_power) / (observed_seconds / 3600.0)
+            if abs(expected_rate - reported_rate) > ATTRIBUTION_TOLERANCE:
+                violations.append("chargeConsumptionMahPerHour does not match raw UID power samples")
+    return violations
 
 
 def _read_json(path: Path, label: str) -> dict[str, Any]:
@@ -369,6 +460,10 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             raise DeviceSoakVerificationError(
                 "summary.powerSource is required when power evidence is present"
             )
+        if power_source not in SUPPORTED_POWER_SOURCES:
+            raise DeviceSoakVerificationError(
+                "summary.powerSource must be external-meter or android-batterystats-uid"
+            )
 
     integrity_violations: list[str] = []
     control_probe = _mapping(control.get("probe"), "control.probe")
@@ -440,6 +535,15 @@ def verify_result(profile: dict[str, Any], result: dict[str, Any]) -> list[str]:
             integrity_violations.append(
                 "cpuEnabledAveragePercent does not match raw enabled samples"
             )
+    integrity_violations.extend(
+        _reconcile_raw_evidence(
+            result_schema,
+            control,
+            [_mapping(segment, f"segments[{index}]") for index, segment in enumerate(segments)],
+            summary,
+            raw_observed_seconds,
+        )
+    )
     if integrity_violations:
         raise DeviceSoakVerificationError(
             "Device-soak evidence rejected:\n- " + "\n- ".join(integrity_violations)

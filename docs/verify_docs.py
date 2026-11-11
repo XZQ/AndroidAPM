@@ -17,6 +17,9 @@ def markdown_files() -> list[Path]:
     """Return tracked-document candidates in a stable order."""
     files = list(REPO_ROOT.glob("*.md"))
     files.extend((REPO_ROOT / "docs").rglob("*.md"))
+    # Module-level READMEs (e.g. apm-benchmark) are linked from the root docs and
+    # must pass the same encoding/link gate rather than sitting outside it.
+    files.extend(REPO_ROOT.glob("*/README.md"))
     return sorted(path for path in files if path.is_file())
 
 
