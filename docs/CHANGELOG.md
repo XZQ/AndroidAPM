@@ -4,13 +4,14 @@
 
 ## 未发布
 
+- **深度审查与修复（2026-11-11）**：并行分模块审查加集成自审，修复一批真实缺陷，公开 ABI 零变化。协议：负 int64 varint 补码 10 字节编码（原只写 1 字节损坏整批）。核心：非持久交付一律经有界异步包装，交付屏障不再等待阻塞式传输，并拒绝「持久 outbox + 异步接受型 uploader」危险组合；宿主 Throwable 覆写隔离 + worker/自监控最终可恢复边界。生命周期：LeakCheckQueue 锁外交付、内存调度竞态防护、Render FrameMetrics 异常隔离、ANR SIGQUIT fail-closed、Launch 跨会话计数重置、Battery 主线程任务边界。P2 批次：HprofDumper fork 超时回收、ANR/线程监控加固、Locale.ROOT、移除 SIGPIPE 拦截、RetryPolicy 校验与丢弃归因、header/CR/close/versionCode/进程名回退等。验证：`verify_ci.py` 全绿，123 suites / 928 tests（根 Android 117/842、model 5/63、plugin 1/23）。详见 [项目文档](Android_APM_项目文档.md) 与 [AGENTS.md](../AGENTS.md) 同日条目。
 - **文档**：README 按当前事实 / 使用指南 / 证据链接三层重构，日期化的变更与验证段落从 README 移出到本文件；模块表直接链到架构文档；配置默认值表收敛为决策相关项，完整 38 项留在项目文档；消费方下限提升到基线表；修正原 README 中落在 License 之后的散落条目。
 
 ## 2026-11-08
 
 - **构建链迁移**：AGP 8.13.2 → 9.5.1、Gradle 8.13 → 9.6.0、compileSdk 35 → 36（4 处），targetSdk 保持 34。Kotlin 刻意留在 2.2.21：AGP 9 内置 Kotlin 用构建类路径上的 KGP，升到 2.4.21 会让 AAR 的 `kotlin_module` 元数据变为 2.4.0，默认 AGP 9 消费方编译直接失败——元数据版本就是消费方编译器下限。代码侧把 `DiagnosticRecorder` 的裸 `Object` 监视器换成 `ReentrantLock` + `Condition`。
 - **消费方下限提升**：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方须 AGP 9.x。KGP 2.2.x 官方矩阵上限为 Gradle 8.14，与 AGP 9.5 的 ≥9.6 无法同时满足，该偏离由完整门禁覆盖。
-- **验证**：24 份 ABI 基线零变化；129 suites / 1005 tests 全 0 failures/errors/skips；全模块 `lintDebug` 0 error；sample Debug（含 ASM 插桩）与 benchmark Release AndroidTest 编译通过；25 坐标候选与独立 consumer 在严格依赖校验下 clean assembleDebug；四组指纹重建为 473 / 218 / 206 / 281。
+- **验证**：24 份 ABI 基线零变化；123 suites / 922 tests（根 Android 117/839、model 5/60、plugin 1/23）全 0 failures/errors/skips；全模块 `lintDebug` 0 error；sample Debug（含 ASM 插桩）与 benchmark Release AndroidTest 编译通过；25 坐标候选与独立 consumer 在严格依赖校验下 clean assembleDebug；四组指纹重建为 473 / 218 / 206 / 281。
 - **同日其他**：compileSdk 35 迁移（ABI 零变化）；补 4 个零覆盖测试文件（全项目 test/main 比 0.62 → 0.64）；删除 `docs/superpowers/` 下 10 个零引用过程文档；全量文档同步；发布候选脏树身份改为 `git diff --binary --no-textconv`，避免 `.docx` 变更触发 Git textconv 对本机 `file` 命令的依赖。
 
 详见 [项目文档](Android_APM_项目文档.md) 的 2026-11-08 条目与 [AGENTS.md](../AGENTS.md)。

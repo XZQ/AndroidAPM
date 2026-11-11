@@ -38,7 +38,7 @@
 
 ## 当前基线
 
-基线日期：2026-11-08。
+基线日期：2026-11-11。
 
 | 项 | 值 |
 |---|---|
@@ -47,7 +47,7 @@
 | Android | compileSdk 36 / minSdk 24 / targetSdk 34，Java 17 字节码 |
 | 消费方下限 | AAR 元数据 `minCompileSdk=36`；`com.apm:apm-plugin` 随附 AGP 9.5.1 → 接入方须 AGP 9.x |
 | 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、170 个主源码文件、121 个测试/benchmark 文件 |
-| 测试 | 129 suites / 1005 tests（根 Android 123/922、model 5/60、plugin 1/23），0 failures / 0 errors / 0 skips |
+| 测试 | 123 suites / 928 tests（根 Android 117/842、model 5/63、plugin 1/23），0 failures / 0 errors / 0 skips |
 | 门禁 | `python tools/verify_ci.py`：公开 ABI、四组依赖指纹、发布候选、隔离 consumer、强制重跑测试、文档 |
 
 详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，版本与公开面规则见 [API 兼容策略](docs/API_COMPATIBILITY.md)。
@@ -511,13 +511,13 @@ python tools/verify_release_candidate.py --allow-dirty
 
 ### 跨仓协议闭环
 
-单独执行，不放进只依赖本仓库的门禁。准备 JDK 17、`uv` 与 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` checkout：
+单独执行，不放进只依赖本仓库的门禁。准备 JDK 17、`uv` 与 `AndroidAPM-Server` 的当前 `main` checkout（需含 inbox 表 readiness，即 `a0d75e1` 之后）：
 
 ```powershell
 python tools/verify_collector_e2e.py --server-repo D:\path\to\AndroidAPM-Server
 ```
 
-脚本构建真实 `HttpApmUploader`，启动本地 Gateway，以 V2 + Gzip 上传并重放同一批次，校验精确 ACK、typed fields/resource 与 test-only SQLite 去重。它不会把 SQLite 结果描述成 PostgreSQL 生产 durability。
+脚本构建真实 `HttpApmUploader`，启动本地 Gateway，以 Gzip HTTP 上传并重放 V2 与 V3 批次，校验精确整批 ACK、V2 typed fields/resource、V3 occurrence/native identity、租户级 installation HMAC、明文移除与 test-only SQLite 去重。它不会把 SQLite 结果描述成 PostgreSQL 生产 durability。
 
 ### 真机长稳与设备实验室
 

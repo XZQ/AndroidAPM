@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-08｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜121 个测试/benchmark 文件
+> 文档同步：2026-11-11｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜121 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -22,13 +22,27 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-11 全仓深度审查与修复
+
+2026-11-11 全仓深度审查与修复（JDK 17.0.21+9，基于 d738899）：并行分模块审查加集成模块自审，确认并修复一批真实缺陷，公开 ABI 零变化。完整清单与逐项说明见 `AGENTS.md` 同日条目，此处摘要按严重度分组。
+
+协议层最严重的一处是 `ProtobufWriter.writeVarint64` 对负 int64 只写 1 字节：负数跳过 varint 循环，使含负时间戳的整个 wire 批次不可解析或被静默篡改，且持久 codec 用定长 8 字节能正常往返、毒行无法被现有 preflight 隔离，会连累同批有效行被重试耗尽剪除。改为按 protobuf 规范以 64 位补码编码为 10 字节，并新增用规范 varint 读取器完整遍历消息的回归（-1 / -1000 / Long.MIN_VALUE 与正边界）。
+
+核心两处 P1 都属于「对 SDK 自有代码可证安全的边界，仍执行或等待宿主可控工作」：其一，非持久交付路径在进程级 `EventDeliveryBarrier` 锁内执行阻塞式 `upload()`，FILE + enableRetry=false 的原始 HTTP 或自定义传输可把 CRITICAL 同步交接与同意擦除拖住数分钟；`UploaderFactory` 改为非持久路径一律经有界异步 `RetryingApmUploader` 包装（关闭重试时单次尝试），并对「持久 outbox + 异步接受型 uploader」这一会 ACK 未交付行、进程死亡即丢事件的危险组合快速失败。其二，`DiagnosticSanitizer.sanitizeThrowable` 无防护调用可被宿主覆写的 `getMessage()/getStackTrace()`，错误上报路径自身抛异常会永久杀死 dispatcher worker 或 sdk_health/AutoThrottle 周期任务；逐项隔离降级为仅类名，并给 worker 批处理与自监控 tick 加最终可恢复边界（fatal Error 仍传播）。
+
+生命周期 P1 集中在宿主安全与会话正确性：LeakCheckQueue 锁内执行宿主 onLeak 回调（经 Apm.emit 同步触达宿主 BizContextProvider）改为锁内认领、锁外交付，避免慢 provider 卡死 stop/撤回；MemorySampleScheduler 与进程生命周期回调的竞态加执行器关闭防护 + 会话门禁，杜绝主线程 RejectedExecutionException 崩溃宿主；RenderModule FrameMetrics 监听器加异常隔离 + 失败摘除；ANR JNI 找不到 Signal Catcher 时 fail-closed 拒装并返回 jboolean，绝不吞掉系统 SIGQUIT；LaunchModule 跨 stop/re-init 重置会话级热/温启动计数（冷启动进程级状态保留）；BatteryModule 主线程周期任务加异常边界。P2 批次涵盖 ANR 看门狗/指纹/traces、ThreadMonitor 任务边界与 BLOCKED 连续采样、HprofDumper fork 超时杀死回收子进程、ExitReasonCollector 读满上限与逐条水位、Locale.ROOT 数值、native crash 移除 SIGPIPE 拦截、RetryPolicy 校验与丢弃归因、header 值上限、line protocol 转义 \r、SQLiteEventStore.close 同步、versionCode ASCII 收紧、ProcessUtils 进程名回退、dropRate 契约文档等。
+
+刻意不改并已记为已知限制：Crash 超大身份写 null 清除本进程陈旧摘要是经测试的刻意契约（审查一度误判为擦除外方摘要，已回退）；`ReferenceChainAnalyzer` 为未接线死代码（多处 hprof 格式错误 + 无界内存）；tombstone 回退在生产 SELinux 下不可读（真实回退是 ApplicationExitInfo）；unsafe-mode native 上报为 debug-only。此三项不在本轮做高风险或 ABI 变更。
+
+验证：`python tools/verify_ci.py` 完整通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组依赖指纹 473/218/206/281、release verifier 5 tests、device-lab 策略、45 项 benchmark/device-lab host tests、强制重跑根 Android 117 suites / 842 tests + model 5 / 63 + included plugin 1 / 23 共 123 suites / 928 tests 全 0 failures/errors/skips、25 坐标发布候选（22 AAR / 26 JAR / 25 POM）与独立 consumer `--refresh-dependencies` clean assembleDebug 含 ASM 插桩、文档 39 Markdown / 147 links。同时修正历史条目把合并总数误标为「根 Android」再叠加 model/plugin 的重复计数（2026-11-08 的 129/1005 实为 123/922）。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz 验收（AndroidAPM-Server）、外部 Maven staging/promotion（待凭据）。
+
 ## 2026-11-08 AGP 9 与 Gradle 9.6 迁移
 
 2026-11-08 AGP 9.5.1 / Gradle 9.6.0 全链迁移（JDK 17.0.21+9）：AGP 9.5 的下限是 Gradle 9.6.0、Build Tools 36.0.0、JDK 17，因此 `compileSdk` 一并 35→36（四处：约定插件、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`，`targetSdk` 仍 34）。AGP 9 默认启用内置 Kotlin，`org.jetbrains.kotlin.android` 从约定插件、根构建、benchmark、sample 与独立 consumer 全部移除，版本目录删除该别名；根 `subprojects` 里用 `KotlinAndroidProjectExtension` 设置 jvmTarget 的块删除，因为内置 Kotlin 的 jvmTarget 默认跟随 `compileOptions.targetCompatibility`（17）。`android.newDsl` 默认开启后，`com.android.build.gradle.LibraryExtension` 不再是扩展实例的类型（装饰实例实现新接口，强转会 ClassCastException），根构建改用 `com.android.build.api.dsl.LibraryExtension`。
 
 迁移中最关键的判断是 **Kotlin 版本不能跟着往上走**：内置 Kotlin 使用构建类路径上的 KGP，类路径没有才回落到 AGP 自带版本（9.5.1 为 2.2.10）。把 catalog 的 `kotlin` 升到 2.4.21 时，AAR 内的 `*.kotlin_module` 元数据变成 2.4.0，独立 consumer 用默认 AGP 9 工具链（2.2.10）编译立即报 `Module was compiled with an incompatible version of Kotlin`；回退 2.2.21 后一切恢复正常。元数据版本即消费方编译器下限，发布型 SDK 不应单方面抬高。同时把 `DiagnosticRecorder` 的 `java.lang.Object` 监视器换成 `ReentrantLock`+`Condition`（`awaitNanos`/`signalAll`，有界等待语义等价），去掉裸 monitor。
 
-验证：`apiCheck` 与 24 份 ABI 基线零变化；根 Android 123 suites / 922 tests、model 5 / 60、included plugin 1 / 23，共 129 suites / 1005 tests 全 0 failures/errors/skips；全模块 `lintDebug` 0 error；`:apm-sample-app:assembleDebug`（含 `com.apm.slow-method` 的 `transformDebugClassesWithAsm`）与 benchmark Release AndroidTest 编译通过；25 坐标候选（22 AAR / 26 JAR / 25 POM）与独立 Maven consumer 在严格依赖校验下完成 clean assembleDebug 与 ASM 插桩；文档 37 Markdown / 79 links。四组指纹干净重建为 473 / 218 / 206 / 281 组件（consumer 保留 `com.apm`、`com.apm.slow-method` 信任组）。**代价**：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方必须使用 AGP 9.x 与 compileSdk ≥36。另需登记一个官方矩阵无法满足的组合：KGP 2.2.x 支持到 Gradle 8.14，AGP 9.5 却要求 Gradle ≥9.6；本仓库用完整门禁覆盖该偏离，后续升 Kotlin 前要先决定消费方编译器下限策略。`tools/verify_release_candidate.py` 的脏树身份同时改为 `git diff --binary --no-textconv`：textconv 依赖本地 Git 配置与外部 `file` 命令，含 `.docx` 等二进制变更时会失败或跨机不一致。
+验证：`apiCheck` 与 24 份 ABI 基线零变化；根 Android 117 suites / 839 tests、model 5 / 60、included plugin 1 / 23，共 123 suites / 922 tests 全 0 failures/errors/skips；全模块 `lintDebug` 0 error；`:apm-sample-app:assembleDebug`（含 `com.apm.slow-method` 的 `transformDebugClassesWithAsm`）与 benchmark Release AndroidTest 编译通过；25 坐标候选（22 AAR / 26 JAR / 25 POM）与独立 Maven consumer 在严格依赖校验下完成 clean assembleDebug 与 ASM 插桩；文档 37 Markdown / 79 links。四组指纹干净重建为 473 / 218 / 206 / 281 组件（consumer 保留 `com.apm`、`com.apm.slow-method` 信任组）。**代价**：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方必须使用 AGP 9.x 与 compileSdk ≥36。另需登记一个官方矩阵无法满足的组合：KGP 2.2.x 支持到 Gradle 8.14，AGP 9.5 却要求 Gradle ≥9.6；本仓库用完整门禁覆盖该偏离，后续升 Kotlin 前要先决定消费方编译器下限策略。`tools/verify_release_candidate.py` 的脏树身份同时改为 `git diff --binary --no-textconv`：textconv 依赖本地 Git 配置与外部 `file` 命令，含 `.docx` 等二进制变更时会失败或跨机不一致。
 
 ## 2026-11-08 compileSdk 35 与测试密度
 
@@ -449,7 +463,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-113 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
+121 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
 
 测试通过不能代替以下验证：
 
