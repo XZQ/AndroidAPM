@@ -37,14 +37,27 @@ internal object UploaderFactory {
         val uploaderLogger = logger?.let { adaptLogger(it) } ?: UploaderLogger.DEFAULT
         val baseUploader = config.uploader
             ?: createDefaultUploader(config.endpoint, config, uploaderLogger)
-        // The persistent worker owns retries so wrapping it would create two queues.
-        if (!config.enableRetry || durableStore) {
+        if (durableStore) {
+            // The persistent worker owns retries so wrapping it would create two queues.
+            // 已知危险组合必须快速失败：RetryingApmUploader.upload() 在内存入队时即返回 true，
+            // 持久 worker 会把它当作交付成功而 ACK 删除 SQLite 行，进程死亡即丢失事件。
+            if (baseUploader is RetryingApmUploader) {
+                throw IllegalArgumentException(
+                    "RetryingApmUploader must not be combined with the durable SQLite outbox: " +
+                        "upload() only accepts into a bounded memory queue, and the persistent " +
+                        "worker would delete durable rows before delivery. Pass the raw transport " +
+                        "via ApmConfig.uploader (the persistent worker owns retries)."
+                )
+            }
             return baseUploader
         }
+        // 非持久路径的交付发生在进程级 EventDeliveryBarrier 锁内：阻塞式 upload()
+        // （原始 HTTP 或自定义传输）会拖住 CRITICAL 同步交接与同意擦除整个请求时长。
+        // 因此始终交给有界异步包装器，屏障绝不等待网络 IO；关闭重试时每个事件只尝试一次。
         return RetryingApmUploader(
             delegate = baseUploader,
             retryPolicy = RetryPolicy(
-                maxRetries = config.maxRetries,
+                maxRetries = if (config.enableRetry) config.maxRetries else 0,
                 baseDelayMs = config.retryBaseDelayMs
             ),
             logger = uploaderLogger

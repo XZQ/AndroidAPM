@@ -46,7 +46,7 @@
 /** 每毫秒纳秒数。 */
 #define NANOS_PER_MILLI 1000000LL
 
-/** 最近一次 SIGQUIT 的 epoch 毫秒时间戳；0 表示无未消费信号。 */
+/** 最近一次 SIGQUIT 的单调毫秒标记（CLOCK_MONOTONIC，与墙钟无关）；0 表示无未消费信号。 */
 static atomic_llong s_sigquit_timestamp_ms = 0;
 
 /** ART Signal Catcher 线程 tid（注册时缓存，处理器内直接使用）。 */
@@ -180,24 +180,30 @@ static void *sigquit_receiver_loop(void *arg) {
 /**
  * 注册 SIGQUIT 信号处理器。
  * 缓存 Signal Catcher tid → 安装 sigaction → 启动接收线程。
+ * 失败即关闭（fail-closed）：任何一步失败都不安装，返回 JNI_FALSE，
+ * Java 侧降级为 Watchdog-only，绝不吞掉系统 ANR 信号。
  *
  * @param env JNIEnv
  * @param thiz AnrModule 实例
+ * @return JNI_TRUE 表示处理器已安装；JNI_FALSE 表示未安装
  */
-JNIEXPORT void JNICALL
+JNIEXPORT jboolean JNICALL
 Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thiz) {
     (void)env;
     (void)thiz;
 
-    /* 幂等保护：重复注册直接返回 */
+    /* 幂等保护：已安装时直接报告成功 */
     if (s_handler_installed) {
-        return;
+        return JNI_TRUE;
     }
 
-    /* 注册阶段缓存 Signal Catcher tid，处理器内禁止做目录遍历 */
+    /* 注册阶段缓存 Signal Catcher tid，处理器内禁止做目录遍历。
+     * 找不到 catcher 时拒绝安装：接收线程是唯一解除 SIGQUIT 阻塞的线程，
+     * 若无法定向转发，进程级 SIGQUIT 会被本库吞掉，系统 ANR trace dump 将失效。 */
     s_signal_catcher_tid = find_signal_catcher_tid();
     if (s_signal_catcher_tid <= 0) {
-        LOGE("Signal Catcher thread not found; system trace dump will not be forwarded");
+        LOGE("Signal Catcher thread not found; refusing to install SIGQUIT handler");
+        return JNI_FALSE;
     }
 
     /* 安装 SIGQUIT 处理器，保存原始配置供注销恢复 */
@@ -208,7 +214,7 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
     action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
     if (sigaction(SIGQUIT, &action, &s_old_sigquit_action) != 0) {
         LOGE("sigaction(SIGQUIT) failed");
-        return;
+        return JNI_FALSE;
     }
 
     /* 启动专用接收线程（唯一解除 SIGQUIT 阻塞的线程） */
@@ -218,11 +224,12 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
         /* 回滚 sigaction，保持未安装状态 */
         sigaction(SIGQUIT, &s_old_sigquit_action, NULL);
         atomic_store(&s_receiver_running, 0);
-        return;
+        return JNI_FALSE;
     }
 
     s_handler_installed = 1;
     LOGI("SIGQUIT handler installed, signal catcher tid=%d", (int)s_signal_catcher_tid);
+    return JNI_TRUE;
 }
 
 /**
@@ -259,7 +266,7 @@ Java_com_apm_anr_AnrModule_nativeUnregisterSigquitHandler(JNIEnv *env, jobject t
  *
  * @param env JNIEnv
  * @param thiz AnrModule 实例
- * @return epoch 毫秒时间戳；0 表示无未消费信号
+ * @return 单调毫秒标记（CLOCK_MONOTONIC，非 epoch）；0 表示无未消费信号
  */
 JNIEXPORT jlong JNICALL
 Java_com_apm_anr_AnrModule_nativeConsumeSigquitTimestamp(JNIEnv *env, jobject thiz) {

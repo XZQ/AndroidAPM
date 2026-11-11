@@ -316,7 +316,10 @@ private fun ApmOccurrenceContext.hasStrictOccurrenceIdentity(): Boolean {
 
 /** Returns whether versionCode is canonical unsigned decimal text within the identity bound. */
 private fun String.isCanonicalVersionCode(): Boolean {
-    return isStrictResourceValue() && all(Char::isDigit) && (length == 1 || first() != '0')
+    // 必须与 wire 契约（ProtobufSerializer.validateOccurrence）一致，仅接受 ASCII 0-9。
+    // Char::isDigit 会放行 Unicode 数字（如阿拉伯-印度数字），使 init 通过但每个 V3 事件
+    // 在下游被拒，形成"永远无法投递"的 fail-open 配置。
+    return isStrictResourceValue() && all { it in '0'..'9' } && (length == 1 || first() != '0')
 }
 
 /** Applies the fixed resource-value bound before any protobuf allocation occurs. */

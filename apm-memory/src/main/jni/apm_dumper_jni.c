@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
@@ -240,5 +241,37 @@ Java_com_apm_memory_oom_HprofDumper_waitPidNonBlocking(
     } else {
         LOGW("waitPidNonBlocking: child %d ended without normal exit", pid);
         return FORK_ERROR;
+    }
+}
+
+/**
+ * 杀死并回收 fork 子进程。
+ * 等待超时或会话关闭时调用：SIGKILL 不可被捕获，子进程此后不能再写 hprof；
+ * 随后阻塞 waitpid 回收，避免僵尸进程继续占用 COW 内存。
+ *
+ * @param env JNIEnv
+ * @param thiz this 对象
+ * @param pid 子进程 PID
+ */
+JNIEXPORT void JNICALL
+Java_com_apm_memory_oom_HprofDumper_killAndReapChild(
+    JNIEnv *env, jobject thiz, jint pid) {
+    (void)env;
+    (void)thiz;
+
+    if (pid <= 0) {
+        return;
+    }
+    if (kill((pid_t)pid, SIGKILL) != 0 && errno != ESRCH) {
+        LOGW("killAndReapChild: kill pid=%d failed, errno=%d", pid, errno);
+    }
+    int status = 0;
+    pid_t result;
+    /* 阻塞回收；被信号中断时重试，子进程已不存在（ECHILD）时视为完成。 */
+    do {
+        result = waitpid((pid_t)pid, &status, 0);
+    } while (result == (pid_t)-1 && errno == EINTR);
+    if (result == (pid_t)-1 && errno != ECHILD) {
+        LOGW("killAndReapChild: waitpid pid=%d failed, errno=%d", pid, errno);
     }
 }

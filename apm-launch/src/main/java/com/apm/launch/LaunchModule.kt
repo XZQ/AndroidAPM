@@ -120,6 +120,13 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
             // A fresh token cannot reactivate first-frame work captured by an earlier run.
             currentSession?.active = false
             currentSession = LaunchSession(apmContext)
+            // 热/温启动状态属于会话：旧会话停止后不再观察 Activity stop 事件，
+            // 若计数不清零，re-init 后计数永远无法归零，热/温启动检测将永久失效。
+            // 冷启动状态（firstActivityCreated 等）是进程级语义，刻意不重置。
+            startedActivityCount = 0
+            isStopped = false
+            activityStoppedTime = 0L
+            relaunchTracker.reset()
             apmContext?.application?.registerActivityLifecycleCallbacks(this)
         }
         apmContext?.logger?.d("Launch module started, processStartMs=$processStartMs")

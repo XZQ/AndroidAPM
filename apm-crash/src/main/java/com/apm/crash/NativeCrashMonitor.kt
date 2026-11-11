@@ -128,7 +128,7 @@ object NativeCrashMonitor {
 
     /**
      * 安装 Native 信号处理器。
-     * 注册 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGPIPE、SIGSTKFLT 的信号处理函数。
+     * 注册 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGSTKFLT 致命崩溃信号的处理函数（不含 SIGPIPE）。
      *
      * @param unsafeSignalCallback 是否允许信号处理器内直接回调 Java
      * @return true 表示安装成功

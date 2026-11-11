@@ -19,6 +19,18 @@ internal class RelaunchTracker(private val warmStartThresholdMs: Long, private v
     private var pendingBackgroundDurationMs: Long = 0L
 
     /**
+     * 清空全部恢复状态。
+     * 模块新会话启动时调用：旧会话的后台时间点与待完成测量不得进入新会话，
+     * 否则 re-init 后的首次恢复会被旧时间戳误分类。
+     */
+    fun reset() {
+        lastStoppedAtMs = null
+        pendingLaunchType = null
+        relaunchStartAtMs = 0L
+        pendingBackgroundDurationMs = 0L
+    }
+
+    /**
      * 记录应用完全退到后台的时间点。
      *
      * @param nowMs 当前时间

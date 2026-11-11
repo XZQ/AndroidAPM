@@ -1029,46 +1029,52 @@ object Apm {
         return ApmExecutors.newSingleThreadScheduledExecutor(SELF_MONITOR_THREAD_NAME).apply {
             scheduleWithFixedDelay(
                 {
-                    val diagnosticsStatus = ApmDiagnostics.status()
-                    val droppedDelta = (diagnosticsStatus.droppedRecords -
-                        previousDiagnosticDrops.getAndSet(diagnosticsStatus.droppedRecords)).coerceAtLeast(0L)
-                    val writeFailureDelta = (diagnosticsStatus.writeFailures -
-                        previousDiagnosticWriteFailures.getAndSet(diagnosticsStatus.writeFailures)).coerceAtLeast(0L)
-                    val report = monitor.generateReport().copy(
-                        diagnosticDroppedCount = droppedDelta,
-                        diagnosticWriteFailureCount = writeFailureDelta
-                    )
-                    publishSdkHealthReport(
-                        report = report,
-                        diagnosticsSink = { summary ->
-                            runInCurrentSession(expectedContext) {
-                                ApmDiagnostics.record(
-                                    level = DiagnosticLevel.INFO,
-                                    component = CORE_MODULE,
-                                    code = EVENT_DIAGNOSTIC_SDK_HEALTH,
-                                    message = summary,
-                                    error = null
+                    // 可恢复边界：ScheduledThreadPoolExecutor 会在任务抛出 Exception 后永久取消
+                    // 后续执行，sdk_health 与 AutoThrottle 将静默死亡；此处隔离任何可恢复异常。
+                    try {
+                        val diagnosticsStatus = ApmDiagnostics.status()
+                        val droppedDelta = (diagnosticsStatus.droppedRecords -
+                            previousDiagnosticDrops.getAndSet(diagnosticsStatus.droppedRecords)).coerceAtLeast(0L)
+                        val writeFailureDelta = (diagnosticsStatus.writeFailures -
+                            previousDiagnosticWriteFailures.getAndSet(diagnosticsStatus.writeFailures)).coerceAtLeast(0L)
+                        val report = monitor.generateReport().copy(
+                            diagnosticDroppedCount = droppedDelta,
+                            diagnosticWriteFailureCount = writeFailureDelta
+                        )
+                        publishSdkHealthReport(
+                            report = report,
+                            diagnosticsSink = { summary ->
+                                runInCurrentSession(expectedContext) {
+                                    ApmDiagnostics.record(
+                                        level = DiagnosticLevel.INFO,
+                                        component = CORE_MODULE,
+                                        code = EVENT_DIAGNOSTIC_SDK_HEALTH,
+                                        message = summary,
+                                        error = null
+                                    )
+                                }
+                            },
+                            eventSink = { priority, fields ->
+                                expectedContext.emitInSession(
+                                    ApmEvent(
+                                        module = CORE_MODULE,
+                                        name = EVENT_SDK_HEALTH,
+                                        severity = ApmSeverity.INFO,
+                                        priority = priority,
+                                        fields = fields,
+                                        timestamp = ApmClock.wallTimeMillis(),
+                                        processName = expectedContext.processName,
+                                        threadName = Thread.currentThread().name
+                                    ),
+                                    critical = false
                                 )
                             }
-                        },
-                        eventSink = { priority, fields ->
-                            expectedContext.emitInSession(
-                                ApmEvent(
-                                    module = CORE_MODULE,
-                                    name = EVENT_SDK_HEALTH,
-                                    severity = ApmSeverity.INFO,
-                                    priority = priority,
-                                    fields = fields,
-                                    timestamp = ApmClock.wallTimeMillis(),
-                                    processName = expectedContext.processName,
-                                    threadName = Thread.currentThread().name
-                                ),
-                                critical = false
-                            )
+                        )
+                        if (config.enableAutoThrottle) {
+                            applyAutoThrottle(autoThrottleController.evaluate(report), expectedContext)
                         }
-                    )
-                    if (config.enableAutoThrottle) {
-                        applyAutoThrottle(autoThrottleController.evaluate(report), expectedContext)
+                    } catch (error: Exception) {
+                        recordInternalError(ERROR_TAG_SELF_MONITOR_TICK, error)
                     }
                 },
                 config.selfMonitorIntervalMs,
@@ -1276,4 +1282,6 @@ object Apm {
     private const val ERROR_TAG_DYNAMIC_CONFIG_READ = "dynamic_config_read"
     /** Stop tag for an automatic-throttle lifecycle failure. */
     private const val ERROR_TAG_AUTO_THROTTLE_STOP = "auto_throttle_stop"
+    /** Recoverable-boundary tag for one self-monitor/auto-throttle periodic tick. */
+    private const val ERROR_TAG_SELF_MONITOR_TICK = "self_monitor_tick"
 }

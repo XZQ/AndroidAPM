@@ -12,7 +12,7 @@ internal fun interface SigquitFlagSource {
     /**
      * 消费并清除最近一次 SIGQUIT 的时间戳。
      *
-     * @return epoch 毫秒时间戳；0 表示自上次消费以来没有新信号
+     * @return 单调毫秒标记（CLOCK_MONOTONIC，非 epoch）；0 表示自上次消费以来没有新信号
      */
     fun consumeSigquitTimestampMs(): Long
 }

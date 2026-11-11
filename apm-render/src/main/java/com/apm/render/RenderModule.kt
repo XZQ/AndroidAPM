@@ -40,6 +40,9 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
     /** 是否正在监控。 */
     @Volatile
     private var monitoring = false
+    /** OEM FrameMetrics 读取失败每会话最多记录一次，避免逐帧诊断风暴。 */
+    @Volatile
+    private var frameMetricsReadErrorRecorded = false
 
     /** Active frame listeners retained weakly by Activity. */
     private val frameListeners = WeakHashMap<Activity, Window.OnFrameMetricsAvailableListener>()
@@ -58,6 +61,7 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
             apmContext?.logger?.w("detectOverdraw is deprecated and ignored; Android exposes no public GPU counter")
         }
         monitoring = true
+        frameMetricsReadErrorRecorded = false
         apmContext?.application?.registerActivityLifecycleCallbacks(this)
         apmContext?.logger?.d("Render module started")
     }
@@ -188,11 +192,27 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
                 slowFrameThresholdNanos = slowFrameThresholdNanos()
             )
             val activityName = activity.javaClass.simpleName
-            val listener = Window.OnFrameMetricsAvailableListener { _, metrics, droppedSinceLast ->
-                val totalDurationNanos = metrics.getMetric(FrameMetrics.TOTAL_DURATION)
-                val snapshot = accumulator.record(totalDurationNanos, droppedSinceLast)
-                if (snapshot != null) {
-                    reportFrameMetrics(activityName, snapshot)
+            val listener = object : Window.OnFrameMetricsAvailableListener {
+                override fun onFrameMetricsAvailable(
+                    window: Window,
+                    metrics: FrameMetrics,
+                    droppedSinceLast: Int
+                ) {
+                    try {
+                        val totalDurationNanos = metrics.getMetric(FrameMetrics.TOTAL_DURATION)
+                        val snapshot = accumulator.record(totalDurationNanos, droppedSinceLast)
+                        if (snapshot != null) {
+                            reportFrameMetrics(activityName, snapshot)
+                        }
+                    } catch (error: Exception) {
+                        // OEM 实现抛异常时摘除该监听器，避免主线程逐帧异常风暴；
+                        // 与 FPS 模块 readFrameMetric 的会话级一次性记录契约一致。
+                        detachFrameMetrics(activity)
+                        if (!frameMetricsReadErrorRecorded) {
+                            frameMetricsReadErrorRecorded = true
+                            Apm.recordInternalError(ERROR_FRAME_METRICS_READ, error)
+                        }
+                    }
                 }
             }
             frameListeners[activity] = listener
@@ -293,5 +313,7 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
         private const val ERROR_FRAME_METRICS_ATTACH = "render_frame_metrics_attach"
         /** Internal-error tag for vendor listener removal failures. */
         private const val ERROR_FRAME_METRICS_DETACH = "render_frame_metrics_detach"
+        /** 自监控 tag：OEM FrameMetrics 指标读取失败。 */
+        private const val ERROR_FRAME_METRICS_READ = "render_frame_metrics_read"
     }
 }

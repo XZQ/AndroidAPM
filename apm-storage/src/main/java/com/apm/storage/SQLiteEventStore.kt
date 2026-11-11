@@ -614,7 +614,10 @@ class SQLiteEventStore(
     }
 
     /** Closes the underlying database helper. */
+    @Synchronized
     override fun close() {
+        // 与其余公开方法一致持锁：自定义宿主可能在 append/claim 进行中调用 close，
+        // 无锁关闭会与在途事务竞态。内置路径另有 core 的停止顺序保护。
         dbHelper.close()
     }
 

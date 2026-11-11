@@ -120,8 +120,11 @@ internal class HprofDumper(
             if (forkDumpAvailable) {
                 val pid = nativeForkAndDump(hprofFile.absolutePath)
                 if (pid > 0) {
-                    // 父进程：等待子进程完成 dump
-                    waitForChild(pid)
+                    // 父进程：等待子进程完成 dump；超时/失败不得上报半成品 hprof
+                    if (!waitForChild(pid)) {
+                        hprofFile.delete()
+                        return
+                    }
                 } else if (pid == FORK_ERROR) {
                     // fork 失败，降级为直接 dump
                     dumpDirectly(hprofFile)
@@ -202,26 +205,44 @@ internal class HprofDumper(
 
     /**
      * 等待 fork 的子进程完成 hprof dump。
-     * 使用循环 waitpid 带超时，避免无限阻塞。
+     * 使用循环 waitpid 带超时，避免无限阻塞。超时时必须杀死并回收子进程：
+     * 否则子进程继续写文件（父进程却上报半成品 hprof），且成为僵尸进程持续占用 COW 内存。
      *
      * @param pid 子进程 PID
+     * @return true 仅当子进程以状态 0 正常退出；超时/异常退出返回 false
      */
-    private fun waitForChild(pid: Int) {
+    private fun waitForChild(pid: Int): Boolean {
         var remainingMs = FORK_WAIT_TIMEOUT_MS
         while (remainingMs > 0) {
             // 非阻塞等待子进程，WNOHANG 立即返回
             val status = waitPidNonBlocking(pid)
             if (status != WAIT_PID_RUNNING) {
-                // 子进程已退出（正常或异常）
-                return
+                // 正值 = 正常退出 0；FORK_ERROR = 异常退出/失败，产物不可信
+                return status > 0
             }
             // 子进程仍在运行，短暂等待后重试
-            Thread.sleep(FORK_WAIT_POLL_INTERVAL_MS)
+            try {
+                Thread.sleep(FORK_WAIT_POLL_INTERVAL_MS)
+            } catch (_: InterruptedException) {
+                // shutdown 中断轮询：同样必须终止子进程，不能留它继续写已被清理的路径
+                Thread.currentThread().interrupt()
+                killAndReapChild(pid)
+                return false
+            }
             remainingMs -= FORK_WAIT_POLL_INTERVAL_MS
         }
-        // 超时，子进程可能仍在运行
-        logger.w("HprofDumper: fork child $pid did not finish within ${FORK_WAIT_TIMEOUT_MS}ms")
+        // 超时：杀死并回收子进程，绝不把可能写了一半的 hprof 当作有效产物上报
+        logger.w("HprofDumper: fork child $pid did not finish within ${FORK_WAIT_TIMEOUT_MS}ms; killing")
+        killAndReapChild(pid)
+        return false
     }
+
+    /**
+     * Native 方法：SIGKILL 子进程并阻塞 waitpid 回收，避免僵尸进程。
+     *
+     * @param pid 子进程 PID
+     */
+    private external fun killAndReapChild(pid: Int)
 
     /**
      * Native 方法：fork 子进程并在子进程中执行 hprof dump。

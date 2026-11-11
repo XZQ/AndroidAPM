@@ -23,6 +23,17 @@ data class RetryPolicy(
     /** 退避倍数。delay = baseDelay * (multiplier ^ (attempt - 1))。 */
     val backoffMultiplier: Float = DEFAULT_BACKOFF_MULTIPLIER
 ) {
+    init {
+        // 退化参数快速失败：NaN 倍数会使 delayForAttempt 返回 0，负延迟使重试热循环，
+        // 二者都会把失败批次变成无间隔的紧密重试风暴。
+        require(maxRetries >= 0) { "maxRetries must be non-negative" }
+        require(baseDelayMs >= 0L) { "baseDelayMs must be non-negative" }
+        require(maxDelayMs > 0L) { "maxDelayMs must be positive" }
+        require(backoffMultiplier.isFinite() && backoffMultiplier > 0f) {
+            "backoffMultiplier must be finite and positive"
+        }
+    }
+
     /**
      * 计算第 N 次重试的等待时间。
      * @param attempt 重试序号（从 1 开始）
@@ -61,6 +72,11 @@ data class RetryPolicy(
  * 线程安全：所有首次和重试调用均使用同一 worker；延期 task 仅重新排队。
  * 队列按 priority.value DESC 排序（CRITICAL 优先出队），
  * 500 条容量覆盖队列、执行中和延期重试；满时淘汰尚未交付的较低优先级事件。
+ *
+ * 组合限制：[upload] 在内存入队时即返回 true，不代表交付完成。不得把本类作为
+ * `ApmConfig.uploader` 与持久 SQLite outbox 组合——持久 worker 会据此 ACK 删除
+ * durable 行，进程死亡即丢失事件；SDK 工厂对该组合快速失败。持久场景请直接传入
+ * 原始传输层，重试由 PersistentUploadWorker 单一权威负责。
  */
 class RetryingApmUploader(
     /** 被包装的底层上传器。 */
@@ -217,6 +233,10 @@ class RetryingApmUploader(
         }
         val victim = candidate ?: return false
         completeLocked(victim)
+        // 容量淘汰是真实丢失：与硬容量拒绝一样必须可见，不能静默吞没。
+        logger.w(
+            "Uploader capacity eviction: dropped ${victim.event.priority} event: ${victim.event.name}"
+        )
         return true
     }
 
@@ -290,20 +310,27 @@ class RetryingApmUploader(
             logger.w("Retry hint failed: ${error.message}")
             0L
         }
+        var exhaustedDrops = 0
         synchronized(acceptanceLock) {
             for (pending in pendingBatch) {
                 if (pending !in pendingUploads) continue
                 val nextAttempt = pending.attempt + 1
                 if (uploadSucceeded || !running || nextAttempt > retryPolicy.maxRetries) {
                     // Capacity belongs to the event until success, exhaustion, eviction, or shutdown.
+                    if (!uploadSucceeded && running) {
+                        // 分支条件已蕴含 nextAttempt > maxRetries：重试耗尽是真实丢失，按批可见。
+                        exhaustedDrops++
+                    }
                     completeLocked(pending)
                     continue
                 }
                 pending.attempt = nextAttempt
                 pending.state = UploadState.RETRY_WAIT
+                // 下限钳制：baseDelayMs=0 或退化策略不能把失败批次变成无间隔热循环。
                 val delay = maxOf(
                     retryPolicy.delayForAttempt(nextAttempt),
-                    retryHintMs
+                    retryHintMs,
+                    MIN_RETRY_DELAY_MS
                 )
                 try {
                     pending.retryFuture = retryScheduler.schedule(
@@ -317,6 +344,10 @@ class RetryingApmUploader(
                     logger.w("Retry scheduler closed, dropping one event")
                 }
             }
+        }
+        if (exhaustedDrops > 0) {
+            // 重试耗尽按批汇总告警：丢失必须可见，且不在锁内做日志 IO。
+            logger.w("Upload retries exhausted (${retryPolicy.maxRetries}); dropped $exhaustedDrops event(s)")
         }
     }
 
@@ -405,5 +436,8 @@ class RetryingApmUploader(
 
         /** Maximum time allowed for a graceful in-memory drain. */
         private const val SHUTDOWN_TIMEOUT_MS = 5_000L
+
+        /** Lower retry-delay bound that prevents a zero-delay hot loop without inflating tuned delays. */
+        private const val MIN_RETRY_DELAY_MS = 1L
     }
 }

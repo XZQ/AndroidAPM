@@ -20,7 +20,11 @@ internal class LeakCheckQueue(
     /** Serializes owner cancellation and delivery, without holding a lock during GC. */
     private val lock = Any()
     /** At most one delayed runnable is posted to this background looper. */
-    private val thread = HandlerThread(THREAD_NAME, Process.THREAD_PRIORITY_BACKGROUND).apply { start() }
+    private val thread = HandlerThread(THREAD_NAME, Process.THREAD_PRIORITY_BACKGROUND).apply {
+        // daemon：与 SDK 线程治理一致，绝不阻止宿主进程/JVM 退出。
+        isDaemon = true
+        start()
+    }
     /** Background handler, exposed internally for deterministic queue verification. */
     internal val handler = Handler(thread.looper)
     /** Weak targets and scalar metadata only; no delayed lambda captures a target. */
@@ -84,20 +88,22 @@ internal class LeakCheckQueue(
         try {
             if (due.isNotEmpty()) collectGarbage()
             for (watch in due) {
-                synchronized(lock) {
+                // Claim under the lock but deliver outside it: onLeak reaches Apm.emit and may
+                // run host context providers synchronously, so holding the lock during delivery
+                // would let a slow provider stall shutdown() and consent revocation.
+                val retained = synchronized(lock) {
                     // Unregister/stop/eviction may have removed the watch while GC ran.
-                    if (closed || !pending.remove(watch)) return@synchronized
-                    val retained = watch.reference.get() ?: return@synchronized
-                    try {
-                        watch.onLeak(LeakResult(
-                            leakClass = watch.className,
-                            type = watch.type,
-                            scene = watch.scene,
-                            suspectFields = inspectOutgoingFields(retained)
-                        ))
-                    } catch (error: Exception) {
-                        Apm.recordInternalError(ERROR_REPORT, error)
-                    }
+                    if (closed || !pending.remove(watch)) null else watch.reference.get()
+                } ?: continue
+                try {
+                    watch.onLeak(LeakResult(
+                        leakClass = watch.className,
+                        type = watch.type,
+                        scene = watch.scene,
+                        suspectFields = inspectOutgoingFields(retained)
+                    ))
+                } catch (error: Exception) {
+                    Apm.recordInternalError(ERROR_REPORT, error)
                 }
             }
         } finally {

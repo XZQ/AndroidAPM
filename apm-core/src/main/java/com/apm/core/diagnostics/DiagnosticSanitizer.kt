@@ -35,18 +35,29 @@ internal object DiagnosticSanitizer {
             return SanitizedThrowable(null, null, null, null)
         }
         // Retain only the first bounded frame set; causes and suppressed exceptions are intentionally excluded.
+        // getStackTrace()/getMessage() 可被宿主 Throwable 子类覆写：错误上报路径自身抛出异常
+        // 会穿透 catch 边界杀死 dispatcher worker 或周期任务，因此逐项隔离并降级为仅类名。
         val stack = if (includeStack) {
-            error.stackTrace
-                .take(MAX_STACK_FRAMES)
-                .joinToString(separator = NEWLINE) { frame -> frame.toString() }
-                .takeIf { value -> value.isNotEmpty() }
-                ?.let { value -> truncate(value, MAX_EXCEPTION_CHARS) }
+            try {
+                error.stackTrace
+                    .take(MAX_STACK_FRAMES)
+                    .joinToString(separator = NEWLINE) { frame -> frame.toString() }
+                    .takeIf { value -> value.isNotEmpty() }
+                    ?.let { value -> truncate(value, MAX_EXCEPTION_CHARS) }
+            } catch (_: Exception) {
+                null
+            }
         } else {
+            null
+        }
+        val message = try {
+            error.message?.let(::sanitizeMessage)
+        } catch (_: Exception) {
             null
         }
         return SanitizedThrowable(
             className = error.javaClass.name,
-            message = error.message?.let(::sanitizeMessage),
+            message = message,
             stackTrace = stack,
             stackHash = stack?.let(::sha256Prefix)
         )

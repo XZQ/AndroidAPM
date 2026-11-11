@@ -20,7 +20,7 @@ import org.junit.Test
  */
 class UploaderFactoryTest {
 
-    /** 自定义 uploader 应优先于 endpoint 规则。 */
+    /** 自定义 uploader 应优先于 endpoint 规则（非持久路径经异步包装，委托仍是自定义实例）。 */
     @Test
     fun `custom uploader takes precedence over endpoint`() {
         val customUploader = RecordingUploader()
@@ -32,7 +32,7 @@ class UploaderFactoryTest {
 
         val uploader = UploaderFactory.create(config)
 
-        assertSame(customUploader, uploader)
+        assertSame(customUploader, readDelegate(uploader))
     }
 
     /** HTTP endpoint 应默认创建 HttpApmUploader。 */
@@ -45,7 +45,7 @@ class UploaderFactoryTest {
 
         val uploader = UploaderFactory.create(config)
 
-        assertTrue(uploader is HttpApmUploader)
+        assertTrue(readDelegate(uploader) is HttpApmUploader)
     }
 
     /** 默认 HTTP uploader 应跟随 ApmConfig 开启 Gzip。 */
@@ -58,8 +58,9 @@ class UploaderFactoryTest {
 
         val uploader = UploaderFactory.create(config)
 
-        assertTrue(uploader is HttpApmUploader)
-        assertTrue(readGzipFlag(uploader as HttpApmUploader))
+        val delegate = readDelegate(uploader)
+        assertTrue(delegate is HttpApmUploader)
+        assertTrue(readGzipFlag(delegate as HttpApmUploader))
     }
 
     /** 默认 HTTP uploader 应允许显式关闭 Gzip。 */
@@ -73,8 +74,9 @@ class UploaderFactoryTest {
 
         val uploader = UploaderFactory.create(config)
 
-        assertTrue(uploader is HttpApmUploader)
-        assertFalse(readGzipFlag(uploader as HttpApmUploader))
+        val delegate = readDelegate(uploader)
+        assertTrue(delegate is HttpApmUploader)
+        assertFalse(readGzipFlag(delegate as HttpApmUploader))
     }
 
     /** Opt-in endpoint rotation reads the signed dynamic-config key through the HTTP provider. */
@@ -89,7 +91,7 @@ class UploaderFactoryTest {
             )
         )
 
-        val uploader = UploaderFactory.create(config) as HttpApmUploader
+        val uploader = readDelegate(UploaderFactory.create(config)) as HttpApmUploader
         val field = HttpApmUploader::class.java.getDeclaredField("endpointProvider")
         field.isAccessible = true
         val provider = field.get(uploader) as HttpEndpointProvider
@@ -110,9 +112,11 @@ class UploaderFactoryTest {
 
         val uploader = UploaderFactory.create(config, logger = logger)
 
-        assertFalse(uploader is LogcatApmUploader)
+        assertFalse(readDelegate(uploader) is LogcatApmUploader)
         assertTrue(uploader.upload(ApmEvent(module = "test", name = "secret")))
         assertTrue(uploader.upload(ApmEvent(module = "test", name = "second")))
+        // 异步包装器在自身 worker 上交付；关闭后丢弃告警必然已发出且仅一次。
+        uploader.shutdown()
         assertEquals(1, logger.warnings.size)
         assertFalse(logger.warnings.single().contains("secret"))
     }
@@ -124,7 +128,7 @@ class UploaderFactoryTest {
             ApmConfig(endpoint = "logcat://development", enableRetry = false)
         )
 
-        assertTrue(uploader is LogcatApmUploader)
+        assertTrue(readDelegate(uploader) is LogcatApmUploader)
     }
 
     /** 开启重试时应包装为 RetryingApmUploader。 */
@@ -138,6 +142,49 @@ class UploaderFactoryTest {
         val uploader = UploaderFactory.create(config)
 
         assertTrue(uploader is RetryingApmUploader)
+    }
+
+    /** 非持久路径即使关闭重试也必须经异步包装：交付屏障绝不等待阻塞式传输。 */
+    @Test
+    fun `non durable delivery is always async even with retry disabled`() {
+        val uploader = UploaderFactory.create(
+            ApmConfig(endpoint = "https://apm.example.com", enableRetry = false)
+        )
+
+        assertTrue(uploader is RetryingApmUploader)
+    }
+
+    /** 持久 outbox 与异步接受型上传器的组合会 ACK 未交付行，必须快速失败。 */
+    @Test
+    fun `durable store rejects async acceptance uploader`() {
+        val asyncUploader = RetryingApmUploader(delegate = RecordingUploader())
+        val config = ApmConfig(
+            endpoint = "https://apm.example.com",
+            uploader = asyncUploader
+        )
+
+        try {
+            UploaderFactory.create(config, durableStore = true)
+            throw AssertionError("Expected IllegalArgumentException for the lossy composition")
+        } catch (expected: IllegalArgumentException) {
+            assertTrue(expected.message.orEmpty().contains("durable"))
+        } finally {
+            asyncUploader.shutdown()
+        }
+    }
+
+    /** 持久 outbox 原样返回同步传输层，重试由持久 worker 单一权威负责。 */
+    @Test
+    fun `durable store returns synchronous transport unwrapped`() {
+        val customUploader = RecordingUploader()
+        val config = ApmConfig(
+            endpoint = "https://apm.example.com",
+            uploader = customUploader
+        )
+
+        val uploader = UploaderFactory.create(config, durableStore = true)
+
+        assertSame(customUploader, uploader)
     }
 
     /**
@@ -195,6 +242,21 @@ class UploaderFactoryTest {
 
         /** Returns the fixed endpoint. */
         override fun getString(key: String, defaultValue: String): String = endpoint
+    }
+
+    /**
+     * Reads the wrapped delegate when the factory returned an async wrapper, else the uploader itself.
+     *
+     * @param uploader uploader created by the factory
+     * @return the underlying transport selected by endpoint/custom rules
+     */
+    private fun readDelegate(uploader: com.apm.uploader.ApmUploader): com.apm.uploader.ApmUploader {
+        if (uploader !is RetryingApmUploader) {
+            return uploader
+        }
+        val field = RetryingApmUploader::class.java.getDeclaredField("delegate")
+        field.isAccessible = true
+        return field.get(uploader) as com.apm.uploader.ApmUploader
     }
 
     /**

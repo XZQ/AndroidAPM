@@ -171,18 +171,21 @@ private fun Map<String, *>.toSortedText(): String {
 
 /**
  * 清理特殊字符，防止破坏 line protocol 格式。
- * | → /，, → ;，换行 → 空格。
+ * | → /，, → ;，换行/回车 → 空格。
  *
  * 单趟扫描实现：不含保留字符时返回原引用（零分配）；含保留字符时一次遍历完成全部
- * 三类替换。替换结果（/、;、空格）不会再次命中任何保留字符，因此输出与历史
- * 链式三趟 replace 逐字节一致。
+ * 四类替换。替换结果（/、;、空格）不会再次命中任何保留字符。回车必须与换行同样
+ * 处理：FileEventStore 用 readLines() 重载，孤立的 \r 也会被当作行终止符，
+ * 未转义会把一条记录拆成两条损坏的行。
  */
 private fun String.sanitize(): String {
     // 快路径：找到第一个保留字符的位置；不存在则原样返回
     var scanIndex = 0
     while (scanIndex < length) {
         val character = this[scanIndex]
-        if (character == SEPARATOR_CHAR || character == PAIR_SEPARATOR_CHAR || character == NEWLINE_CHAR) {
+        if (character == SEPARATOR_CHAR || character == PAIR_SEPARATOR_CHAR ||
+            character == NEWLINE_CHAR || character == CARRIAGE_RETURN_CHAR
+        ) {
             break
         }
         scanIndex++
@@ -201,6 +204,7 @@ private fun String.sanitize(): String {
                 SEPARATOR_CHAR -> REPLACE_SEPARATOR
                 PAIR_SEPARATOR_CHAR -> REPLACE_PAIR_SEPARATOR
                 NEWLINE_CHAR -> REPLACE_NEWLINE
+                CARRIAGE_RETURN_CHAR -> REPLACE_NEWLINE
                 else -> character
             }
         )
@@ -216,6 +220,7 @@ private const val PAIR_SEPARATOR = ","
 private const val PAIR_SEPARATOR_CHAR = ','
 private const val REPLACE_PAIR_SEPARATOR = ";"
 private const val NEWLINE_CHAR = '\n'
+private const val CARRIAGE_RETURN_CHAR = '\r'
 private const val REPLACE_NEWLINE = " "
 
 /** 预留的替换膨胀空间，覆盖单字符替换最坏情况下的构建器扩容。 */

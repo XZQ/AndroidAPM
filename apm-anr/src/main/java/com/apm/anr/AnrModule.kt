@@ -159,8 +159,9 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         return try {
             // 尝试加载 JNI 库
             System.loadLibrary("apm-anr")
+            // native 侧 fail-closed：找不到 Signal Catcher 或安装失败时返回 false，
+            // 绝不吞掉系统 ANR 信号；此处据此降级为 Watchdog-only。
             nativeRegisterSigquitHandler()
-            true
         } catch (e: UnsatisfiedLinkError) {
             // JNI 库不存在，降级为 Watchdog
             apmContext?.logger?.d("SIGQUIT JNI not available, falling back to Watchdog")
@@ -224,11 +225,8 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
      */
     private fun startWatchdog(session: AnrDetectionSession) {
         val poller = sigquitPoller
-        watchdogThread = Thread({ watchdogLoop(session, poller) }, THREAD_NAME).apply {
-            isDaemon = true
-            priority = Thread.MIN_PRIORITY
-            start()
-        }
+        // 统一经 ApmExecutors 创建：daemon + 最低优先级，与原裸 Thread 语义完全一致。
+        watchdogThread = ApmExecutors.startThread(THREAD_NAME) { watchdogLoop(session, poller) }
     }
 
     /**
@@ -241,7 +239,10 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
             poller?.pollOnce()
 
             session.tick.set(false)
-            mainHandler.post { if (session.isActive()) session.tick.set(true) }
+            // post 失败（主 Looper 正在退出）时 tick 永远不会被消费，继续循环会误报 ANR。
+            if (!mainHandler.post { if (session.isActive()) session.tick.set(true) }) {
+                break
+            }
 
             try {
                 Thread.sleep(config.checkIntervalMs)
@@ -486,7 +487,18 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
             try {
                 val file = File(path)
                 if (file.exists() && file.canRead()) {
-                    val content = file.readText(Charsets.UTF_8)
+                    // 有界流式读取：traces.txt 可达数 MB，readText 会先整体加载再截断，
+                    // 在 ANR 期间的检测线程上造成大分配与 IO。直接读满上报上限即止。
+                    val content = file.inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
+                        val buffer = CharArray(config.maxStackTraceLength)
+                        var total = 0
+                        while (total < buffer.size) {
+                            val read = reader.read(buffer, total, buffer.size - total)
+                            if (read <= 0) break
+                            total += read
+                        }
+                        String(buffer, 0, total)
+                    }
                     if (content.isNotBlank()) {
                         return content
                     }
@@ -504,15 +516,14 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     // ========================================================================
 
     /**
-     * 计算堆栈指纹（前 N 行的哈希）。
-     * 用于 ANR 去重判断。
+     * 计算堆栈指纹（前 N 行的有界完整文本）。
+     * 用于 ANR 去重判断。刻意不使用 hashCode：哈希碰撞会把去重窗口内
+     * 不同的 ANR 误判为重复而漏报，与 core 聚合采用有界全文键的决策一致。
      */
     private fun computeStackFingerprint(stack: String): String {
         return stack.lines()
             .take(FINGERPRINT_LINES)
             .joinToString(LINE_SEPARATOR)
-            .hashCode()
-            .toString()
     }
 
     /**
@@ -544,8 +555,12 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     // Native 方法声明
     // ========================================================================
 
-    /** 注册 SIGQUIT 信号处理器（安装 sigaction + 专用接收线程）。 */
-    private external fun nativeRegisterSigquitHandler()
+    /**
+     * 注册 SIGQUIT 信号处理器（安装 sigaction + 专用接收线程）。
+     *
+     * @return true 表示处理器确实已安装；找不到 Signal Catcher 或安装失败返回 false
+     */
+    private external fun nativeRegisterSigquitHandler(): Boolean
 
     /** 注销 SIGQUIT 信号处理器（恢复原始处理并停止接收线程）。 */
     private external fun nativeUnregisterSigquitHandler()
@@ -553,7 +568,7 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     /**
      * 消费最近一次 SIGQUIT 的时间戳。
      *
-     * @return epoch 毫秒；0 表示自上次消费以来没有新信号
+     * @return 单调毫秒标记（CLOCK_MONOTONIC，非 epoch）；0 表示自上次消费以来没有新信号
      */
     private external fun nativeConsumeSigquitTimestamp(): Long
 

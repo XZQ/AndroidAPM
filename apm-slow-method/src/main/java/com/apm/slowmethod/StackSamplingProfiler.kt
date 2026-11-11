@@ -29,6 +29,8 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
     private val samplingThread = HandlerThread(THREAD_NAME).apply {
         // 复用 SDK 两级优先级常量：栈采样是时间敏感型测量，用普通优先级避免被宿主负载饿死而采样失真。
         priority = ApmExecutors.PRIORITY_MEASUREMENT
+        // daemon：与 SDK 线程治理一致，绝不阻止宿主进程/JVM 退出。
+        isDaemon = true
         start()
     }
     /** 采样线程 Handler。 */

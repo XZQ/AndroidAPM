@@ -9,6 +9,7 @@ import com.apm.memory.MemorySnapshot
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 
@@ -63,12 +64,13 @@ internal class OomMonitor(
                     scene = snapshot.scene,
                     foreground = snapshot.foreground,
                     fields = mapOf(
-                        "javaHeapRatio" to "%.2f".format(ratio),
+                        "javaHeapRatio" to String.format(Locale.ROOT, "%.2f", ratio),
                         "javaHeapUsedMb" to snapshot.javaHeapUsedMb,
                         "javaHeapMaxMb" to snapshot.javaHeapMaxMb
                     )
                 ))
-                triggerDump("java_heap_critical_${"%.2f".format(ratio)}")
+                // Locale.ROOT：dump 原因/文件名同样必须用点号小数，跨区域设置稳定。
+                triggerDump("java_heap_critical_${String.format(Locale.ROOT, "%.2f", ratio)}")
             }
             ratio >= config.javaHeapWarnRatio -> {
                 // 警告级别：仅发送告警
@@ -79,7 +81,7 @@ internal class OomMonitor(
                     scene = snapshot.scene,
                     foreground = snapshot.foreground,
                     fields = mapOf(
-                        "javaHeapRatio" to "%.2f".format(ratio),
+                        "javaHeapRatio" to String.format(Locale.ROOT, "%.2f", ratio),
                         "javaHeapUsedMb" to snapshot.javaHeapUsedMb,
                         "javaHeapMaxMb" to snapshot.javaHeapMaxMb
                     )

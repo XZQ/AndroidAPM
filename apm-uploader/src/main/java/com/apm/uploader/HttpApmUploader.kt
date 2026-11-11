@@ -471,8 +471,11 @@ class HttpApmUploader(
 
     /** Returns whether a header value is free of CR/LF and other control characters. */
     private fun isValidHeaderValue(value: String): Boolean {
+        // 上限与 Android HttpURLConnection 一致：>= 0x7F（DEL 与非 ASCII）会在
+        // setRequestProperty 处抛异常。若此处放行，每个请求都会在设置头时失败，
+        // 交付无限停滞且只留下通用错误日志。
         return value.all { character ->
-            character == '\t' || character.code >= HEADER_VALUE_VISIBLE_MIN
+            character == '\t' || character.code in HEADER_VALUE_VISIBLE_MIN..HEADER_VISIBLE_ASCII_MAX
         }
     }
 

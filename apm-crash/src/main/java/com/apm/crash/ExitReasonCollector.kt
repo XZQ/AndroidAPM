@@ -81,8 +81,8 @@ internal class ExitReasonCollector(
 
     /**
      * 执行一次采集。
-     * 读取历史退出记录，跳过已处理时间戳之前的记录，逐条上报后
-     * 持久化最新处理位置。调用方隔离可恢复异常；取消时停止读取和交付。
+     * 读取历史退出记录，跳过已处理时间戳之前的记录，逐条上报并逐条持久化水位。
+     * 调用方隔离可恢复异常；取消时停止读取和交付，已交付记录的水位不丢失。
      */
     fun collectOnce() {
         if (!isActive()) return
@@ -96,15 +96,12 @@ internal class ExitReasonCollector(
             if (record.timestampMs <= lastProcessed) {
                 continue
             }
-            if (!isActive()) return
+            if (!isActive()) break
             val fields = buildFields(record)
-            if (!isActive()) return
+            if (!isActive()) break
             emit(record, EVENT_APP_EXIT, severityFor(record.reasonCode), fields)
             newestProcessed = maxOf(newestProcessed, record.timestampMs)
-        }
-
-        // 有新记录时才写存储
-        if (newestProcessed > lastProcessed) {
+            // 逐条持久化水位：取消或进程死亡后，已交付记录不会在下次启动以新 eventId 重复上报。
             timestampStore.saveLastProcessedMs(newestProcessed)
         }
     }
@@ -145,10 +142,16 @@ internal class ExitReasonCollector(
         val supplier = record.traceSupplier ?: return null
         return runCatching {
             supplier()?.use { stream ->
-                // 只读取前 maxTraceBytes 字节，避免超大 trace 撑爆事件
+                // 循环读满 maxTraceBytes 上限：单次 read 可能远小于可用字节，
+                // 只读一次会让 trace 任意短于配置上限。
                 val buffer = ByteArray(maxTraceBytes)
-                val read = stream.read(buffer)
-                if (read > 0) String(buffer, 0, read, Charsets.UTF_8) else null
+                var total = 0
+                while (total < buffer.size) {
+                    val read = stream.read(buffer, total, buffer.size - total)
+                    if (read <= 0) break
+                    total += read
+                }
+                if (total > 0) String(buffer, 0, total, Charsets.UTF_8) else null
             }
         }.getOrNull()
     }

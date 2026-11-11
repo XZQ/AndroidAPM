@@ -47,11 +47,14 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     private lateinit var scheduler: MemorySampleScheduler
 
     // --- 状态 ---
-    /** 当前场景标签（如 Activity 类名）。 */
+    /** 当前场景标签（如 Activity 类名）；主线程写入、采样线程读取，volatile 保证可见性。 */
+    @Volatile
     private var currentScene: String = DEFAULT_SCENE
-    /** 是否前台。 */
+    /** 是否前台；主线程写入、采样线程读取，volatile 保证可见性。 */
+    @Volatile
     private var foreground: Boolean = true
-    /** 模块是否已启动。 */
+    /** 模块是否已启动；生命周期回调与 stop 可能在不同线程，volatile 保证可见性。 */
+    @Volatile
     private var started: Boolean = false
     /** 当前设备是否命中采样（由 sampleRate 决定）。 */
     private var samplingEnabled: Boolean = true
@@ -191,13 +194,19 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
         }
         started = false
 
-        // 注销生命周期回调
-        runCatching {
+        // 注销生命周期回调：逐项隔离，任一失败不跳过其余清理，也不向宿主抛出。
+        unregisterSafely(ERROR_UNREGISTER_LEAK_DETECTOR) {
             activityLeakDetector?.let {
                 apmContext.application.unregisterActivityLifecycleCallbacks(it)
             }
+        }
+        unregisterSafely(ERROR_UNREGISTER_LIFECYCLE) {
             apmContext.application.unregisterActivityLifecycleCallbacks(this)
+        }
+        unregisterSafely(ERROR_UNREGISTER_TRIM) {
             apmContext.application.unregisterComponentCallbacks(trimCallbacks)
+        }
+        unregisterSafely(ERROR_UNREGISTER_PROCESS_LIFECYCLE) {
             ProcessLifecycleOwner.get().lifecycle.removeObserver(this)
         }
 
@@ -230,15 +239,29 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     // --- ProcessLifecycleObserver: 前后台切换 ---
 
     /** 进入前台：切换到前台采样间隔。 */
+    @Synchronized
     override fun onStart(owner: LifecycleOwner) {
+        // stop() 可能在其他线程先行关闭调度器；已停止的会话不再重调度。
+        if (!started) return
         foreground = true
         scheduler.reschedule(config.foregroundIntervalMs)
     }
 
     /** 进入后台：切换到后台采样间隔（降低频率）。 */
+    @Synchronized
     override fun onStop(owner: LifecycleOwner) {
+        if (!started) return
         foreground = false
         scheduler.reschedule(config.backgroundIntervalMs)
+    }
+
+    /** 隔离单项注销失败，保证其余清理继续执行。 */
+    private fun unregisterSafely(tag: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (error: Exception) {
+            Apm.recordInternalError(tag, error)
+        }
     }
 
     /**
@@ -320,5 +343,13 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
         private const val REASON_LOW_MEMORY = "low_memory"
         /** 采样原因：TrimMemory 回调前缀。 */
         private const val REASON_TRIM_MEMORY_PREFIX = "trim_memory_"
+        /** 注销失败诊断标签：Activity 泄漏检测器。 */
+        private const val ERROR_UNREGISTER_LEAK_DETECTOR = "memory_unregister_leak_detector"
+        /** 注销失败诊断标签：Activity 生命周期回调。 */
+        private const val ERROR_UNREGISTER_LIFECYCLE = "memory_unregister_lifecycle"
+        /** 注销失败诊断标签：TrimMemory 回调。 */
+        private const val ERROR_UNREGISTER_TRIM = "memory_unregister_trim"
+        /** 注销失败诊断标签：进程生命周期观察者。 */
+        private const val ERROR_UNREGISTER_PROCESS_LIFECYCLE = "memory_unregister_process_lifecycle"
     }
 }

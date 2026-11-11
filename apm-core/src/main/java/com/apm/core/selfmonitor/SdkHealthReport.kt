@@ -62,8 +62,11 @@ data class SdkHealthReport(
     val dispatcherStageLatencies: Map<String, DispatcherStageLatencyReport> = emptyMap()
 ) {
     /**
-     * 计算事件丢弃率（0.0 ~ 1.0）。
-     * emitCount 为 0 时返回 0。
+     * 计算周期丢弃率：dropCount / emitCount，emitCount 为 0 时返回 0。
+     *
+     * 注意：该比值可能大于 1.0。dropCount 统计本周期全部损失，包括没有对应本期 emit 的
+     * 历史行清理（outbox 重试耗尽/容量淘汰/同意撤回清空），因此一次性大规模清理会使
+     * 比值远超 1。AutoThrottle 刻意对绝对损失作出反应（降级阈值按比值判定），此为设计语义。
      */
     val dropRate: Float
         get() = if (emitCount > 0L) dropCount.toFloat() / emitCount.toFloat() else 0f

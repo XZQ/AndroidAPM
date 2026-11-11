@@ -2,7 +2,7 @@
  * apm_crash_jni.c
  *
  * Native 崩溃信号处理器 JNI 实现。
- * 拦截 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGPIPE、SIGSTKFLT 信号，
+ * 拦截 SIGSEGV、SIGABRT、SIGBUS、SIGFPE、SIGSTKFLT 致命崩溃信号（不含 SIGPIPE），
  * 默认只恢复原始处理器并重抛，让系统生成 tombstone 后由 Java 层下次启动解析。
  * 调试环境可显式开启不安全 Java 回调，以捕获调用栈和故障地址后上报。
  */
@@ -42,8 +42,8 @@
 /** 回溯字符串最大长度。 */
 #define MAX_BACKTRACE_STR_LEN 4096
 
-/** 需要拦截的信号数量。 */
-#define NUM_HANDLED_SIGNALS 6
+/** 需要拦截的信号数量。刻意不含 SIGPIPE：它不是崩溃信号，见 kHandledSignals 注释。 */
+#define NUM_HANDLED_SIGNALS 5
 
 /** Logcat 日志宏。 */
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, TAG, __VA_ARGS__)
@@ -54,13 +54,17 @@
 /* 全局状态（仅信号处理函数内访问）                                       */
 /* ------------------------------------------------------------------ */
 
-/** 需要拦截的信号列表。 */
+/**
+ * 需要拦截的信号列表：仅真正的致命崩溃信号。
+ * 刻意排除 SIGPIPE：它非崩溃信号，网络栈常将其设为 SIG_IGN。拦截它会以 SA_RESTART
+ * 改变宿主 EINTR 语义；且若原处置为 SIG_IGN，恢复并重抛后进程存活，s_handling_signal
+ * 将永久置位，使后续所有信号跳过宿主崩溃处理器（如 Breakpad）的恢复。
+ */
 static const int kHandledSignals[NUM_HANDLED_SIGNALS] = {
     SIGSEGV,   /* 段错误 */
     SIGABRT,   /* abort() 调用 */
     SIGBUS,    /* 总线错误 */
     SIGFPE,    /* 浮点异常 */
-    SIGPIPE,   /* 管道破裂 */
     SIGSTKFLT  /* 协处理器栈错误 */
 };
 

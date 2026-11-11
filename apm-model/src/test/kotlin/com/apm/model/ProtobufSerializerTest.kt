@@ -299,7 +299,119 @@ class ProtobufSerializerTest {
         assertTrue("Empty batch should produce empty bytes", batchBytes.isEmpty())
     }
 
+    // --- int64 varint 边界测试 ---
+
+    @Test
+    fun `negative timestamps encode as spec-compliant ten-byte varints`() {
+        // protobuf 规范要求负 int64 以 64 位补码符号扩展编码为 10 字节 varint；
+        // 历史实现只写 1 字节，会吞掉后续字段 tag 使整个消息不可解析或静默篡改时间戳。
+        for (timestamp in listOf(-1L, -1000L, -123456789012345L, Long.MIN_VALUE)) {
+            val event = ApmEvent(module = "test", name = "negative_ts", timestamp = timestamp)
+
+            val bytes = ProtobufSerializer.serialize(event)
+
+            // 用规范 varint 读取器完整遍历消息：任何编码错误都会导致越界/字段号非法断言失败
+            val varintFields = walkEventVarintFields(bytes)
+            assertEquals(
+                "Timestamp $timestamp must round-trip through a spec-compliant varint reader",
+                timestamp,
+                varintFields[TIMESTAMP_FIELD_NUMBER]
+            )
+        }
+    }
+
+    @Test
+    fun `positive timestamp boundaries still round-trip after varint hardening`() {
+        for (timestamp in listOf(0L, 1L, 127L, 128L, 16383L, 16384L, Long.MAX_VALUE)) {
+            val event = ApmEvent(module = "test", name = "positive_ts", timestamp = timestamp)
+
+            val bytes = ProtobufSerializer.serialize(event)
+
+            val varintFields = walkEventVarintFields(bytes)
+            assertEquals(timestamp, varintFields[TIMESTAMP_FIELD_NUMBER])
+        }
+    }
+
+    @Test
+    fun `negative int64 varint always occupies ten bytes`() {
+        val event = ApmEvent(module = "test", name = "varint_size", timestamp = -1L)
+
+        val bytes = ProtobufSerializer.serialize(event)
+
+        // 字段 1 的 tag 为单字节 0x08，其后必须是 9 个继续字节 + 1 个终止字节
+        assertEquals(0x08, bytes[0].toInt() and 0xFF)
+        for (index in 1..9) {
+            assertTrue(
+                "Negative varint byte $index must carry the continuation flag",
+                bytes[index].toInt() and 0x80 != 0
+            )
+        }
+        assertEquals(0x01, bytes[10].toInt() and 0xFF)
+    }
+
     // --- 辅助方法 ---
+
+    /**
+     * 按 protobuf 规范读取一个 base-128 varint。
+     *
+     * @param bytes 输入字节流
+     * @param offset 起始偏移
+     * @return 解码值与消耗字节数
+     */
+    private fun readVarint(bytes: ByteArray, offset: Int): Pair<Long, Int> {
+        var result = 0L
+        var shift = 0
+        var index = offset
+        while (true) {
+            assertTrue("Varint must terminate within the message", index < bytes.size)
+            assertTrue("Varint must not exceed 10 bytes", shift < 64)
+            val byte = bytes[index].toInt() and 0xFF
+            // 第 10 字节只允许贡献最高 1 位，否则不是合法 64 位 varint
+            if (shift == 63) {
+                assertTrue("Tenth varint byte must be 0 or 1", byte and 0x7F <= 1)
+            }
+            result = result or ((byte and 0x7F).toLong() shl shift)
+            index++
+            if (byte and 0x80 == 0) {
+                return result to (index - offset)
+            }
+            shift += 7
+        }
+    }
+
+    /**
+     * 完整遍历独立事件消息的每个字段，返回 varint 字段编号 → 值。
+     * 任何非法字段号、wire type 或长度越界都断言失败，证明整个消息可被标准解析器消费。
+     */
+    private fun walkEventVarintFields(bytes: ByteArray): Map<Int, Long> {
+        val varintFields = mutableMapOf<Int, Long>()
+        var index = 0
+        while (index < bytes.size) {
+            val (tag, tagSize) = readVarint(bytes, index)
+            index += tagSize
+            val fieldNumber = (tag ushr 3).toInt()
+            val wireType = (tag and 0x7L).toInt()
+            assertTrue("Field number must be positive, got $fieldNumber", fieldNumber > 0)
+            when (wireType) {
+                0 -> {
+                    val (value, valueSize) = readVarint(bytes, index)
+                    index += valueSize
+                    varintFields[fieldNumber] = value
+                }
+                2 -> {
+                    val (length, lengthSize) = readVarint(bytes, index)
+                    index += lengthSize
+                    assertTrue(
+                        "Length-delimited payload must fit the message",
+                        length >= 0 && index + length <= bytes.size
+                    )
+                    index += length.toInt()
+                }
+                else -> throw AssertionError("Unexpected wire type $wireType for field $fieldNumber")
+            }
+        }
+        return varintFields
+    }
 
     /**
      * 检查字节数组中是否包含指定的 UTF-8 字符串。
@@ -331,6 +443,9 @@ class ProtobufSerializerTest {
     }
 
     companion object {
+        /** timestamp 的 proto 字段编号，须与 ProtobufSerializer/apm_event.proto 一致。 */
+        private const val TIMESTAMP_FIELD_NUMBER = 1
+
         /** priority 的 proto 字段编号，须与 ProtobufSerializer/apm_event.proto 一致。 */
         private const val PRIORITY_FIELD_NUMBER = 13
 

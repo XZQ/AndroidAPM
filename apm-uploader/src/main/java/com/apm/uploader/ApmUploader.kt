@@ -9,6 +9,12 @@ import com.apm.model.ApmEvent
 interface ApmUploader {
     /**
      * 上传单条事件。
+     *
+     * 与持久 outbox（SQLite）组合时，true 必须表示事件已被传输层真正交付（或传输层自身
+     * 持有持久重试责任），不能仅表示"已入内存队列"：持久 worker 依据返回值 ACK 删除
+     * durable 行，进程死亡会丢失仅存于内存的事件。异步接受型上传器（如
+     * [RetryingApmUploader]）只应与非持久存储组合，SDK 工厂会拒绝危险组合。
+     *
      * @param event 要上传的事件
      * @return true 表示上传成功或已被可靠接管，false 表示本次上传失败
      */

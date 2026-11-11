@@ -39,6 +39,12 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
     /** Host-registered executors that expose real queue backlog metrics. */
     private val threadPools = ThreadPoolRegistry()
 
+    /**
+     * Consecutive BLOCKED sample counts keyed by thread id（不持有 Thread 强引用）。
+     * 瞬时锁竞争不是死锁：只有连续多个采样周期仍 BLOCKED 的线程才告警。
+     */
+    private val blockedStreaks = HashMap<Long, Int>()
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
@@ -52,12 +58,23 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             apmContext?.logger?.w("enableThreadLeakDetect is deprecated and ignored; register executors explicitly")
         }
         monitoring = true
+        // 间隔钳制：<=0 会使 scheduleWithFixedDelay 直接抛异常，模块无法启动。
+        val intervalMs = config.checkIntervalMs.coerceAtLeast(MIN_CHECK_INTERVAL_MS)
         // 周期性线程快照采集非时间敏感，使用最低优先级后台执行。
         scheduler = ApmExecutors.newSingleThreadScheduledExecutor(THREAD_NAME).apply {
             scheduleWithFixedDelay(
-                { if (monitoring) checkThreads() },
-                config.checkIntervalMs,
-                config.checkIntervalMs,
+                {
+                    if (!monitoring) return@scheduleWithFixedDelay
+                    // 可恢复边界：调度执行器在任务抛出异常后永久取消后续执行，
+                    // 一次偶发 RuntimeException 不得让整个线程监控静默死亡。
+                    try {
+                        checkThreads()
+                    } catch (error: RuntimeException) {
+                        Apm.recordInternalError(ERROR_TAG_CHECK_LOOP, error)
+                    }
+                },
+                intervalMs,
+                intervalMs,
                 TimeUnit.MILLISECONDS
             )
         }
@@ -78,6 +95,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         scheduler?.shutdownNow()
         scheduler = null
         threadPools.clear()
+        blockedStreaks.clear()
     }
 
     /**
@@ -137,10 +155,20 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
             }
         }
 
-        // 检测 BLOCKED 线程（可能死锁）
+        // 检测 BLOCKED 线程（可能死锁）：要求连续多个采样周期仍 BLOCKED，
+        // 过滤正常锁竞争造成的瞬时 BLOCKED，避免每个周期都误报"可能死锁"。
         val blockedThreads = threads.filter { it.state == Thread.State.BLOCKED }
-        if (blockedThreads.isNotEmpty()) {
-            reportBlockedThreads(blockedThreads)
+        val currentBlockedIds = blockedThreads.mapTo(HashSet()) { it.id }
+        // 解除阻塞的线程立即清零计数；线程死亡后其 id 自然被剪枝，不累积。
+        blockedStreaks.keys.retainAll(currentBlockedIds)
+        val persistentBlocked = blockedThreads.filter { thread ->
+            val streak = (blockedStreaks[thread.id] ?: 0) + 1
+            blockedStreaks[thread.id] = streak
+            // 恰在达到阈值的那次采样上报一次，持续阻塞不逐周期重复告警。
+            streak == BLOCKED_CONSECUTIVE_SAMPLES
+        }
+        if (persistentBlocked.isNotEmpty()) {
+            reportBlockedThreads(persistentBlocked)
         }
 
         if (config.enableThreadPoolMonitor) {
@@ -272,5 +300,14 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
         /** Background scanner thread name. */
         private const val THREAD_NAME = "apm-thread-monitor"
+
+        /** 采样间隔下限（毫秒），与 GC 监控一致，防止非正间隔使调度器抛异常。 */
+        private const val MIN_CHECK_INTERVAL_MS = 1_000L
+
+        /** 判定持久 BLOCKED 所需的连续采样周期数，过滤瞬时锁竞争。 */
+        private const val BLOCKED_CONSECUTIVE_SAMPLES = 3
+
+        /** 自监控 tag：线程快照周期任务的可恢复异常。 */
+        private const val ERROR_TAG_CHECK_LOOP = "thread_monitor_check_loop"
     }
 }

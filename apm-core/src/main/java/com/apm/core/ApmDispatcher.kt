@@ -214,11 +214,7 @@ internal class ApmDispatcher(
     }
 
     /** 分发 worker 线程：批量消费队列并执行完整流水线。 */
-    private val workerThread = Thread(::workerLoop, THREAD_NAME).apply {
-        // daemon 线程避免阻止进程退出
-        isDaemon = true
-        start()
-    }
+    private val workerThread = ApmExecutors.startThread(THREAD_NAME, Thread.NORM_PRIORITY, ::workerLoop)
 
     /** Periodic executor that flushes expired aggregation windows. */
     private val aggregationExecutor: ScheduledExecutorService? = aggregator?.let { eventAggregator ->
@@ -609,7 +605,13 @@ internal class ApmDispatcher(
             queue.drainTo(drainBuffer, MAX_BATCH_DRAIN - 1)
             // Queue-share accounting covers queued work only, not the batch currently executing.
             releaseQueueOccupancy(drainBuffer)
-            processBatch(drainBuffer, persistBuffer)
+            // 最终可恢复边界：任何 Exception（包括宿主 Throwable 覆写在日志/诊断路径抛出）
+            // 都不得杀死唯一 worker，否则本进程全部遥测永久静默停止；致命 VM 错误仍向上传播。
+            try {
+                processBatch(drainBuffer, persistBuffer)
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_WORKER_BATCH, error)
+            }
 
             // 更新队列积压快照供自监控上报
             selfMonitor?.updateQueuePressure(queue.size, queuedBytes)
@@ -1066,6 +1068,8 @@ internal class ApmDispatcher(
 
         /** Internal-error tag for one failed queued event transformation. */
         private const val ERROR_PROCESS_EVENT = "dispatcher_process_event"
+        /** 自监控 tag：worker 批处理最终边界捕获的可恢复异常。 */
+        private const val ERROR_WORKER_BATCH = "dispatcher_worker_batch"
 
         /** Internal-error tag for a failed durable batch append. */
         private const val ERROR_PERSIST_BATCH = "dispatcher_persist_batch"

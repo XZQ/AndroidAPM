@@ -1,6 +1,7 @@
 package com.apm.memory
 
 import com.apm.core.ApmExecutors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -35,12 +36,18 @@ internal class MemorySampleScheduler(private val sampleAction: () -> Unit) {
     fun reschedule(intervalMs: Long) {
         // 取消之前的定时任务
         future?.cancel(false)
-        future = executor.scheduleWithFixedDelay(
-            { sampleAction() },
-            INITIAL_DELAY_MS,
-            intervalMs,
-            TimeUnit.MILLISECONDS
-        )
+        future = try {
+            executor.scheduleWithFixedDelay(
+                { sampleAction() },
+                INITIAL_DELAY_MS,
+                intervalMs,
+                TimeUnit.MILLISECONDS
+            )
+        } catch (_: RejectedExecutionException) {
+            // stop() 与宿主生命周期回调可能在不同线程竞态：执行器已关闭时静默放弃重调度，
+            // 绝不让 RejectedExecutionException 经 LifecycleRegistry 抛到宿主主线程。
+            null
+        }
     }
 
     /** 停止调度器，取消任务并关闭执行器。 */

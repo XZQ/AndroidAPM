@@ -5,6 +5,7 @@ import com.apm.memory.leak.LeakType
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.Locale
 
 /**
  * 内存事件上报器。
@@ -62,7 +63,8 @@ internal class MemoryReporter(
                 foreground = snapshot.foreground,
                 fields = snapshot.toFields(reason) + mapOf(
                     "alertReasons" to alertReasons.joinToString(","),
-                    "javaHeapRatio" to "%.2f".format(heapRatio)
+                    // Locale.ROOT：wire 字段必须用点号小数，避免某些区域设置输出逗号。
+                    "javaHeapRatio" to String.format(Locale.ROOT, "%.2f", heapRatio)
                 )
             ))
         }

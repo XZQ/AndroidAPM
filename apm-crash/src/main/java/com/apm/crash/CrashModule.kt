@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Build
 import com.apm.core.Apm
 import com.apm.core.ApmContext
+import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
 import com.apm.model.ApmEvent
 import com.apm.model.ApmEventKind
@@ -95,15 +96,25 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
             Thread.setDefaultUncaughtExceptionHandler(CrashHandler(previousHandler))
         }
 
-        // 启用 Native 崩溃链路：尝试安装 JNI 信号处理器。
-        if (config.enableNativeCrash) {
-            // 启动时先扫描上一轮崩溃生成的 tombstone，再安装本轮信号处理器。
-            NativeCrashMonitor.checkRecentTombstone()
-            NativeCrashMonitor.init(config.enableUnsafeNativeSignalCallback)
-        }
+        try {
+            // 启用 Native 崩溃链路：尝试安装 JNI 信号处理器。
+            if (config.enableNativeCrash) {
+                // 启动时先扫描上一轮崩溃生成的 tombstone，再安装本轮信号处理器。
+                NativeCrashMonitor.checkRecentTombstone()
+                NativeCrashMonitor.init(config.enableUnsafeNativeSignalCallback)
+            }
 
-        // 启动退出原因采集：读取系统记录的上一进程退出原因（API 30+）
-        startExitReasonCollection()
+            // 启动退出原因采集：读取系统记录的上一进程退出原因（API 30+）
+            startExitReasonCollection()
+        } catch (error: Exception) {
+            // 部分启动失败时 core 不会调用 onStop：必须在此恢复已安装的全局 handler，
+            // 否则它会携带旧上下文滞留整个进程生命周期，stop/撤回都无法移除。
+            if (config.enableJavaCrash) {
+                Thread.setDefaultUncaughtExceptionHandler(previousHandler)
+                previousHandler = null
+            }
+            throw error
+        }
 
         apmContext?.logger?.d(
             "Crash module started, java=${config.enableJavaCrash}, native=${config.enableNativeCrash}"
@@ -127,8 +138,11 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
             try {
                 val manager = application.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
                 val summary = context.captureExitOccurrence()?.let(ExitOccurrenceSummary::encode)
+                // 无条件写入（含 null）：V3 模式下本进程拥有该槽位。身份超大无法编码时
+                // 写 null 清除上一构建遗留的陈旧摘要，避免未来退出携带过期身份；
+                // 若跳过 null 写入，陈旧摘要会在后续退出中被误当作当前身份恢复。
                 manager?.setProcessStateSummary(summary)
-                // 只有真正写入有效摘要才声明槽位所有权；编码失败时的清除不占有槽位，
+                // 只有真正写入有效摘要才声明槽位所有权；null 清除不占有槽位，
                 // 避免停止阶段以 null 二次写入覆盖他方后续写入的值。
                 wroteExitIdentitySummary = summary != null && manager != null
                 if (summary == null) context.logger.w("Exit identity cannot fit the platform summary; future exit remains unknown")
@@ -162,18 +176,14 @@ class CrashModule(private val config: CrashConfig = CrashConfig()) : ApmModule {
                 }
             }
         )
-        exitCollectorThread = Thread(
-            {
-                try {
-                    collector.collectOnce()
-                } catch (error: Exception) {
-                    Apm.recordInternalError(ERROR_TAG_EXIT_INFO, error)
-                }
-            },
-            EXIT_COLLECTOR_THREAD_NAME
-        ).apply {
-            isDaemon = true
-            start()
+        // 统一经 ApmExecutors 创建（daemon）；显式普通优先级保持原调度行为，
+        // 该线程只在启动时读取一次历史退出记录，不做持续测量。
+        exitCollectorThread = ApmExecutors.startThread(EXIT_COLLECTOR_THREAD_NAME, Thread.NORM_PRIORITY) {
+            try {
+                collector.collectOnce()
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_EXIT_INFO, error)
+            }
         }
     }
 

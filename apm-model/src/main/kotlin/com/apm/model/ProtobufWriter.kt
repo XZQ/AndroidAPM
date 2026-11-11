@@ -184,10 +184,13 @@ internal class ProtobufWriter(private val stream: ByteArrayOutputStream) {
     /**
      * 写入 64-bit varint（可变长整数）。
      * 与 writeVarint32 逻辑相同，但支持 64 位值。
+     * 负数按 protobuf 规范以 64 位二进制补码符号扩展，固定编码为 10 字节；
+     * 若仅用有符号比较，负数会跳过循环只写 1 字节，导致整个消息不可解析或值被静默篡改。
      */
     private fun writeVarint64(value: Long) {
         var v = value
-        while (v > VARINT_MAX_7BITS_LONG) {
+        // v < 0 保证负数进入循环；ushr 无符号右移逐步消耗补码高位。
+        while (v < 0 || v > VARINT_MAX_7BITS_LONG) {
             stream.write((v.toInt() and MASK_7BITS) or VARINT_CONTINUE_FLAG)
             v = v ushr VARINT_BIT_SHIFT
         }

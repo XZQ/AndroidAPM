@@ -65,11 +65,19 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
             if (!started) {
                 return
             }
-            checkBatteryDrain()
-            checkWakeLocks()
-            checkGpsSessions()
-            cpuJiffiesSampler?.sample()
-            mainHandler.postDelayed(this, config.checkIntervalMs)
+            // 主线程 Handler 上的未捕获异常会直接崩溃宿主：/proc 采样或上报链路的
+            // 可恢复异常必须隔离，且不得中断后续周期检测。
+            try {
+                checkBatteryDrain()
+                checkWakeLocks()
+                checkGpsSessions()
+                cpuJiffiesSampler?.sample()
+            } catch (error: RuntimeException) {
+                Apm.recordInternalError(ERROR_TAG_CHECK_LOOP, error)
+            }
+            if (started) {
+                mainHandler.postDelayed(this, config.checkIntervalMs)
+            }
         }
     }
 
@@ -390,5 +398,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         private const val FIELD_CPU_PERCENT = "cpuPercent"
         /** Field: sustained duration in seconds. */
         private const val FIELD_DURATION_SECONDS = "durationSec"
+        /** 自监控 tag：主线程周期检测任务的可恢复异常。 */
+        private const val ERROR_TAG_CHECK_LOOP = "battery_check_loop"
     }
 }
