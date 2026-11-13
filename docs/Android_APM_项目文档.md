@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-11｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜121 个测试/benchmark 文件
+> 文档同步：2026-11-14｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜124 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -21,6 +21,18 @@ monitor module
 ```
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
+
+## 2026-11-14 已知限制处置与可观测性补强
+
+2026-11-14 已知限制处置（JDK 17.0.21+9，基于 177dc16）：把 2026-11-11 审查记录的「刻意不改」项转化为可执行处置，公开 ABI 零变化。完整清单见 `AGENTS.md` 同日条目，此处摘要三项。
+
+**弃用时间表**：`ReferenceChainAnalyzer`/`ReferenceChainResult`/`RefNode`/`GcRootType` 标记 `@Deprecated`（运行时零接线，生产引用链分析应使用 LeakCanary/Shark 或专用 Hprof 解析库），按「计划移除先弃用、至少保留一个 minor 周期」目标 0.2.0 移除；`docs/API_COMPATIBILITY.md` 建立公开面全部 17 项 `@Deprecated` 的移除时间表（新增 4 项 + 既有 13 项运行时已忽略的弃用配置字段），既有字段 0.2.0 逐项评估。`@Deprecated` 注解与 internal overload 均不进入 ABI 基线，`apiCheck` 零变化。
+
+**tombstone 可观测性**：降级扫描的静默失败改为经模块 logger 写入独立诊断 journal——目录不可读（生产 SELinux 常态）每次启动一条 WARN，扫描异常记录异常类型一条 WARN；公开 `checkRecentTombstone()` 签名不变，模块内部经 internal overload 传入 `CrashModule` 的生命周期 logger。native crash 生产回退依赖 API 30+ `ApplicationExitInfo` 的能力现状不变。
+
+**测试补齐**：apm-trace 新增 `TraceConfigTest`（默认值契约、disabled 下 `traced` 行为、`maxSpanDurationMs` 超时分支）与 `IdGeneratorTest`（traceId/spanId 小写十六进制格式、并发唯一性）；apm-crash 新增 `NativeCrashTombstoneLoggingTest`（不可读目录恰好一条 WARN、60 秒限频、公开无参入口安全）。同轮复核更正三项在用代码误判：`LeakResult`（MemoryModule→MemoryReporter 正常接线）、`StackFingerprinter`（EventAggregator 使用）、`LogcatApmUploader`（UploaderFactory 为 `logcat://` 构建），均不处置。
+
+验证：定向 crash 8 suites / 31 tests、memory 8 / 44、trace 3 / 23 全通过；完整 `python tools/verify_ci.py` 通过，强制重跑根 Android 120 suites / 851 tests + model 5 / 63 + plugin 1 / 23 共 126 suites / 937 tests，全 0 failures/errors/skips；24 份 ABI 基线零变化。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz 验收（AndroidAPM-Server）、外部 Maven staging/promotion（待凭据）。
 
 ## 2026-11-11 全仓深度审查与修复
 

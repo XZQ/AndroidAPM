@@ -4,6 +4,7 @@
 
 ## 未发布
 
+- **已知限制处置（2026-11-14）**：把 2026-11-11 记录的「刻意不改」项转化为可执行处置，公开 ABI 零变化。`ReferenceChainAnalyzer`/`ReferenceChainResult`/`RefNode`/`GcRootType` 标记 `@Deprecated`（运行时零接线，目标 0.2.0 移除）；`API_COMPATIBILITY.md` 建立公开面全部 17 项弃用声明的移除时间表。tombstone 降级扫描的静默失败改为经模块 logger 写入独立诊断 journal（公开 `checkRecentTombstone()` 签名不变，internal overload 接线）。测试补齐：apm-trace 新增 `TraceConfigTest`/`IdGeneratorTest`，apm-crash 新增 `NativeCrashTombstoneLoggingTest`。同轮复核更正三项在用代码误判（`LeakResult`/`StackFingerprinter`/`LogcatApmUploader` 均为在用代码）。验证：`verify_ci.py` 全绿，126 suites / 937 tests（根 Android 120/851、model 5/63、plugin 1/23），24 份 ABI 基线零变化。详见 [项目文档](Android_APM_项目文档.md) 与 [AGENTS.md](../AGENTS.md) 同日条目。
 - **深度审查与修复（2026-11-11）**：并行分模块审查加集成自审，修复一批真实缺陷，公开 ABI 零变化。协议：负 int64 varint 补码 10 字节编码（原只写 1 字节损坏整批）。核心：非持久交付一律经有界异步包装，交付屏障不再等待阻塞式传输，并拒绝「持久 outbox + 异步接受型 uploader」危险组合；宿主 Throwable 覆写隔离 + worker/自监控最终可恢复边界。生命周期：LeakCheckQueue 锁外交付、内存调度竞态防护、Render FrameMetrics 异常隔离、ANR SIGQUIT fail-closed、Launch 跨会话计数重置、Battery 主线程任务边界。P2 批次：HprofDumper fork 超时回收、ANR/线程监控加固、Locale.ROOT、移除 SIGPIPE 拦截、RetryPolicy 校验与丢弃归因、header/CR/close/versionCode/进程名回退等。验证：`verify_ci.py` 全绿，123 suites / 928 tests（根 Android 117/842、model 5/63、plugin 1/23）。详见 [项目文档](Android_APM_项目文档.md) 与 [AGENTS.md](../AGENTS.md) 同日条目。
 - **文档**：README 按当前事实 / 使用指南 / 证据链接三层重构，日期化的变更与验证段落从 README 移出到本文件；模块表直接链到架构文档；配置默认值表收敛为决策相关项，完整 38 项留在项目文档；消费方下限提升到基线表；修正原 README 中落在 License 之后的散落条目。
 

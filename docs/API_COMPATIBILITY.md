@@ -1,6 +1,6 @@
 # AndroidAPM 公共 API 兼容策略
 
-> 同步日期：2026-11-08｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-14｜当前 SDK 版本：0.1.0
 
 ## 目标与范围
 
@@ -83,3 +83,26 @@ BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算
 2026-09-12 OkHttp：EventListener reportSummary 的默认行为修正为 true；已有参数/构造签名不变，显式 false 仍是仅阶段模式。新增 requestBodyEnd override；配套拦截器按请求所有权避免双计数，单独使用则观察 body 终态。
 
 2026-09-12 历史退出身份：新增 `CrashModule(CrashConfig, Boolean)` overload 供宿主关闭平台摘要写入，`CrashConfig` 的既有 constructor/copy/component 保持不变。core 仅新增两个跨制品 synthetic 方法 `ApmContext.captureExitOccurrence/emitHistorical` 和末尾追加的 `HISTORICAL_OCCURRENCE_UNAVAILABLE` drop reason，手工更新对应 ABI 基线。严格 V3 不再将未知历史 app_exit 标为当前 release，改为明确拒绝并计数；这是历史归属语义修复，不能以补造身份维持旧错误事件数。wire/codec/SQLite schema 不变。
+
+## 2026-11-14 弃用移除时间表
+
+本节盘点公开面全部 17 个 `@Deprecated` 声明并给出处置时间表，是弃用清理的唯一事实源；各模块注释中的弃用 message 保持一致但不再单独维护清单。
+
+**0.2.0 移除（2026-11-14 新标记）**：`apm-memory` 的 `ReferenceChainAnalyzer`、`ReferenceChainResult`、`RefNode`、`GcRootType`。该分析器是运行时零接线的简化 Hprof 引用链实现（全仓库 main 无任何调用方，自身注释已声明生产应使用 Shark/LeakCanary）；按「计划移除先标记 deprecated 并至少保留一个 minor 版本周期」规则，随 0.2.0 删除并同步更新基线。生产引用链分析应使用 LeakCanary/Shark 或专用 Hprof 解析库。
+
+**0.2.0 评估移除（既有 13 项弃用字段，模块运行时已不消费）**：
+
+| 模块 | 弃用声明 | 迁移目标 |
+|---|---|---|
+| apm-battery / apm-fps / apm-gc-monitor / apm-render | `maxStackTraceLength`（4 项） | 各模块不采集堆栈，字段无作用 |
+| apm-fps | `windowSize` | `reportIntervalMs` |
+| apm-render | `viewDrawThresholdMs` | `slowFrameThresholdMs` |
+| apm-render | `detectOverdraw` | 无公共 API 可替代，保持 false |
+| apm-io | `enableAutoHook` | `wrapInputStream` / `wrapOutputStream` |
+| apm-ipc | `enableBinderHook` | `traceBinderCall` / `onBinderCallComplete` |
+| apm-webview | `enableAutoRegister` | `install` / `uninstall` |
+| apm-thread-monitor | `enableThreadLeakDetect` | `registerThreadPool` |
+| apm-thread-monitor | `threadLeakThresholdMs` | 通用线程泄漏检测不受支持 |
+| apm-model | `ENVELOPE_SCHEMA_VERSION` | 显式选择 `ENVELOPE_SCHEMA_VERSION_V2` / `V3` |
+
+0.2.0 逐项评估：仍被消费方使用的可再保留一个周期，无使用证据的删除；删除属 minor breaking，须附迁移说明、变更理由并人工审查后同步基线。0.1.x 期间全部保持源兼容、运行时忽略与现有默认值不变。本轮新增的 internal `NativeCrashMonitor.checkRecentTombstone(ApmLogger?)` overload 不进入基线（internal 可见性），公开无参签名保持不变。

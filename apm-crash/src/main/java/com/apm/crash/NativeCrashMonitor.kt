@@ -2,6 +2,7 @@ package com.apm.crash
 
 import com.apm.core.Apm
 import com.apm.core.ApmClock
+import com.apm.core.ApmLogger
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmPriority
 import com.apm.model.ApmSeverity
@@ -179,7 +180,15 @@ object NativeCrashMonitor {
      *
      * 这是 JNI 层不可用时的降级方案。
      */
-    fun checkRecentTombstone() {
+    fun checkRecentTombstone() = checkRecentTombstone(logger = null)
+
+    /**
+     * 扫描最近 tombstone 并把不可恢复的扫描结果写入 [logger]。
+     * 公开无参入口保持原签名（ABI 兼容）；模块内部接线传入生命周期绑定的 logger，
+     * 使 tombstone 回退在生产设备（SELinux 限制 `/data/tombstones/` 可读性）静默失效时
+     * 仍在独立诊断 journal 留下可归因证据，而不是无声跳过。
+     */
+    internal fun checkRecentTombstone(logger: ApmLogger?) {
         val nowElapsedMs = ApmClock.monotonicTimeMillis()
         // 限制检查频率
         if (lastCheckElapsedTime > 0L &&
@@ -192,6 +201,11 @@ object NativeCrashMonitor {
         try {
             val tombstoneDir = File(TOMBSTONE_DIR)
             if (!tombstoneDir.exists() || !tombstoneDir.isDirectory) {
+                // 生产设备受 SELinux 约束通常走不到读取分支；显式留痕而非静默跳过。
+                logger?.w(
+                    "Tombstone scan unavailable: $TOMBSTONE_DIR is not readable by this app; " +
+                        "native crash fallback evidence is lost"
+                )
                 return
             }
 
@@ -208,7 +222,8 @@ object NativeCrashMonitor {
                 parseAndReportTombstone(content)
             }
         } catch (e: Exception) {
-            // tombstone 解析失败不影响主流程
+            // tombstone 解析失败不影响主流程；仅记录异常类型，不携带可能含路径的消息内容
+            logger?.w("Tombstone scan failed: ${e.javaClass.name}")
         }
     }
 

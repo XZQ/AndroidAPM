@@ -23,6 +23,11 @@ import java.nio.ByteOrder
  * 注意：此为简化版实现，生产环境建议使用 Shark (LeakCanary 2.x) 或
  * 自行集成完整的 Hprof 解析库。
  */
+@Deprecated(
+    message = "This analyzer is not wired into any runtime pipeline and has no callers; " +
+        "it is planned for removal in 0.2.0. Use LeakCanary/Shark or a dedicated Hprof " +
+        "analyzer for production reference chains."
+)
 class ReferenceChainAnalyzer {
 
     /**
@@ -669,6 +674,10 @@ private data class HprofHeader(
 )
 
 /** GC Root 类型枚举。 */
+@Deprecated(
+    message = "Only referenced by the deprecated ReferenceChainAnalyzer, which is not wired " +
+        "into any runtime pipeline; planned for removal in 0.2.0."
+)
 enum class GcRootType(val displayName: String) {
     /** JNI 全局引用。 */
     JNI_GLOBAL("JNI Global"),
@@ -697,6 +706,10 @@ enum class GcRootType(val displayName: String) {
 /**
  * 引用链分析结果。
  */
+@Deprecated(
+    message = "Only produced by the deprecated ReferenceChainAnalyzer, which is not wired " +
+        "into any runtime pipeline; planned for removal in 0.2.0."
+)
 data class ReferenceChainResult(
     /** 泄漏目标类名。 */
     val targetClassName: String,
@@ -711,6 +724,10 @@ data class ReferenceChainResult(
 /**
  * 引用链中的单个节点。
  */
+@Deprecated(
+    message = "Only referenced by the deprecated ReferenceChainAnalyzer result types, which " +
+        "are not wired into any runtime pipeline; planned for removal in 0.2.0."
+)
 data class RefNode(
     /** 持有引用的类名。 */
     val className: String,

@@ -26,6 +26,7 @@
 - 默认恢复原 handler 并重抛，让系统生成 tombstone
 - `enableUnsafeNativeSignalCallback=true` 才允许 signal handler 中的 JNI callback，默认关闭
 - 下次启动扫描 tombstone 并发出事件
+- `/data/tombstones/` 在生产设备通常受 SELinux 约束不可读；扫描不可达或异常时通过模块 logger 写入独立诊断 journal（各一条 WARN），不再静默跳过。公开 `checkRecentTombstone()` 签名保持不变，模块内部经 internal overload 接线 logger
 
 Native target 具备 16 KiB page-size linker alignment。
 
