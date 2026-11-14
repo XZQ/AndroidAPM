@@ -1,17 +1,47 @@
 package com.apm.io
 
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * IoModule 配置和参数测试。
+ * IoModule 配置、参数与未启动行为测试。
  *
  * 注：IoModule 的 onIoOperation 方法依赖 Looper.myLooper() 和 Looper.getMainLooper()
  * 判断当前线程是否为主线程，纯 JUnit 环境无主线程 Looper，无法测试核心 IO 检测逻辑。
  * Module 集成测试应在 Android Instrumentation 环境中执行。
- * 此文件验证 Config 层默认值和自定义值覆盖。
+ * 此文件验证 Config 层默认值和自定义值覆盖，以及未启动时 wrapper 直通语义。
  */
 class IoModuleTest {
+
+    /** 未启动时 wrapInputStream 返回原始流。 */
+    @Test
+    fun `wrapInputStream returns the source when the module is not started`() {
+        // 未 onStart 的模块不持有 NativeIoHook，包装请求直接透传原始流
+        val module = IoModule()
+        val source = ByteArrayInputStream(byteArrayOf(1))
+        assertSame(source, module.wrapInputStream(source, TEST_PATH))
+    }
+
+    /** 未启动时 wrapOutputStream 返回原始流。 */
+    @Test
+    fun `wrapOutputStream returns the source when the module is not started`() {
+        // 与 InputStream 直通语义一致，宿主不感知 SDK 未启动
+        val module = IoModule()
+        val source = ByteArrayOutputStream()
+        assertSame(source, module.wrapOutputStream(source, TEST_PATH))
+    }
+
+    /** 未启动时手动回调全部 no-op，不抛异常。 */
+    @Test
+    fun `manual callbacks before start are inert`() {
+        // nativeIoHook 为 null 时所有手动回调早退
+        val module = IoModule()
+        module.onRead(TEST_PATH, 1, 1)
+        module.onClose(Any(), 0L)
+        module.onBufferCopy(TEST_PATH, TEST_PATH, 1L, 1)
+    }
 
     /** 默认配置开启 IO 监控。 */
     @Test
@@ -195,5 +225,10 @@ class IoModuleTest {
         val config = IoConfig()
         // 吞吐量统计窗口应为正整数
         assertTrue(config.throughputWindow > 0)
+    }
+
+    companion object {
+        /** 直通测试使用的逻辑路径。 */
+        private const val TEST_PATH = "test-path"
     }
 }
