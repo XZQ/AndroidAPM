@@ -137,7 +137,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
      * 扫描所有线程，统计数量和分组信息。
      */
     private fun checkThreads() {
-        val threads = Thread.getAllStackTraces().keys.toList()
+        val threads = enumerateLiveThreads()
         val activeCount = threads.size
 
         // 线程数量告警
@@ -309,5 +309,52 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
 
         /** 自监控 tag：线程快照周期任务的可恢复异常。 */
         private const val ERROR_TAG_CHECK_LOOP = "thread_monitor_check_loop"
+    }
+}
+
+/** 线程组枚举数组的冗余容量，吸收 activeCount 估计误差。 */
+private const val THREAD_ENUM_SLACK = 16
+
+/**
+ * 枚举存活线程但不抓取堆栈。
+ *
+ * [Thread.getAllStackTraces] 会触发 VM 全局 safepoint 并为每个线程物化完整栈帧，
+ * 而线程监控只需 name/state/id；周期性全栈快照是不必要的停顿与分配来源。
+ * 改为沿根 [ThreadGroup] 层级枚举，堆栈仅在确有需要时（BLOCKED 上报）按线程抓取。
+ *
+ * 顶层 internal 函数，便于纯 JUnit 确定性测试（模块本体构造依赖主 Looper）。
+ *
+ * @return 当前存活的线程快照（近似值，枚举期间线程可能创建/退出）
+ */
+internal fun enumerateLiveThreads(): List<Thread> {
+    // 向上走到根线程组，覆盖 main 组与系统组下的全部线程。
+    var root = Thread.currentThread().threadGroup ?: return emptyList()
+    while (root.parent != null) {
+        root = root.parent ?: break
+    }
+    val result = ArrayList<Thread>()
+    collectThreads(root, result)
+    return result
+}
+
+/** 递归收集一个线程组及其子组中的存活线程；activeCount 为估计值，容量不足时扩容重试。 */
+private fun collectThreads(group: ThreadGroup, out: ArrayList<Thread>) {
+    var threads = arrayOfNulls<Thread>(group.activeCount() + THREAD_ENUM_SLACK)
+    var count = group.enumerate(threads, false)
+    while (count >= threads.size) {
+        threads = arrayOfNulls(threads.size * 2)
+        count = group.enumerate(threads, false)
+    }
+    for (index in 0 until count) {
+        threads[index]?.let(out::add)
+    }
+    var groups = arrayOfNulls<ThreadGroup>(group.activeGroupCount() + THREAD_ENUM_SLACK)
+    var groupCount = group.enumerate(groups, false)
+    while (groupCount >= groups.size) {
+        groups = arrayOfNulls(groups.size * 2)
+        groupCount = group.enumerate(groups, false)
+    }
+    for (index in 0 until groupCount) {
+        groups[index]?.let { collectThreads(it, out) }
     }
 }
