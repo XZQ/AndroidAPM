@@ -8,6 +8,7 @@ import com.apm.core.ApmModule
 import com.apm.model.ApmEventKind
 import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
+import java.util.Locale
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
@@ -122,14 +123,14 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         if (windowMetrics.gcCountersAvailable && gcTimeRatio >= config.gcTimeRatioThreshold) {
             needReport = true
             if (reason.isNotEmpty()) reason += "; "
-            reason += "GC time ratio: ${"%.1f%%".format(gcTimeRatio * 100)}"
+            reason += "GC time ratio: ${String.format(Locale.ROOT, "%.1f%%", gcTimeRatio * 100)}"
         }
 
         // Heap 快速增长（Memory Churn 典型特征）
         if (heapGrowth >= config.heapGrowthThreshold) {
             needReport = true
             if (reason.isNotEmpty()) reason += "; "
-            reason += "Heap growth: ${"%.1f%%".format(heapGrowth * 100)}"
+            reason += "Heap growth: ${String.format(Locale.ROOT, "%.1f%%", heapGrowth * 100)}"
         }
 
         // ART cumulative allocation counters make this calculation independent
@@ -139,7 +140,7 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         ) {
             needReport = true
             if (reason.isNotEmpty()) reason += "; "
-            reason += "Allocation rate: ${"%.1f".format(windowMetrics.allocationRateKbPerSec)} KiB/s"
+            reason += "Allocation rate: ${String.format(Locale.ROOT, "%.1f", windowMetrics.allocationRateKbPerSec)} KiB/s"
         }
 
         // A reclaim ratio is meaningful only when both a GC and allocation
@@ -150,7 +151,7 @@ class GcMonitorModule(private val config: GcMonitorConfig = GcMonitorConfig()) :
         ) {
             needReport = true
             if (reason.isNotEmpty()) reason += "; "
-            reason += "Low GC reclaim rate: ${"%.1f%%".format(windowMetrics.gcReclaimRate * 100)}"
+            reason += "Low GC reclaim rate: ${String.format(Locale.ROOT, "%.1f%%", windowMetrics.gcReclaimRate * 100)}"
         }
 
         if (needReport) {

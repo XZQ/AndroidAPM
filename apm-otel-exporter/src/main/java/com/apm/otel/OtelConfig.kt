@@ -3,8 +3,9 @@ package com.apm.otel
 /**
  * OpenTelemetry Exporter 配置。
  *
- * 控制如何将 APM 事件桥接到 OpenTelemetry 管线。
- * 所有 OTel 依赖均为 compileOnly，宿主 App 需自行引入 OTel SDK。
+ * 控制如何将 APM 事件映射为 OpenTelemetry 数据模型（Span/Metric/Log）。
+ * 本模块只做数据映射，不依赖也不通过 OTel SDK 发送；实际导出由宿主自行接管
+ * 映射结果并接入其 OTel 管线。
  */
 data class OtelConfig(
     /** 是否启用 OTel 桥接。 */

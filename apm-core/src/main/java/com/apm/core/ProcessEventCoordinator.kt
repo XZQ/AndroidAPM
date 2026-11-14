@@ -911,8 +911,8 @@ class ProcessEventCoordinator internal constructor(
         private const val THREAD_NAME_WRITE = "apm-ipc-write"
         /** 扫描线程名。 */
         private const val THREAD_NAME_SCAN = "apm-ipc-scan"
-        /** 非字母数字正则。 */
-        private const val NON_ALPHA_REGEX = "[^a-zA-Z0-9_.-]"
+        /** 非字母数字正则（编译为 Regex，确保按字符类清洗而非字面替换）。 */
+        private val NON_ALPHA_REGEX = Regex("[^a-zA-Z0-9_.-]")
         /** 替换字符。 */
         private const val REPLACEMENT_UNDERSCORE = "_"
         /** Maximum time allowed for pending IPC writes. */

@@ -120,8 +120,14 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         scheduler?.shutdownNow()
         val installedViews = synchronized(installations) { installations.keys.toList() }
         for (webView in installedViews) {
-            // Restore host clients before releasing installation metadata.
-            uninstall(webView)
+            // Restore host clients before releasing installation metadata. Isolate each
+            // view: stop/撤回可能在非 WebView 创建线程执行，单个 restore 抛错不得中断
+            // 其余视图的清理，否则它们会带着监控 wrapper 却失去安装记录。
+            try {
+                uninstall(webView)
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_UNINSTALL, error)
+            }
         }
         // 释放瀑布图追踪器
         resourceWaterfall?.stop()
@@ -600,5 +606,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         private const val MAX_TRACKED_PAGES = 128
         /** Nanoseconds contained in one millisecond. */
         private const val NANOS_PER_MILLISECOND = 1_000_000L
+        /** 自监控 tag：停止阶段单个 WebView 卸载失败（不中断其余视图清理）。 */
+        private const val ERROR_TAG_UNINSTALL = "webview_uninstall"
     }
 }

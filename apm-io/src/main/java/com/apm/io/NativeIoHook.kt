@@ -1090,9 +1090,6 @@ class NativeIoHook(private val config: IoConfig) {
         /** 路径最大长度。 */
         private const val MAX_PATH_LENGTH = 256
 
-        /** Nanoseconds contained in one millisecond. */
-        private const val NANOS_PER_MILLISECOND = 1_000_000L
-
         /** Closeable 检测间隔。 */
         private const val CLOSEABLE_CHECK_INTERVAL_MS = 1000L
 
