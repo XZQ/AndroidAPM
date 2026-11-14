@@ -1,6 +1,6 @@
 # apm-core 模块架构
 
-> 同步日期：2026-09-07
+> 同步日期：2026-11-15
 
 ## 2026-09-12 撤回写入屏障
 
@@ -178,7 +178,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 3. 显式 `logcat://` endpoint -> `LogcatApmUploader`
 4. 其他/空 endpoint -> payload-safe discard uploader
 
-该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现；built-in HTTP 同时要求 V3/resource/occurrence/byte budget。factory 把固定 resource 和 `maxUploadBatchBytes` 传给 `HttpApmUploader`。非 durable store 且 `enableRetry=true` 时，外层使用 `RetryingApmUploader`。durable store 自己负责持久重试。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
+该选择顺序属于 compatibility 行为。strict profile 在进入 factory 前拒绝空/HTTP/Logcat endpoint，除非 `config.uploader` 是显式非 Logcat 实现；built-in HTTP 同时要求 V3/resource/occurrence/byte budget。factory 把固定 resource 和 `maxUploadBatchBytes` 传给 `HttpApmUploader`。非持久路径一律经有界异步 `RetryingApmUploader` 包装（`enableRetry=false` 时 `maxRetries=0` 单次尝试），使进程级交付屏障绝不等待阻塞式网络 IO；durable store 自己负责持久重试，且与 `RetryingApmUploader` 的组合会快速失败（异步接受即 ACK 会删除未交付的 durable 行）。discard uploader 返回成功以确认并清理本地事件，避免错误配置导致 outbox 无界增长；它只输出一次不含事件 payload 的配置警告。
 
 默认 HTTP uploader 同时接收 `httpHeaders` 和每请求执行的 `HttpHeaderProvider`，动态项覆盖同名静态项；长期密钥不得放入 APK 静态 map。`enableDynamicHttpEndpoint=true` 时，factory 把动态键 `apm.upload.endpoint` 桥接到 uploader；远程值必须是无 user-info 的 HTTPS URL，否则保留 bootstrap endpoint。
 

@@ -1,8 +1,12 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-11-11｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-11-15｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
+
+2026-11-15 全仓「损坏/不一致/低效/不再需要」审查与修复（JDK 17.0.21+9，叠加 2026-11-14 两轮之后的工作树）：并行三路审查加自查，修复确信项、其余列为待审，公开 ABI 零变化。环境修复（非源码）：Android SDK 迁至 `D:/Android-Sdk`（local.properties 更新，gitignored）；Gradle 缓存陈旧致严格依赖校验报未登记的 `kotlinx-coroutines-bom:1.8.0`，干净重解析确认为缓存伪影，未改 verification-metadata。代码：线程监控周期快照改沿根 ThreadGroup 枚举（去除 getAllStackTraces 的 VM 全局 safepoint 全栈物化，新增 ThreadEnumerationTest）；gc-monitor 诊断数值 Locale.ROOT；WebviewModule.onStop 卸载逐项隔离；ProcessEventCoordinator IPC 文件名清洗改编译 Regex；移除 NativeIoHook 死常量；OtelConfig KDoc 更正为纯映射。文档：测试文件数 129、benchmark host 45、UploaderFactory/retries/BLOCKED 行为描述与多处同步日期对齐。待审（未改）：native IO 每 syscall JNI 门控、WebView 卸载线程契约根治、remote-config 到期即时通知、未消费依赖移除（需指纹重生成）等。验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 473/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 883 tests + model 5 / 63 + plugin 1 / 23 共 131 suites / 969 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档 39 Markdown / 153 links。逐项见 AGENTS.md 与项目文档同日条目。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
+2026-11-14 测试密度补强第二轮（JDK 17.0.21+9，叠加同日已知限制处置轮 7d0d89b）：补齐 2026-11-08 补强轮未点名的两个全仓最低 test/main 行数比模块，纯测试与模块文档变更，公开 ABI 零变化。apm-io（0.26→0.51）新增 `NativeIoHookTest`（wrapper 字节/操作计数、EOF/flush/重复 close 不计数、Native 事件归属拆分、路径维度统计与 256 上限 + `<other>` 溢出桶、防御性快照、destroy 清理、零拷贝链条饱和）并扩充 `IoModuleTest` 未启动直通与手动回调 no-op；apm-memory（0.40→0.53）新增 `MemorySampleSchedulerTest`（立即触发/重调度替换/stop 取消/停止后静默拒绝）、`NativeHeapMonitorTest`（enable 幂等、disable 门控）、`LeakCheckQueueResultTest`（retained 交付 suspectFields、32 条提示上限、sink 异常隔离）。模块文档 03/10 同步，03 同时标注 ReferenceChainAnalyzer 已弃用未接线（同日处置轮 @Deprecated，目标 0.2.0 移除）。验证：合并同日两轮后定向 io/memory 测试与根 `testDebugUnitTest --rerun-tasks --no-daemon` 通过——根 Android 124 suites / 880 tests + model 5 / 63 + plugin 1 / 23 共 130 suites / 966 tests 全 0 failures/errors/skips；完整 `python tools/verify_ci.py` 通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
 
 2026-11-14 已知限制处置（JDK 17.0.21+9，基于 177dc16）：把 2026-11-11 审查记录的「刻意不改」项转化为可执行处置，公开 ABI 零变化。`ReferenceChainAnalyzer`/`ReferenceChainResult`/`RefNode`/`GcRootType` 标记 `@Deprecated`（运行时零接线的简化 Hprof 分析器，生产引用链分析应使用 LeakCanary/Shark），按 API 兼容策略「计划移除先弃用并至少保留一个 minor 周期」目标 0.2.0 移除；`docs/API_COMPATIBILITY.md` 新增弃用移除时间表，盘点公开面全部 17 项 `@Deprecated`（新增 4 项 + 既有 13 项运行时已忽略的弃用配置字段），既有字段 0.2.0 逐项评估。tombstone 降级扫描的静默失败改为经模块 logger 写入独立诊断 journal（目录不可读或扫描异常各记一条 WARN，不携带路径内容），公开 `checkRecentTombstone()` 签名不变，internal overload 不入基线；native crash 生产回退依赖 API 30+ ApplicationExitInfo 的现状不变。测试补齐：apm-trace 新增 `TraceConfigTest`（默认值契约、disabled `traced`、超时分支）与 `IdGeneratorTest`（格式与并发唯一性），apm-crash 新增 `NativeCrashTombstoneLoggingTest`（一条 WARN + 限频）。同轮复核更正此前对 `LeakResult`（MemoryReporter 正常接线）、`StackFingerprinter`（EventAggregator 使用）、`LogcatApmUploader`（`logcat://` endpoint 构建）三项在用代码的误判，均不做处置。验证：`python tools/verify_ci.py` 完整通过——强制重跑根 Android 120 suites / 851 tests + model 5 / 63 + included plugin 1 / 23 共 126 suites / 937 tests 全 0 failures/errors/skips，root/plugin apiCheck 与 24 份 ABI 基线零变化，四组指纹 473/218/206/281，release verifier、device-lab 策略与 host tests、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验全部通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz 验收（Server）、外部 Maven staging/promotion（待凭据）。
 
@@ -57,7 +61,7 @@
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
 | 主源码 | 170：165 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 121 |
+| 测试/benchmark 文件 | 129 |
 | Gradle runtime | JDK 17+ |
 | Java toolchain | 17 |
 | Gradle / AGP / Kotlin | 9.6.0 / 9.5.1 / 2.2.21 |

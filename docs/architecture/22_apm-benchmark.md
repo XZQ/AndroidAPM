@@ -104,7 +104,7 @@ exact provenance、lane 完整性、设备/OEM/reset 多样性及单 APK/单源�
 `test_verify_device_matrix.py`、`test_verify_device_soak.py` 和
 `test_run_device_soak.py` 共同覆盖矩阵冲突、lane/物理机匹配、完整与缺失
 汇总、stale provenance、mixed APK、schema-v3 必填来源、dirty source
-预变更拒绝以及既有采集/预算边界。当前 benchmark host suite 共 41 tests；
+预变更拒绝以及既有采集/预算边界。当前 benchmark host suite 共 45 tests；
 这些测试与 plan gate 仍不产生物理性能结论。
 
 ## 8. 当前物理设备证据

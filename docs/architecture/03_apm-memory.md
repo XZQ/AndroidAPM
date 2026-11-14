@@ -1,6 +1,6 @@
 # apm-memory 模块
 
-> 同步日期：2026-10-13｜模块名：`memory`
+> 同步日期：2026-11-14｜模块名：`memory`
 
 ## 目的与入口
 
@@ -17,7 +17,7 @@
 - `OomMonitor`：heap/PSS/native/system trim 阈值
 - `HprofDumper`：直接或可选 fork dump、可选 strip，模块启动与每次成功 dump 后清理，raw/strip 合计最多保留 5 个文件；当前报告文件优先保留，独占临时路径避免同毫秒覆盖
 - `HprofStripProcessor`：以 8 KiB 缓冲流式解析 4/8 字节 ID 与 ART heap/root/class/array 布局，保留结构并等长清零 primitive payload；不缩减文件大小。非法 header/record/type、截断或取消返回失败并删除部分输出
-- `ReferenceChainAnalyzer`：Hprof 索引与 BFS 引用路径
+- `ReferenceChainAnalyzer`：已弃用的未接线死代码（`@Deprecated`，计划 0.2.0 移除）；曾有 Hprof 索引与 BFS 引用路径实现，但存在格式容错与无界内存缺陷，且没有任何运行时调用方。轻量泄漏检测只填 `suspectFields`，生产引用链分析建议使用 LeakCanary/Shark
 - `NativeHeapMonitor`：`Debug.getNativeHeapAllocatedSize`
 
 ## 主要默认值
@@ -48,13 +48,13 @@
 
 - 高风险 Hprof/Native 能力必须显式开启。
 - ViewModel 泄漏不会自动遍历所有实例，宿主需调用 `checkViewModel`。
-- Hprof 引用链分析是本地实现，不等同于 Shark 全特性/全版本兼容。
+- Hprof 引用链分析未接线且已弃用（计划 0.2.0 移除）：轻量检测仅提供 bounded suspectFields，`referenceChain` 恒为空；需要 GC Root 证明时集成 Shark/LeakCanary，不宣称本地实现与其等价。
 - fork dump/Native Heap 需要真机矩阵验证。
 - dump 产物如何上传、脱敏、留存由集成方定义。
 
 ## 测试
 
-配置默认值、真实 Android/Robolectric 采样快照、Reporter 快照/告警/泄漏分类、ViewModel Context/View 引用、OOM warn/critical/system/native 边界、Hprof primitive array 清零与截断输入清理，以及 JNI dump 契约由 module/JVM 测试覆盖。报告逻辑通过内部 sink 验证字段和优先级，不依赖全局 `Apm` 状态；真机 ART dump 仍需设备验证。
+配置默认值、真实 Android/Robolectric 采样快照、Reporter 快照/告警/泄漏分类、ViewModel Context/View 引用、OOM warn/critical/system/native 边界、Hprof primitive array 清零与截断输入清理、采样调度器启动/重调度/停止与停止后拒绝、NativeHeapMonitor enable/disable 门控、LeakCheckQueue retained 交付的 suspectFields/上限/异常 sink 隔离，以及 JNI dump 契约由 module/JVM 测试覆盖。报告逻辑通过内部 sink 验证字段和优先级，不依赖全局 `Apm` 状态；真机 ART dump 仍需设备验证。
 
 ## 时间语义
 

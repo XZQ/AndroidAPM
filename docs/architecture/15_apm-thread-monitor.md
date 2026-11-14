@@ -1,17 +1,17 @@
 # apm-thread-monitor 模块
 
-> 同步日期：2026-07-11｜模块名：`thread_monitor`
+> 同步日期：2026-11-15｜模块名：`thread_monitor`
 
 ## 目的
 
-`ThreadMonitorModule` 每 30s 获取 `Thread.getAllStackTraces()`，检查活动线程数量、同名线程数量和 `Thread.State.BLOCKED` 状态。
+`ThreadMonitorModule` 每 30s 沿根 `ThreadGroup` 层级枚举存活线程（只读 name/state/id，不抓取全栈，避免周期性 VM safepoint 全线程堆栈快照的停顿与分配），检查活动线程数量、同名线程数量和 `Thread.State.BLOCKED` 状态。
 
 ## 已实现检测
 
 - total thread count > 100 -> `thread_count_spike`
 - same thread name count > 5 -> `duplicate_thread`
-- BLOCKED thread list non-empty -> `blocked_thread`
-- 报告名称、状态和截断 stack
+- 连续 3 个采样周期仍 BLOCKED 的线程 -> `blocked_thread`（过滤瞬时锁竞争；恰在达到阈值那次上报一次）
+- 报告名称、状态和截断 stack（堆栈仅对确需上报的 BLOCKED 线程按线程抓取）
 - `registerThreadPool(name, ThreadPoolExecutor)` 后读取真实 pool/active/max/queue/completed；queue ≥ threshold -> `thread_pool_backlog`
 
 ## 默认配置

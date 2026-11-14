@@ -183,7 +183,7 @@ Run all deterministic host tests with:
 python -m unittest discover -s apm-benchmark/tests -p "test_*.py"
 ```
 
-The current host suite contains 41 deterministic tests. An accepted result must
+The current host suite contains 45 deterministic tests. An accepted result must
 retain the runner JSON, exact APK SHA-256, clean source revision, matrix/budget/
 runner hashes, lane, device serial/manufacturer/model/codename/fingerprint/API/
 ABI, raw process samples, profile, acquisition command, external meter evidence

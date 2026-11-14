@@ -1,6 +1,6 @@
 # apm-trace 模块
 
-> 同步日期：2026-07-10｜默认上报 module：`trace`
+> 同步日期：2026-11-15｜默认上报 module：`trace`
 
 ## 目的
 
@@ -62,7 +62,7 @@ val result = ApmTrace.traced("payment") { span ->
 
 ## 边界与测试
 
-没有自动 instrumentation、跨线程 context、sampling 或 W3C header 注入。`ApmSpanTest` 覆盖 ID、parent、attributes、error、duration 和幂等 end。
+没有自动 instrumentation、跨线程 context、sampling 或 W3C header 注入。`ApmSpanTest` 覆盖 ID、parent、attributes、error、duration 和幂等 end；`TraceConfigTest` 覆盖默认值契约、disabled 配置下 `traced` 行为与 `maxSpanDurationMs` 超时分支；`IdGeneratorTest` 覆盖 traceId/spanId 小写十六进制格式与并发唯一性。
 
 ## 时间语义
 

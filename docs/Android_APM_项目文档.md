@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-14｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜124 个测试/benchmark 文件
+> 文档同步：2026-11-15｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜129 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -21,6 +21,32 @@ monitor module
 ```
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
+
+## 2026-11-15 全仓「损坏/不一致/低效/不再需要」审查与修复
+
+2026-11-15 全仓审查与修复（JDK 17.0.21+9，叠加 2026-11-14 两轮之后的工作树）：并行三路审查（文档一致性 / 死代码 / 低效与残留缺陷）加自查，修复确信项、其余列为待审，公开 ABI 零变化。逐项清单见 `AGENTS.md` 同日条目，此处摘要。
+
+环境修复（非源码）：本机 Android SDK 已迁至 `D:/Android-Sdk`，`local.properties`（gitignored）随之更新；Gradle 模块缓存陈旧导致严格依赖校验在构建 classpath 上报未登记的 `kotlinx-coroutines-bom:1.8.0`，经干净重解析确认为缓存伪影而非新增传递依赖，未改任何 verification-metadata。
+
+代码修复：线程监控周期快照由 `Thread.getAllStackTraces()`（VM 全局 safepoint 全线程堆栈物化）改为沿根 `ThreadGroup` 枚举存活线程（只读 name/state/id），堆栈仅在 BLOCKED 上报时按线程抓取，新增 `ThreadEnumerationTest`；gc-monitor 四处诊断数值改 `Locale.ROOT`；`WebviewModule.onStop` 卸载循环逐项隔离，单个非创建线程 restore 失败不再中断其余视图清理；`ProcessEventCoordinator` IPC 文件名清洗由失效的字面 `String.replace` 改编译 `Regex`；移除 `NativeIoHook` 零引用死常量；`OtelConfig` KDoc 更正为纯映射、无 OTel 依赖。
+
+文档一致性：测试/benchmark 文件数统一为 129、benchmark host suite 41→45、`01_apm-core` UploaderFactory 非持久一律异步包装 + 持久组合快速失败、`02_…` persistent worker 重试为 `config.maxRetries` 默认 3（非「10 retries」）、`15_apm-thread-monitor` BLOCKED 连续 3 采样与枚举机制、`18_apm-trace` 补两个测试套件、多处架构文档同步日期与基线对齐。
+
+待审（未改）：native IO 每 syscall JNI 门控、WebView 卸载线程契约根治、remote-config 到期即时通知、sample-app/benchmark 未消费依赖与 apm-core lifecycle.process 的 POM 影响移除（需指纹重生成）等，见本轮交付说明。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 473/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 883 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 969 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档 39 Markdown / 153 links。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
+## 2026-11-14 测试密度补强（apm-io / apm-memory）
+
+2026-11-14 测试密度补强（JDK 17.0.21+9）：补齐全仓 test/main 行数比最低的两个模块（apm-io 0.26→0.51、apm-memory 0.40→0.53），纯测试与文档变更，公开 ABI 零变化。完整清单见 `AGENTS.md` 同日条目，此处摘要。
+
+**apm-io**：新增 `NativeIoHookTest` 覆盖 wrapper 字节/操作计数与 EOF/flush/重复 close 不计数、吞吐量开关门控、非正字节忽略、Native 事件归属拆分（read/write 计数、open/close 与零字节不计）、路径维度读写拆分、防御性快照隔离、256 路径上限与 `<other>` 溢出桶、destroy 清空与后续回调忽略、零拷贝链条饱和不污染吞吐量；`IoModuleTest` 增补未启动时 wrapper 直通与手动回调 no-op。
+
+**apm-memory**：新增 `MemorySampleSchedulerTest`（首次采样立即触发、reschedule 取消旧周期、stop 取消待执行采样、stop 后重调度静默拒绝）、`NativeHeapMonitorTest`（enable 幂等、disable 门控回默认统计、Debug 读取路径）、`LeakCheckQueueResultTest`（retained 目标交付 LeakResult 的 suspectFields 出站字段提示、32 条提示上限、sink 异常隔离）。
+
+**模块文档**：`03_apm-memory.md` 标注 ReferenceChainAnalyzer 已弃用未接线（同日处置轮已加 @Deprecated，目标 0.2.0 移除）并更新测试章节与降级边界；`10_apm-io.md` 同步行为测试覆盖。
+
+验证：合并同日两轮后根 `testDebugUnitTest --rerun-tasks --no-daemon` 通过——根 Android 124 suites / 880 tests + model 5 / 63 + included plugin 1 / 23 共 130 suites / 966 tests，全 0 failures/errors/skips；完整 `python tools/verify_ci.py` 通过。
 
 ## 2026-11-14 已知限制处置与可观测性补强
 
@@ -145,7 +171,7 @@ JDK 17 定向验证通过 included plugin 1 suite / 23 tests、plugin `apiCheck`
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
 | 主源码 | 170：165 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 121 |
+| 测试/benchmark 文件 | 129 |
 | Kotlin | 2.2.21 |
 | AGP | 9.5.1 |
 | Gradle | 9.6.0 |
@@ -475,7 +501,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-121 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
+129 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
 
 测试通过不能代替以下验证：
 

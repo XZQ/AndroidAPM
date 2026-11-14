@@ -1,6 +1,6 @@
 # apm-model / apm-storage / apm-uploader 架构
 
-> 同步日期：2026-09-07
+> 同步日期：2026-11-15
 
 ## 1. 分层关系
 
@@ -161,7 +161,7 @@ v1 没有可逆 payload，升级到 v2 时直接重建表；旧行不能安全�
 - retry_count ≥ caller threshold
 - timestamp 早于当前时间减 maxAge
 
-Persistent worker 传入 10 retries 和 7 days。
+Persistent worker 按 `config.maxRetries`（默认 3，即累计 `maxRetries + 1 = 4` 次失败后 prune）与 7 天 TTL（`OUTBOX_TTL_MS`）清理过期行。
 
 ## 6. FileEventStore 兼容路径
 

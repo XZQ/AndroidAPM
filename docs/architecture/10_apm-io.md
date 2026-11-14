@@ -1,6 +1,6 @@
 # apm-io 模块
 
-> 同步日期：2026-07-11｜模块名：`io`
+> 同步日期：2026-11-14｜模块名：`io`
 
 ## 目的与接入层次
 
@@ -58,7 +58,7 @@ Java wrapper 在底层 read/write/close 已完成后执行的全部监控 bookke
 
 ## 测试
 
-Config、module、NativeIoHookInstaller 降级和 JNI contract 有测试；真实 PLT hook、ABI、16 KiB page 与文件系统行为需真机测试。
+Config、module 未启动直通、NativeIoHookInstaller 降级和 JNI contract 有测试；NativeIoHook 行为测试覆盖 wrapper 字节/操作计数、EOF 与 flush/close 不计数、Native read/write/open/close/零字节归属、路径维度统计与 256 上限加 `<other>` 溢出桶、防御性快照、destroy 清理与零拷贝链条饱和。真实 PLT hook、ABI、16 KiB page 与文件系统行为需真机测试。
 
 ## 时间语义
 
