@@ -22,6 +22,18 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-15 最佳实践落地：未消费依赖清理 + 会话表有界化（第三轮）
+
+2026-11-15 把第二轮「仍待审」中可安全落地者按最佳实践处置，公开 ABI 零变化，新增 1 个测试。逐项见 `AGENTS.md` 同日第三轮条目，此处摘要。
+
+未消费依赖清理：移除 sample-app 的 core-ktx/material（代码零引用）与 junit/mockito testImplementation（无 test source set）、benchmark 的 androidx-test-ext-junit（androidTest 仅用 InstrumentationRegistry，来自 monitor）、apm-core 零消费的 implementation(lifecycle.process)（apm-memory 仍 api 提供，经 bundle 的消费方不受影响；apm-core 发布 POM 随之去除该运行时依赖，属发布说明项）。删除孤儿 catalog 条目。根指纹干净重生成 473→431；sample-app 移除显式 core-ktx 后由 appcompat 传递解析 core/core-ktx 1.13.0（原 1.13.1，demo 无功能影响），新增两组件校验和已对照 Google Maven 官方 sha256 逐一 MATCH；consumer/plugin/build-logic 指纹不变（281/218/206）。
+
+会话表有界化：NativeIoHook activeSessions/openFdPaths 增加 4096 上限——未启用 Closeable 泄漏检测时 GC 清理线程不运行，只创建不 close 的 wrapper 会无限累积，超限逐出最旧会话保证内存有界；新增 session-cap 测试。
+
+IPC 字节预算决策（刻意不改）：publishEncodedFile 保留跨进程锁内自愈式 listFiles+length 重算，不做缓存——跨进程缓存有预算漂移/超限风险，16MiB 预算内有界且 consumer 快速消费，正确性优先于边际性能。仍待审：native IO 每 syscall JNI 门控（需真机）、session-less fd 吞吐语义。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 431/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 890 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 976 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
 ## 2026-11-15 待审项深度核实与修复（第二轮）
 
 2026-11-15 对同日第一轮「待审」清单逐项读码核实，确认并修复可安全落地的问题，公开 ABI 零变化，新增 6 个测试。逐项清单见 `AGENTS.md` 同日第二轮条目，此处摘要。
