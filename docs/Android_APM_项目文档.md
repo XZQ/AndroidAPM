@@ -22,6 +22,16 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-15 native IO 吞吐语义收敛（第四轮）
+
+2026-11-15 深度核实第三轮「仍待审」两项并按最佳实践处置，公开 ABI 零变化，测试数不变（native 行为变更无 JVM 直测）。逐项见 `AGENTS.md` 同日第四轮条目，此处摘要。
+
+session-less fd 吞吐语义（已修复）：native read/write hook 原先对无会话 fd（generation==0，含 hook 安装前已打开、socket/eventfd/管道、stdin/stdout/stderr）以 path=unknown 上报，把非文件 IO 计入文件吞吐造成污染；现改为只上报有会话跟踪的文件 IO（session_matches 初始 0、仅 generation 匹配时置 1），跳过无会话 fd，使文件吞吐统计准确并减少无意义 JNI 跨越；generation 校验仍防 fd 复用串线。FD 泄漏/Closeable 泄漏检测不受影响。
+
+每 syscall 原生侧阈值门控（刻意不做）：默认 enableThroughputStats=true 时每次 read/write 都需上报计数，原生门控仅在关闭吞吐（非默认）时受益，且需把阈值/开关下沉 native、改 JNI 契约并真机验证，风险大于收益，保留现状并已在 10_apm-io.md 记录决策。native 行为变更无法 JVM 直测，建议真机抽查文件吞吐不再含 unknown。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 431/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 890 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 976 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
 ## 2026-11-15 最佳实践落地：未消费依赖清理 + 会话表有界化（第三轮）
 
 2026-11-15 把第二轮「仍待审」中可安全落地者按最佳实践处置，公开 ABI 零变化，新增 1 个测试。逐项见 `AGENTS.md` 同日第三轮条目，此处摘要。
