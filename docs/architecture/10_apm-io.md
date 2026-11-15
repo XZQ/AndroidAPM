@@ -10,7 +10,7 @@
 
 ### Native PLT Hook
 
-`enableNativePltHook=true` 时尝试加载 `libapm-io.so`。C 层运行时 `dlopen/dlsym` 解析 `libxhook.so`，按 xhook 的“调用方 ELF pathname”语义匹配 `.*\.so$` 的 PLT，并忽略 `libapm-io.so`/`libxhook.so` 自身，然后 hook open/openat/read/write/close；xhook 缺失或安装失败只保留宿主显式 wrapper 路径。C 回调使用 thread-local depth 防止 APM 自身 IO 递归；patched/recording 使用 C11 atomic 分离，stop 后 PLT 即使仍存在也只调用原函数，再次 start 不重复注册。Native pthread 仅在未附加时 attach JVM，并通过 pthread TLS destructor detach；非 ASCII、控制字符和字面 `%` 路径字节使用无歧义 `%HH` 编码，截断时追加完整输入的稳定哈希后缀，JNI 构造失败会清除监控异常。
+`enableNativePltHook=true` 时尝试加载 `libapm-io.so`。C 层运行时 `dlopen/dlsym` 解析 `libxhook.so`，按 xhook 的“调用方 ELF pathname”语义匹配 `.*\.so$` 的 PLT，并忽略 `libapm-io.so`/`libxhook.so` 自身，然后 hook open/openat/read/write/close；xhook 缺失或安装失败只保留宿主显式 wrapper 路径。C 回调使用 thread-local depth 防止 APM 自身 IO 递归；patched/recording 使用 C11 atomic 分离，stop 后 PLT 即使仍存在也只调用原函数，再次 start 不重复注册。Native pthread 仅在未附加时 attach JVM，并通过 pthread TLS destructor detach；非 ASCII、控制字符和字面 `%` 路径字节使用无歧义 `%HH` 编码，截断时追加完整输入的稳定哈希后缀，JNI 构造失败会清除监控异常。read/write 回调只上报有会话跟踪的文件 IO：无会话的 fd（hook 安装前已打开、socket/eventfd/管道、stdin/stdout/stderr）不属于文件 IO，直接跳过，不再以 `unknown` 计入吞吐，避免非文件 IO 污染文件吞吐统计并减少无意义 JNI 跨越；generation 校验仍防 fd 复用串线。**刻意不做每 syscall 的原生侧阈值门控**：默认 `enableThroughputStats=true` 时每次 read/write 都需上报计数，原生门控仅在关闭吞吐（非默认）时受益，且需把阈值/开关下沉 native、改 JNI 契约并真机验证，风险大于收益，故保留现状。
 
 Native target 设置 16 KiB page-size linker alignment；JNI 静态方法绑定有 contract test。
 

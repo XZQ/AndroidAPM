@@ -617,8 +617,11 @@ ssize_t hooked_read(int fd, void *buf, size_t count) {
     if (record && result > 0 && is_valid_fd(fd)) {
         long long end_ns = get_time_ns();
         long long duration_ms = ns_to_ms(end_ns - start_ns);
-        char path[MAX_PATH_LENGTH] = "unknown";
-        int session_matches = generation == 0;
+        char path[MAX_PATH_LENGTH] = "";
+        /* 只上报有会话跟踪的文件 IO。无会话的 fd（hook 安装前已打开、socket/eventfd/管道、
+           stdin/stdout/stderr）不属于文件 IO，跳过以免以 "unknown" 污染文件吞吐统计，
+           同时减少无意义的 JNI 跨越。generation 校验仍防止 fd 复用串线。 */
+        int session_matches = 0;
         pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
         if (generation != 0 && session->in_use && session->generation == generation) {
@@ -663,8 +666,9 @@ ssize_t hooked_write(int fd, const void *buf, size_t count) {
     if (record && result > 0 && is_valid_fd(fd)) {
         long long end_ns = get_time_ns();
         long long duration_ms = ns_to_ms(end_ns - start_ns);
-        char path[MAX_PATH_LENGTH] = "unknown";
-        int session_matches = generation == 0;
+        char path[MAX_PATH_LENGTH] = "";
+        /* 只上报有会话跟踪的文件 IO；无会话的 fd 不属于文件 IO，跳过以免污染吞吐并减少 JNI 跨越。 */
+        int session_matches = 0;
         pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
         if (generation != 0 && session->in_use && session->generation == generation) {
