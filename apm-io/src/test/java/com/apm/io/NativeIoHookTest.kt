@@ -278,9 +278,34 @@ class NativeIoHookTest {
         }
     }
 
+    /** 未启用泄漏检测时 GC 清理不运行，会话表仍必须有界，不得随只创建不 close 的 wrapper 无限增长。 */
+    @Test
+    fun `session table stays bounded when leak cleanup is disabled`() {
+        val hook = NativeIoHook(quietConfig())
+        hook.init()
+        try {
+            // 强引用持有 wrapper，排除 GC 干扰；超过会话上限后最旧会话被逐出。
+            val held = ArrayList<java.io.InputStream>()
+            repeat(SESSION_CAP + SESSION_OVERFLOW) {
+                held.add(hook.wrapInputStream(ByteArrayInputStream(byteArrayOf(1)), TEST_PATH))
+            }
+            val field = NativeIoHook::class.java.getDeclaredField("activeSessions").apply { isAccessible = true }
+            val sessions = field.get(hook) as java.util.concurrent.ConcurrentHashMap<*, *>
+            assertTrue("sessions=${sessions.size}", sessions.size <= SESSION_CAP)
+        } finally {
+            hook.destroy()
+        }
+    }
+
     companion object {
         /** 测试路径。 */
         private const val TEST_PATH = "test-path"
+
+        /** 与 NativeIoHook.MAX_TRACKED_SESSIONS 保持一致的会话容量上限。 */
+        private const val SESSION_CAP = 4096
+
+        /** 超出会话上限的额外 wrapper 数。 */
+        private const val SESSION_OVERFLOW = 16
 
         /** 全局统计 key：总读取字节。 */
         private const val KEY_TOTAL_READ_BYTES = "totalReadBytes"

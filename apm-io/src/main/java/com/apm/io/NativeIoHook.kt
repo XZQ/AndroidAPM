@@ -305,6 +305,14 @@ class NativeIoHook(private val config: IoConfig) {
     private fun registerSession(proxy: Any, path: String): Int {
         val sessionId = nextSessionId.incrementAndGet()
         proxySessionIds[proxy] = sessionId
+        // 会话表有界：未启用泄漏检测时 GC 清理不运行，超限则逐出最旧会话，
+        // 防止只创建不 close 的 wrapper 让 activeSessions/openFdPaths 无限增长。
+        if (activeSessions.size >= MAX_TRACKED_SESSIONS) {
+            activeSessions.keys.minOrNull()?.let { oldest ->
+                activeSessions.remove(oldest)
+                openFdPaths.remove(oldest)
+            }
+        }
         activeSessions[sessionId] = IoSession(
             path = path,
             openTime = ApmClock.monotonicTimeMillis(),
@@ -1077,6 +1085,12 @@ class NativeIoHook(private val config: IoConfig) {
 
         /** Maximum source/destination copy chains retained by zero-copy analysis. */
         private const val MAX_TRACKED_COPY_CHAINS = 256
+
+        /**
+         * 会话表容量上限。未启用 Closeable 泄漏检测时 GC 清理线程不运行，
+         * 只创建不 close 的 wrapper 会无限累积会话；此上限保证内存有界。
+         */
+        private const val MAX_TRACKED_SESSIONS = 4096
 
         /** 字段：源路径（零拷贝）。 */
         private const val FIELD_FROM_PATH = "fromPath"

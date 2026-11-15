@@ -43,7 +43,7 @@ Native target 设置 16 KiB page-size linker alignment；JNI 静态方法绑定�
 
 ## 线程与资源
 
-FD monitor 和 ReferenceQueue monitor 是 daemon/background 线程；throughput 通过操作数窗口限制事件频率。duplicate-read/small-buffer/throughput 最多保留 256 个路径，超限吞吐合并到 `<other>`；zero-copy 最多保留 256 条 copy chain，避免高基数路径造成 SDK 内存增长。duplicate-read 路径表饱和后新路径直接放弃、不再竞争全局锁（已存在路径仍无锁递增），避免高基数路径串行化包装读。Native fd session table 由 mutex 与 generation 保护，避免并发读写数据竞争和 close 后 fd 复用串线；会话只保留路径/打开时间/generation，不再累加无人读取的读写字节。主线程回调快速构造事件，core 负责异步落盘。
+FD monitor 和 ReferenceQueue monitor 是 daemon/background 线程；throughput 通过操作数窗口限制事件频率。duplicate-read/small-buffer/throughput 最多保留 256 个路径，超限吞吐合并到 `<other>`；zero-copy 最多保留 256 条 copy chain，避免高基数路径造成 SDK 内存增长。duplicate-read 路径表饱和后新路径直接放弃、不再竞争全局锁（已存在路径仍无锁递增），避免高基数路径串行化包装读。Native fd session table 由 mutex 与 generation 保护，避免并发读写数据竞争和 close 后 fd 复用串线；会话只保留路径/打开时间/generation，不再累加无人读取的读写字节。Java 会话表（activeSessions/openFdPaths）上限 4096：未启用 Closeable 泄漏检测时 GC 清理线程不运行，超限逐出最旧会话，保证只创建不 close 的 wrapper 不造成无界增长。主线程回调快速构造事件，core 负责异步落盘。
 
 Java wrapper 在底层 read/write/close 已完成后执行的全部监控 bookkeeping 都有异常隔离；业务看到的结果和异常只来自原始流。
 
