@@ -1,6 +1,6 @@
 # apm-otel-exporter 模块
 
-> 同步日期：2026-07-10
+> 同步日期：2026-11-15
 
 ## 真实边界
 
@@ -15,7 +15,7 @@
 - FILE -> 没有专门 signal；可通过通用 Log 输出
 - 所有 kind -> LogRecord-compatible Map（当 exportLogs）
 
-`exportBatch` 合并每个事件的 spans/metrics/logs，不丢中间 log；兼容属性 `log` 返回最后一条。
+`exportBatch` 合并每个事件的 spans/metrics/logs，不丢中间 log；兼容属性 `log` 返回最后一条。Resource 属性在构造时预计算一次（config 不可变），不逐信号重建。Log body 有界：最多 32 个字段、单值 200 字符、总长 4000 字符，避免超大字段撑爆 LogRecord。
 
 ## 映射内容
 

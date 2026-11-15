@@ -94,4 +94,38 @@ class OtelEventBridgeTest {
         assertTrue(body.contains("heap_warning"))
         assertTrue(body.contains("WARN"))
     }
+
+    /** 超大字段值与总长度必须有界，避免撑爆 LogRecord。 */
+    @Test
+    fun logBody_boundsFieldValueAndTotalLength() {
+        val bridge = OtelEventBridge(OtelConfig(enabled = true, exportSpans = false, exportLogs = true))
+        val hugeValue = "x".repeat(10_000)
+        val event = ApmEvent(
+            module = "io", name = "io_issue",
+            kind = ApmEventKind.ALERT, severity = ApmSeverity.WARN,
+            fields = mapOf("big" to hugeValue)
+        )
+
+        val result = bridge.export(event)
+        val body = result.log!!["body"] as String
+        assertTrue(body.length <= 4000)
+        assertTrue(!body.contains(hugeValue))
+    }
+
+    /** 字段数量有界：超过上限的字段不再进入日志体。 */
+    @Test
+    fun logBody_boundsFieldCount() {
+        val bridge = OtelEventBridge(OtelConfig(enabled = true, exportSpans = false, exportLogs = true))
+        val fields = (1..100).associate { "key$it" to it }
+        val event = ApmEvent(
+            module = "io", name = "io_issue",
+            kind = ApmEventKind.ALERT, severity = ApmSeverity.WARN,
+            fields = fields
+        )
+
+        val result = bridge.export(event)
+        val body = result.log!!["body"] as String
+        // 排序后仅前 32 个字段进入日志体；key40 超出上限不应出现。
+        assertTrue(!body.contains("key40="))
+    }
 }

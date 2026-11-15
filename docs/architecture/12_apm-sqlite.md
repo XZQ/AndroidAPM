@@ -1,6 +1,6 @@
 # apm-sqlite 模块
 
-> 同步日期：2026-07-11｜模块名：`sqlite`
+> 同步日期：2026-11-15｜模块名：`sqlite`
 
 ## 目的与接入
 
@@ -14,7 +14,7 @@ Apm.register(module)
 val db = ApmSQLiteDatabase(helper.writableDatabase, module, "app.db")
 ```
 
-wrapper 覆盖常用 `rawQuery/query/insert/update/delete/execSQL` 并自动计时。未覆盖操作可访问 `delegate`；也可手动调用 `onSqlExecuted(sql, durationMs, affectedRows, databaseName)`。
+wrapper 覆盖常用 `rawQuery/query/insert/update/delete/execSQL` 并自动计时。写操作（insert/update/delete/execSQL）统一在 finally 上报，委托抛错的失败慢操作同样有耗时诊断；查询经首个结果访问边界计时。未覆盖操作可访问 `delegate`；也可手动调用 `onSqlExecuted(sql, durationMs, affectedRows, databaseName)`。
 
 ## 检测
 

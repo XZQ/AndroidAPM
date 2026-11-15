@@ -23,6 +23,10 @@ import com.apm.model.ApmEventKind
  */
 class OtelEventBridge(private val config: OtelConfig) {
 
+    /** config 不可变，Resource 属性预计算一次，避免每个信号重复构建 map。 */
+    private val commonResource: Map<String, String> =
+        mapOf("service.name" to config.serviceName) + config.resourceAttributes
+
     /**
      * Maps one APM event into OTel-compatible structured data.
      *
@@ -138,9 +142,7 @@ class OtelEventBridge(private val config: OtelConfig) {
      *
      * @return resource attribute map
      */
-    private fun resourceData(): Map<String, String> {
-        return mapOf("service.name" to config.serviceName) + config.resourceAttributes
-    }
+    private fun resourceData(): Map<String, String> = commonResource
 
     /**
      * 导出结果。
@@ -160,7 +162,7 @@ class OtelEventBridge(private val config: OtelConfig) {
 }
 
 /**
- * 将事件转换为日志文本。
+ * 将事件转换为日志文本。字段数、单值长度与总长度均有界，避免超大字段撑爆 LogRecord。
  */
 private fun ApmEvent.toLogBody(): String {
     val sb = StringBuilder()
@@ -168,10 +170,19 @@ private fun ApmEvent.toLogBody(): String {
     sb.append(" severity=$severity kind=$kind priority=$priority")
     if (fields.isNotEmpty()) {
         sb.append(" fields={")
-        fields.entries.sortedBy { it.key }.forEach { (k, v) ->
-            sb.append("$k=$v ")
+        fields.entries.sortedBy { it.key }.take(MAX_LOG_BODY_FIELDS).forEach { (k, v) ->
+            sb.append("$k=${v.toString().take(MAX_LOG_BODY_VALUE_LENGTH)} ")
         }
         sb.append("}")
     }
-    return sb.toString()
+    return sb.toString().take(MAX_LOG_BODY_LENGTH)
 }
+
+/** 日志体最多携带的字段数。 */
+private const val MAX_LOG_BODY_FIELDS = 32
+
+/** 日志体单个字段值的最大字符数。 */
+private const val MAX_LOG_BODY_VALUE_LENGTH = 200
+
+/** 日志体总最大字符数。 */
+private const val MAX_LOG_BODY_LENGTH = 4000

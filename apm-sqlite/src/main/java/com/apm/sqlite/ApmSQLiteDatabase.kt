@@ -109,10 +109,9 @@ class ApmSQLiteDatabase(
      * @return 受影响行数
      */
     fun update(table: String, values: ContentValues, whereClause: String?, whereArgs: Array<String>?): Int {
-        val startMs = ApmClock.monotonicTimeMillis()
-        val affected = delegate.update(table, values, whereClause, whereArgs)
-        report("UPDATE $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}", startMs, affected)
-        return affected
+        return timedAffected("UPDATE $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}") {
+            delegate.update(table, values, whereClause, whereArgs)
+        }
     }
 
     /**
@@ -124,10 +123,9 @@ class ApmSQLiteDatabase(
      * @return 受影响行数
      */
     fun delete(table: String, whereClause: String?, whereArgs: Array<String>?): Int {
-        val startMs = ApmClock.monotonicTimeMillis()
-        val affected = delegate.delete(table, whereClause, whereArgs)
-        report("DELETE FROM $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}", startMs, affected)
-        return affected
+        return timedAffected("DELETE FROM $table WHERE ${whereClause ?: SUMMARY_NO_SELECTION}") {
+            delegate.delete(table, whereClause, whereArgs)
+        }
     }
 
     /**
@@ -167,6 +165,25 @@ class ApmSQLiteDatabase(
         } finally {
             // 无论成功失败都上报耗时（失败的慢操作同样有诊断价值）
             report(sql, startMs, affectedRows, queryPlanSql, queryPlanArgs)
+        }
+    }
+
+    /**
+     * 计时执行返回影响行数的写操作，并在 finally 上报（含失败），与 [timed] 的失败语义一致。
+     * 影响行数取实际返回值；委托抛错时尚无结果，按 0 行上报但耗时仍具诊断价值。
+     *
+     * @param sql 上报用的 SQL 概要
+     * @param block 实际数据库操作，返回受影响行数
+     * @return 受影响行数
+     */
+    private inline fun timedAffected(sql: String, block: () -> Int): Int {
+        val startMs = ApmClock.monotonicTimeMillis()
+        var affected = 0
+        try {
+            affected = block()
+            return affected
+        } finally {
+            report(sql, startMs, affected)
         }
     }
 
