@@ -1,6 +1,8 @@
 package com.apm.webview
 
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -93,11 +95,12 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         if (config.enableAutoRegister) {
             apmContext?.logger?.w("enableAutoRegister is deprecated and ignored; call install for each WebView")
         }
-        // 仅在启用时创建资源瀑布图追踪器
-        if (config.enableResourceWaterfall) {
-            resourceWaterfall?.stop()
-            resourceWaterfall = ResourceWaterfall(config, apmContext)
-        }
+        // 资源瀑布图与 JS Bridge/Console 一致尊重总开关：仅当模块启用且配置启用时创建。
+        // 禁用总开关时不得留下仍会发事件的活跃 recorder；独立使用请走 ResourceWaterfall 公开构造器。
+        resourceWaterfall?.stop()
+        resourceWaterfall = if (started && config.enableResourceWaterfall) {
+            ResourceWaterfall(config, apmContext)
+        } else null
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.WEBVIEW, started)
         if (started) {
             apmContext?.setHostIntegrationActiveRegistrations(
@@ -152,12 +155,16 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         val monitoringClient = MonitoringWebViewClient(this, webViewClient)
         val monitoringChrome = MonitoringWebChromeClient(this, webChromeClient)
         // Store metadata before assignment so an immediate stop can restore it.
+        // 捕获安装线程 Looper：WebView 的 setWebViewClient/setWebChromeClient 强制创建线程，
+        // 卸载若发生在其他线程（如 stop/撤回在工作线程）须 post 回该线程恢复。
+        val installLooper = Looper.myLooper()
         synchronized(installations) {
             installations[webView] = Installation(
                 hostClient = webViewClient,
                 hostChrome = webChromeClient,
                 monitoringClient = monitoringClient,
-                monitoringChrome = monitoringChrome
+                monitoringChrome = monitoringChrome,
+                looper = installLooper
             )
         }
         webView.webViewClient = monitoringClient
@@ -178,13 +185,28 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      */
     fun uninstall(webView: WebView): Boolean {
         val installation = synchronized(installations) { installations.remove(webView) } ?: return false
-        // API 26+ can avoid overwriting a client the host replaced after
-        // installation. API 24-25 lacks public getters, so restore directly.
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webViewClient === installation.monitoringClient) {
-            webView.webViewClient = installation.hostClient
+        // WebView 客户端 setter 强制创建线程；恢复（含 API 26+ 的当前客户端判定）必须整体
+        // 在安装线程执行。跨线程卸载时 post 回安装线程，避免 CalledFromWrongThreadException
+        // 让视图带着监控 wrapper 失去安装记录。
+        val restore = Runnable {
+            try {
+                // API 26+ can avoid overwriting a client the host replaced after
+                // installation. API 24-25 lacks public getters, so restore directly.
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webViewClient === installation.monitoringClient) {
+                    webView.webViewClient = installation.hostClient
+                }
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webChromeClient === installation.monitoringChrome) {
+                    webView.webChromeClient = installation.hostChrome
+                }
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_UNINSTALL, error)
+            }
         }
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webChromeClient === installation.monitoringChrome) {
-            webView.webChromeClient = installation.hostChrome
+        val targetLooper = installation.looper
+        if (targetLooper != null && Looper.myLooper() != targetLooper) {
+            Handler(targetLooper).post(restore)
+        } else {
+            restore.run()
         }
         if (started) {
             apmContext?.setHostIntegrationActiveRegistrations(
@@ -536,7 +558,9 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         /** Assigned monitoring navigation client. */
         val monitoringClient: MonitoringWebViewClient,
         /** Assigned monitoring chrome client. */
-        val monitoringChrome: MonitoringWebChromeClient
+        val monitoringChrome: MonitoringWebChromeClient,
+        /** Install-thread looper used to restore clients on the WebView's own thread; null when absent. */
+        val looper: Looper?
     )
 
     companion object {

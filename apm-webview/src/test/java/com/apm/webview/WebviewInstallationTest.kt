@@ -45,6 +45,25 @@ class WebviewInstallationTest {
         assertSame(hostChrome, webView.webChromeClient)
     }
 
+    /** Uninstall from a non-creation thread posts client restoration back to the install thread. */
+    @Test
+    fun `off-thread uninstall restores clients on the install thread`() {
+        val webView = WebView(RuntimeEnvironment.getApplication())
+        val hostClient = WebViewClient()
+        val hostChrome = WebChromeClient()
+        val module = WebviewModule()
+        module.install(webView, hostClient, hostChrome)
+
+        val uninstaller = Thread { module.uninstall(webView) }.apply { isDaemon = true; start() }
+        uninstaller.join(TimeUnit.SECONDS.toMillis(AWAIT_SECONDS))
+        assertFalse(uninstaller.isAlive)
+
+        // 恢复被 post 回安装线程；在 Robolectric 主 Looper 上执行后才真正还原宿主客户端。
+        org.robolectric.shadows.ShadowLooper.idleMainLooper()
+        assertSame(hostClient, webView.webViewClient)
+        assertSame(hostChrome, webView.webChromeClient)
+    }
+
     /** Navigation callbacks reach the original host client exactly once. */
     @Test
     fun `wrapped navigation client preserves callback`() {

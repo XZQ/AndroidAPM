@@ -59,6 +59,29 @@ class WebviewModuleTest {
         // 无异常即通过
     }
 
+    /** 资源瀑布图与总开关一致：禁用总开关时不得返回仍会发事件的活跃 recorder。 */
+    @Test
+    fun `resource waterfall respects master switch`() {
+        val disabled = WebviewModule(WebviewConfig(enableWebviewMonitor = false))
+        disabled.onStart()
+        assertNull(disabled.getResourceWaterfall())
+        disabled.onStop()
+
+        val enabled = WebviewModule(WebviewConfig(enableWebviewMonitor = true))
+        enabled.onStart()
+        assertNotNull(enabled.getResourceWaterfall())
+        enabled.onStop()
+    }
+
+    /** 关闭瀑布图子开关时即使总开关开启也不创建 recorder。 */
+    @Test
+    fun `resource waterfall disabled by sub switch`() {
+        val module = WebviewModule(WebviewConfig(enableResourceWaterfall = false))
+        module.onStart()
+        assertNull(module.getResourceWaterfall())
+        module.onStop()
+    }
+
     /** 自定义配置传入正确。 */
     @Test
     fun `custom config is applied`() {
