@@ -113,6 +113,34 @@ class SignedRemoteConfigProviderTest {
         assertTrue(fixture.store.value.rawJson?.isNotEmpty() == true)
     }
 
+    /** A document expiring mid-interval notifies core without waiting for the next poll. */
+    @Test
+    fun `expiry notifies core without waiting for next poll`() {
+        // 文档在受信接收锚点后 300ms 到期；轮询间隔远大于此，回调只能来自到期闹钟。
+        // issuedAt 取接收锚点，保证 expiresAt > issuedAt 的文档有效性约束。
+        val issuedAtIso = java.time.Instant.ofEpochMilli(SERVER_TIME_MS).toString()
+        val expiresAtIso = java.time.Instant.ofEpochMilli(SERVER_TIME_MS + EXPIRY_NOTICE_DELAY_MS).toString()
+        val fixture = Fixture(response(HTTP_OK, documentJsonWithExpiry(2, expiresAtIso, issuedAtIso), etag = ETAG_TWO))
+        val accepted = java.util.concurrent.CountDownLatch(1)
+        val expired = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger(0)
+
+        fixture.provider.start {
+            if (calls.incrementAndGet() == 1) accepted.countDown() else expired.countDown()
+        }
+        try {
+            // 初始 refresh 接受文档触发第一次回调，并按受信时钟排定到期闹钟。
+            assertTrue(accepted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            // 到期判定基于受信时钟；推进 fake 时钟越过 expiresAt，闹钟触发时即视为到期。
+            fixture.clock.elapsedTimeMs += EXPIRY_NOTICE_DELAY_MS + 1_000L
+            // 若没有到期闹钟，第二次回调只能等 60s 后的下一轮询，远超等待窗口。
+            assertTrue(expired.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(fixture.provider.getBoolean(KEY_ENABLED, false))
+        } finally {
+            fixture.provider.stop()
+        }
+    }
+
     /** Test assembly with deterministic dependencies. */
     private class Fixture(vararg responses: Any) {
         /** In-memory durable cache. */
@@ -210,6 +238,9 @@ class SignedRemoteConfigProviderTest {
         private const val EXPIRED_ELAPSED_TIME_MS = 100_000_000_000L
         private const val TEST_REFRESH_INTERVAL_MS = 60_000L
 
+        /** Expiry delay long enough to advance the fake trusted clock before the alarm fires. */
+        private const val EXPIRY_NOTICE_DELAY_MS = 1_500L
+
         /** Stable rollback error code asserted without inspecting logs. */
         private const val ERROR_REVISION_ROLLBACK = "remote_config_revision_rollback"
         private const val ERROR_REVISION_EQUIVOCATION = "remote_config_revision_equivocation"
@@ -243,9 +274,17 @@ class SignedRemoteConfigProviderTest {
         private fun documentJson(
             revision: Long,
             signature: String = VALID_SIGNATURE
+        ): String = documentJsonWithExpiry(revision, "2026-07-17T00:00:00Z", "2026-07-16T00:00:00Z", signature)
+
+        /** Creates a valid signed document with explicit issue and expiry instants. */
+        private fun documentJsonWithExpiry(
+            revision: Long,
+            expiresAtIso: String,
+            issuedAtIso: String,
+            signature: String = VALID_SIGNATURE
         ): String =
-            "{\"revision\":$revision,\"issuedAt\":\"2026-07-16T00:00:00Z\"," +
-                "\"expiresAt\":\"2026-07-17T00:00:00Z\",\"rolloutBasisPoints\":10000," +
+            "{\"revision\":$revision,\"issuedAt\":\"$issuedAtIso\"," +
+                "\"expiresAt\":\"$expiresAtIso\",\"rolloutBasisPoints\":10000," +
                 "\"payload\":{\"apm.enabled\":true," +
                 "\"apm.sampling.default_basis_points\":2500," +
                 "\"apm.upload.endpoint\":\"https://collector.example/v1/events\"}," +

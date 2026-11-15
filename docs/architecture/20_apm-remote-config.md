@@ -1,6 +1,6 @@
 # apm-remote-config 模块架构
 
-> 同步日期：2026-10-13
+> 同步日期：2026-11-15
 
 ## 1. 职责与依赖
 
@@ -91,8 +91,8 @@ LKG、ETag、可信时间与最高 revision 按 endpoint、appId、environment�
 
 1. 构造时同步加载并重新验签本地 LKG，不做网络。
 2. `Apm.init` 发布完整 runtime state 后调用 `start`。
-3. 使用 `ApmExecutors` 单线程 scheduler 立即刷新，之后 fixed delay；默认 15 分钟。
-4. 新可信 revision、204 或过期导致有效 fingerprint 变化时回调 core。
+3. 使用 `ApmExecutors` 单线程 scheduler 立即刷新，之后 fixed delay；默认 15 分钟。每次刷新/启动后按当前文档 `expiresAt` 与受信时钟排定一次性到期闹钟，到期即通知，而不必等下一轮询。
+4. 新可信 revision、204 或过期导致有效 fingerprint 变化时回调 core；到期由步骤 3 的闹钟即时触发，模块开关 reconcile 不滞后一个轮询周期。
 5. core 在 `initLock` 下重新评估全局/模块开关并停止或恢复模块。
 6. `Apm.stop` 先停止 provider，再拆卸模块和 dispatcher。
 

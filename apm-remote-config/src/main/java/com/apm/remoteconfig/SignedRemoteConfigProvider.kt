@@ -6,6 +6,7 @@ import com.apm.core.throttle.ManagedDynamicConfigProvider
 import com.apm.uploader.HttpHeaderProvider
 import com.google.gson.JsonElement
 import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 
 /**
@@ -69,6 +70,9 @@ class SignedRemoteConfigProvider internal constructor(
     /** Provider-owned scheduler, created only after core starts the managed provider. */
     @Volatile
     private var executor: ScheduledExecutorService? = null
+
+    /** One-shot alarm notifying core at document expiry; guarded by [lifecycleLock]. */
+    private var expiryFuture: ScheduledFuture<*>? = null
 
     /** Core callback invoked when the effective verified view changes or expires. */
     @Volatile
@@ -134,6 +138,8 @@ class SignedRemoteConfigProvider internal constructor(
                     TimeUnit.MILLISECONDS
                 )
             }
+            // 缓存文档可能在首次轮询前到期；为其排定一次性到期通知。
+            rescheduleExpiryLocked()
         }
     }
 
@@ -144,6 +150,8 @@ class SignedRemoteConfigProvider internal constructor(
             executor = null
             onConfigChanged = null
             notifiedFingerprint = null
+            expiryFuture?.cancel(false)
+            expiryFuture = null
             current
         }
         toStop?.shutdownNow()
@@ -171,7 +179,26 @@ class SignedRemoteConfigProvider internal constructor(
             }
         }
         notifyIfEffectiveChanged()
+        // 每次刷新后按最新文档重排到期通知，确保到期即时触达 core 而非等待下一轮询。
+        synchronized(lifecycleLock) { rescheduleExpiryLocked() }
         return result
+    }
+
+    /**
+     * 为当前活跃文档排定一次性到期通知；调用方须持有 [lifecycleLock]。
+     * 到期时 [notifyIfEffectiveChanged] 会把失效视图（fingerprint 归 null）推送给 core，
+     * 驱动模块 kill-switch/灰度即时 reconcile，而不是滞后一个轮询周期。
+     */
+    private fun rescheduleExpiryLocked() {
+        expiryFuture?.cancel(false)
+        expiryFuture = null
+        val exec = executor ?: return
+        val snapshot = state
+        val document = snapshot.document ?: return
+        if (!snapshot.cache.active) return
+        val delayMs = document.expiresAtMs - trustedNowMs(snapshot.cache)
+        if (delayMs <= 0L) return
+        expiryFuture = exec.schedule({ notifyIfEffectiveChanged() }, delayMs, TimeUnit.MILLISECONDS)
     }
 
     /** Accepts a new signed document only after verify, rollback, and durable-cache checks. */
