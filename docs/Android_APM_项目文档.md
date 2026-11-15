@@ -22,6 +22,16 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-15 待审项深度核实与修复（第二轮）
+
+2026-11-15 对同日第一轮「待审」清单逐项读码核实，确认并修复可安全落地的问题，公开 ABI 零变化，新增 6 个测试。逐项清单见 `AGENTS.md` 同日第二轮条目，此处摘要。
+
+WebView：`uninstall` 根治卸载线程契约——捕获安装线程 Looper，跨线程卸载把客户端恢复 post 回安装线程，避免 `CalledFromWrongThreadException` 让视图带着 wrapper 失去安装记录；ResourceWaterfall 与 JS Bridge/Console 一致尊重总开关，仅当 `enableWebviewMonitor` 与 `enableResourceWaterfall` 同时开启才创建模块持有 recorder，禁用总开关返回 null。remote-config：start/每次 refresh 后按文档 `expiresAt` 与受信时钟排定一次性到期闹钟，到期即通知 core reconcile，模块开关不再滞后一个轮询周期。native IO：移除 C 会话表只写无读的读写字节死累加，`hooked_close` 注释更正，duplicate-read 路径表饱和后新路径不再竞争全局锁。OTel：resource 属性预计算一次，log body 有界（32 字段/单值 200/总长 4000）。SQLite：update/delete 改在 finally 上报，与 insert/execSQL 一致，失败慢操作同样有耗时诊断。
+
+仍待审（未改）：native IO 每 syscall JNI 门控（仅 throughput 关闭时受益、需真机验证）、session-less fd 以 unknown 计入吞吐、`enableCloseableLeak=false` 时会话 map 无界、IPC `publishEncodedFile` 每次发布 O(files) stat、sample-app/benchmark 未消费依赖与 apm-core lifecycle.process 移除（需四组指纹重生成 + POM release note）。docs 三个 shell helper 为可用手动 adb 调试工具，保留。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 473/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 889 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 975 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
 ## 2026-11-15 全仓「损坏/不一致/低效/不再需要」审查与修复
 
 2026-11-15 全仓审查与修复（JDK 17.0.21+9，叠加 2026-11-14 两轮之后的工作树）：并行三路审查（文档一致性 / 死代码 / 低效与残留缺陷）加自查，修复确信项、其余列为待审，公开 ABI 零变化。逐项清单见 `AGENTS.md` 同日条目，此处摘要。
