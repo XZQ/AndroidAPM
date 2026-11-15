@@ -180,5 +180,4 @@ dependencies {
     androidTestImplementation(project(":apm-storage"))
     androidTestImplementation(libs.benchmark.junit4)
     androidTestImplementation(libs.androidx.test.runner)
-    androidTestImplementation(libs.androidx.test.ext.junit)
 }
