@@ -129,10 +129,6 @@ typedef struct {
     char path[MAX_PATH_LENGTH];
     /** 打开时间（纳秒）。 */
     long long open_time_ns;
-    /** 总读取字节数。 */
-    long long total_read_bytes;
-    /** 总写入字节数。 */
-    long long total_write_bytes;
     /** 是否已使用（有效数据）。 */
     int in_use;
     /** Monotonic session generation protecting fd reuse races. */
@@ -558,8 +554,6 @@ int hooked_open(const char *pathname, int flags, ...) {
         io_session_t *session = &s_io_sessions[fd];
         copy_path_for_session(pathname, session->path);
         session->open_time_ns = start_ns;
-        session->total_read_bytes = 0;
-        session->total_write_bytes = 0;
         session->in_use = 1;
         session->generation = next_session_generation_locked();
         pthread_mutex_unlock(&s_sessions_mutex);
@@ -593,8 +587,6 @@ int hooked_openat(int dirfd, const char *pathname, int flags, ...) {
         io_session_t *session = &s_io_sessions[fd];
         copy_path_for_session(pathname, session->path);
         session->open_time_ns = start_ns;
-        session->total_read_bytes = 0;
-        session->total_write_bytes = 0;
         session->in_use = 1;
         session->generation = next_session_generation_locked();
         pthread_mutex_unlock(&s_sessions_mutex);
@@ -630,7 +622,6 @@ ssize_t hooked_read(int fd, void *buf, size_t count) {
         pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
         if (generation != 0 && session->in_use && session->generation == generation) {
-            session->total_read_bytes += (long long)result;
             strncpy(path, session->path, MAX_PATH_LENGTH - 1);
             path[MAX_PATH_LENGTH - 1] = '\0';
             session_matches = 1;
@@ -677,7 +668,6 @@ ssize_t hooked_write(int fd, const void *buf, size_t count) {
         pthread_mutex_lock(&s_sessions_mutex);
         io_session_t *session = &s_io_sessions[fd];
         if (generation != 0 && session->in_use && session->generation == generation) {
-            session->total_write_bytes += (long long)result;
             strncpy(path, session->path, MAX_PATH_LENGTH - 1);
             path[MAX_PATH_LENGTH - 1] = '\0';
             session_matches = 1;
@@ -699,7 +689,8 @@ ssize_t hooked_write(int fd, const void *buf, size_t count) {
 
 /**
  * Hook 后的 close 函数。
- * 计算会话总耗时，汇总读写字节数后通知 Java 层。
+ * 仅按本次 close 的 generation 清理会话表，防止 fd 复用竞态；close 生命周期不计入
+ * syscall 耗时，也不向 Java 层发通知（读写吞吐已在 read/write 回调中逐次上报）。
  */
 int hooked_close(int fd) {
     int record = should_record_io();

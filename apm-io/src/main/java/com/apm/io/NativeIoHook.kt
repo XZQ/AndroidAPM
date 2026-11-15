@@ -46,6 +46,10 @@ class NativeIoHook(private val config: IoConfig) {
     /** 文件读取计数器：path → 读取次数。 */
     private val readFileCounts = ConcurrentHashMap<String, Int>()
 
+    /** 读取计数路径表已达上限；饱和后新路径不再进入全局锁，避免高基数路径串行化包装读。 */
+    @Volatile
+    private var readCountSaturated = false
+
     /** Bounded paths that already emitted a small-buffer finding. */
     private val smallBufferReportedPaths = Collections.newSetFromMap(ConcurrentHashMap<String, Boolean>())
 
@@ -536,9 +540,14 @@ class NativeIoHook(private val config: IoConfig) {
     /** Increments duplicate-read state without allowing unique paths to grow memory without bound. */
     private fun incrementBoundedReadCount(path: String): Int? {
         readFileCounts.computeIfPresent(path) { _, count -> count + 1 }?.let { return it }
+        // 饱和后新路径直接放弃，不再竞争全局锁；已存在路径仍由上面的无锁递增处理。
+        if (readCountSaturated) {
+            return null
+        }
         synchronized(readFileCounts) {
             readFileCounts.computeIfPresent(path) { _, count -> count + 1 }?.let { return it }
             if (readFileCounts.size >= MAX_TRACKED_PATHS) {
+                readCountSaturated = true
                 return null
             }
             readFileCounts[path] = 1
@@ -870,6 +879,7 @@ class NativeIoHook(private val config: IoConfig) {
         }
         activeSessions.clear()
         readFileCounts.clear()
+        readCountSaturated = false
         smallBufferReportedPaths.clear()
         closeableRefs.clear()
         sessionRefs.clear()
