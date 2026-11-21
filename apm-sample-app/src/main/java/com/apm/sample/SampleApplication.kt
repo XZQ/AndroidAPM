@@ -8,7 +8,14 @@ import com.apm.battery.BatteryConfig
 import com.apm.battery.BatteryModule
 import com.apm.core.Apm
 import com.apm.core.ApmConfig
+import com.apm.core.ApmRuntimeProfile
 import com.apm.core.BizContextProvider
+import com.apm.core.CollectionConsent
+import com.apm.core.StorageType
+import com.apm.model.ApmOccurrenceContext
+import com.apm.model.ApmResourceContext
+import com.apm.model.SerializationFormat
+import java.util.UUID
 import com.apm.crash.CrashConfig
 import com.apm.crash.CrashModule
 import com.apm.fps.FpsConfig
@@ -101,27 +108,70 @@ class SampleApplication : Application() {
 
         // 1. 初始化 APM 框架
         val initStartedNs = SystemClock.elapsedRealtimeNanos()
-        Apm.init(
-            application = this,
-            config = ApmConfig(
-                endpoint = if (soakOfflineCollector) "" else "logcat://sample",
-                uploader = if (soakOfflineCollector) OfflineSoakUploader else null,
-                debugLogging = !soakOfflineCollector,
-                maxRetries = if (soakOfflineCollector) SOAK_MAX_RETRIES else DEFAULT_MAX_RETRIES,
-                retryBaseDelayMs = if (soakOfflineCollector) {
-                    SOAK_RETRY_DELAY_MS
-                } else {
-                    DEFAULT_RETRY_DELAY_MS
-                },
-                defaultContext = mapOf(
-                    "appId" to packageName,
-                    "buildType" to if (BuildConfig.DEBUG) "debug" else "release"
+        if (BuildConfig.APM_INGEST_KEY.isNotBlank() && !soakOfflineCollector) {
+            // Opt-in strict V3 delivery: occurrence identity is frozen at init so every
+            // durable row carries the exact release/build/variant/installation facts.
+            // The anonymous installation ID is generated once per install and persisted
+            // locally; the server pseudonymizes it with a tenant-scoped HMAC.
+            val installationId = strictInstallationId()
+            Apm.init(
+                application = this,
+                config = ApmConfig(
+                    endpoint = BuildConfig.APM_STRICT_ENDPOINT,
+                    serializationFormat = SerializationFormat.PROTOBUF_ENVELOPE_V3,
+                    runtimeProfile = ApmRuntimeProfile.PRODUCTION_STRICT,
+                    initialCollectionConsent = CollectionConsent.GRANTED,
+                    debugLogging = false,
+                    enablePiiSanitization = true,
+                    storageType = StorageType.SQLITE,
+                    httpHeaders = mapOf(
+                        "Authorization" to "Bearer ${BuildConfig.APM_INGEST_KEY}"
+                    ),
+                    resourceContext = ApmResourceContext(
+                        serviceName = packageName,
+                        serviceVersion = BuildConfig.VERSION_NAME,
+                        deploymentEnvironment = "staging",
+                        installationId = installationId
+                    ),
+                    defaultContext = mapOf(
+                        "appId" to packageName,
+                        "buildType" to if (BuildConfig.DEBUG) "debug" else "release"
+                    ),
+                    bizContextProvider = BizContextProvider {
+                        mapOf("session" to "sample-demo")
+                    }
                 ),
-                bizContextProvider = BizContextProvider {
-                    mapOf("session" to "sample-demo")
-                }
+                occurrenceContext = ApmOccurrenceContext(
+                    serviceVersion = BuildConfig.VERSION_NAME,
+                    versionCode = BuildConfig.VERSION_CODE.toString(),
+                    appBuild = if (BuildConfig.DEBUG) "debug" else "release",
+                    variant = if (BuildConfig.DEBUG) "debug" else "release",
+                    installationId = installationId
+                )
             )
-        )
+        } else {
+            Apm.init(
+                application = this,
+                config = ApmConfig(
+                    endpoint = if (soakOfflineCollector) "" else "logcat://sample",
+                    uploader = if (soakOfflineCollector) OfflineSoakUploader else null,
+                    debugLogging = !soakOfflineCollector,
+                    maxRetries = if (soakOfflineCollector) SOAK_MAX_RETRIES else DEFAULT_MAX_RETRIES,
+                    retryBaseDelayMs = if (soakOfflineCollector) {
+                        SOAK_RETRY_DELAY_MS
+                    } else {
+                        DEFAULT_RETRY_DELAY_MS
+                    },
+                    defaultContext = mapOf(
+                        "appId" to packageName,
+                        "buildType" to if (BuildConfig.DEBUG) "debug" else "release"
+                    ),
+                    bizContextProvider = BizContextProvider {
+                        mapOf("session" to "sample-demo")
+                    }
+                )
+            )
+        }
         apmInitDurationNs = (SystemClock.elapsedRealtimeNanos() - initStartedNs).coerceAtLeast(0L)
 
         // 2. 注册 Memory 模块
@@ -208,6 +258,19 @@ class SampleApplication : Application() {
         Apm.register(RenderModule(RenderConfig()))
     }
 
+    /**
+     * One anonymous installation identity per app install, persisted across process restarts.
+     * It is never a hardware ID; the collector replaces it with a tenant-scoped HMAC before
+     * persistence. Clearing app data intentionally starts a new installation identity.
+     */
+    private fun strictInstallationId(): String {
+        val prefs = getSharedPreferences(STRICT_IDENTITY_PREFERENCES, MODE_PRIVATE)
+        prefs.getString(STRICT_INSTALLATION_KEY, null)?.let { return it }
+        val generated = UUID.randomUUID().toString()
+        prefs.edit().putString(STRICT_INSTALLATION_KEY, generated).apply()
+        return generated
+    }
+
     /** Failing transport used to exercise the durable outbox without changing device networking. */
     private object OfflineSoakUploader : ApmUploader {
         /** Keeps every accepted event in the durable retry path. */
@@ -217,6 +280,12 @@ class SampleApplication : Application() {
     companion object {
         /** App-private preferences edited by the exported sample Activity for the next process. */
         internal const val SOAK_PREFERENCES_NAME = "apm-device-soak"
+
+        /** Private storage for the anonymous strict-delivery installation identity. */
+        private const val STRICT_IDENTITY_PREFERENCES = "apm-strict-identity"
+
+        /** Preference key holding the one-time generated installation UUID. */
+        private const val STRICT_INSTALLATION_KEY = "installation-id"
 
         /** Boolean preference selecting the SDK-enabled or control process. */
         internal const val SOAK_SDK_ENABLED_KEY = "sdk-enabled"

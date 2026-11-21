@@ -25,9 +25,22 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            // Opt-in strict V3 delivery to the Seoul staging collector. The ingest key
+            // is injected at build time (-Papm.ingestKey=... or ~/.gradle/gradle.properties)
+            // and never committed; without it the release build keeps logcat delivery.
+            val strictEndpoint = (project.findProperty("apm.endpoint") as String?)
+                ?: "https://43.133.227.175"
+            val ingestKey = (project.findProperty("apm.ingestKey") as String?) ?: ""
+            buildConfigField("String", "APM_STRICT_ENDPOINT", "\"$strictEndpoint\"")
+            buildConfigField("String", "APM_INGEST_KEY", "\"$ingestKey\"")
         }
         getByName("debug") {
             applicationIdSuffix = ".debug"
+            val strictEndpoint = (project.findProperty("apm.endpoint") as String?)
+                ?: "https://43.133.227.175"
+            val ingestKey = (project.findProperty("apm.ingestKey") as String?) ?: ""
+            buildConfigField("String", "APM_STRICT_ENDPOINT", "\"$strictEndpoint\"")
+            buildConfigField("String", "APM_INGEST_KEY", "\"$ingestKey\"")
         }
     }
 
