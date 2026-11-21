@@ -141,6 +141,37 @@ class SignedRemoteConfigProviderTest {
         }
     }
 
+    /** 确定性复现「notify 与 reschedule 之间恰好到期」：重排必须零延迟补发而非静默等下一轮询。 */
+    @Test
+    fun `expiry between notify and reschedule still delivers immediate notice`() {
+        // 第一次回调（notifyIfEffectiveChanged 内、rescheduleExpiryLocked 前）把 fake 时钟
+        // 推过 expiresAt：随后的重排看到 delayMs<=0——正是竞态窗口。
+        // 旧实现静默返回，第二次回调只能等 60s 轮询；新实现零延迟补发。
+        val issuedAtIso = java.time.Instant.ofEpochMilli(SERVER_TIME_MS).toString()
+        val expiresAtIso = java.time.Instant.ofEpochMilli(SERVER_TIME_MS + EXPIRY_NOTICE_DELAY_MS).toString()
+        val fixture = Fixture(response(HTTP_OK, documentJsonWithExpiry(2, expiresAtIso, issuedAtIso), etag = ETAG_TWO))
+        val accepted = java.util.concurrent.CountDownLatch(1)
+        val expired = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger(0)
+
+        fixture.provider.start {
+            if (calls.incrementAndGet() == 1) {
+                accepted.countDown()
+                // 此刻 notifiedFingerprint 已更新为非空基线，reschedule 尚未执行。
+                fixture.clock.elapsedTimeMs += EXPIRY_NOTICE_DELAY_MS + 1_000L
+            } else {
+                expired.countDown()
+            }
+        }
+        try {
+            assertTrue(accepted.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(expired.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertFalse(fixture.provider.getBoolean(KEY_ENABLED, false))
+        } finally {
+            fixture.provider.stop()
+        }
+    }
+
     /** Test assembly with deterministic dependencies. */
     private class Fixture(vararg responses: Any) {
         /** In-memory durable cache. */
@@ -153,7 +184,16 @@ class SignedRemoteConfigProviderTest {
         private val transport = FakeTransport(responses.toMutableList())
 
         /** Provider under test. */
-        val provider = SignedRemoteConfigProvider(
+        var provider = newProvider()
+            private set
+
+        /** Rebuilds the provider so pre-seeded durable cache is loaded, modeling a process restart. */
+        fun rebuildProvider() {
+            provider = newProvider()
+        }
+
+        /** Creates one provider bound to the shared fixture dependencies. */
+        private fun newProvider(): SignedRemoteConfigProvider = SignedRemoteConfigProvider(
             store = store,
             verifier = RemoteConfigSignatureVerifier { keyId, _, signature ->
                 keyId == TEST_KEY_ID &&

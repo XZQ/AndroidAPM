@@ -188,6 +188,8 @@ class SignedRemoteConfigProvider internal constructor(
      * 为当前活跃文档排定一次性到期通知；调用方须持有 [lifecycleLock]。
      * 到期时 [notifyIfEffectiveChanged] 会把失效视图（fingerprint 归 null）推送给 core，
      * 驱动模块 kill-switch/灰度即时 reconcile，而不是滞后一个轮询周期。
+     * 受信时钟已越过 expiresAt 时以零延迟立即触发：静默返回会让「上一轮通知与本轮
+     * 重排之间恰好到期」的文档永远等不到到期通知（只能等下一轮询），构成竞态窗口。
      */
     private fun rescheduleExpiryLocked() {
         expiryFuture?.cancel(false)
@@ -197,8 +199,8 @@ class SignedRemoteConfigProvider internal constructor(
         val document = snapshot.document ?: return
         if (!snapshot.cache.active) return
         val delayMs = document.expiresAtMs - trustedNowMs(snapshot.cache)
-        if (delayMs <= 0L) return
-        expiryFuture = exec.schedule({ notifyIfEffectiveChanged() }, delayMs, TimeUnit.MILLISECONDS)
+        // 已到期：零延迟调度而非直接调用，避免在持有 lifecycleLock 时同步回调宿主。
+        expiryFuture = exec.schedule({ notifyIfEffectiveChanged() }, maxOf(delayMs, 0L), TimeUnit.MILLISECONDS)
     }
 
     /** Accepts a new signed document only after verify, rollback, and durable-cache checks. */
