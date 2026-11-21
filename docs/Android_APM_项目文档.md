@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-15｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜129 个测试/benchmark 文件
+> 文档同步：2026-11-21｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜130 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -21,6 +21,18 @@ monitor module
 ```
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
+
+## 2026-11-21 ANR SIGQUIT 生命周期与分类修复
+
+逐项核实并修复 ANR 模块审查发现的 6 项问题，公开 ABI 零变化，新增 10 测试。逐项见 `AGENTS.md` 同日条目与 `docs/architecture/05_apm-anr.md`，此处摘要。
+
+native 信号安全：SIGQUIT 处理器保存/恢复被中断代码的 errno；注册与注销都清零未消费时间戳（上一会话遗留信号不再误报）；卸载顺序改为先 join 接收线程再恢复原 sigaction（原顺序有「恢复 SIG_DFL 后信号杀进程」竞态）；补 stdlib.h。进程级引用计数 + pthread_mutex：同进程多个 AnrModule 实例共享处理器、互不撤销对方检测，register/unregister 串行化防并发竞态，信号处理器内绝不加锁。
+
+Kotlin 侧：SIGQUIT 分析线程改名 apm-anr-analysis（原与 native 接收线程重名）；原因分类提取为顶层 internal 纯函数 classifyAnrCauseInternal，判定顺序修正为 LOCK/DEADLOCK → IO → BINDER → CPU → UNKNOWN（Binder 阻塞时采样常变化，旧顺序误判 CPU），Binder 关键词改为真实帧；删除 dropbox glob 死路径。新增 AnrCauseClassificationTest（10 tests）。
+
+依赖元数据补登记（非新增依赖）：Gradle 缓存 .module 优先解析暴露 5 个已登记组件伴生 pom/module 校验和缺失，逐一对照 Maven Central 官方 sha256 MATCH 后补登记，根指纹 431→432（组件数口径）。环境修复（非源码）：smoke-tests/maven-consumer/local.properties（gitignored）补 sdk.dir。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 432/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 126 suites / 900 tests + model 5 / 63 + included plugin 1 / 23 共 132 suites / 986 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档 39 Markdown / 163 links。native 行为变更无 JVM 直测，建议真机抽查 start→stop→start 不误报、stop 后 SIGQUIT 不杀进程、双实例先后 stop 检测不失效。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
 
 ## 2026-11-15 native IO 吞吐语义收敛（第四轮）
 
@@ -533,7 +545,7 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十二、测试策略
 
-129 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
+130 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off 与原因分类（含 BINDER 先于 CPU 顺序回归）、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
 
 测试通过不能代替以下验证：
 
