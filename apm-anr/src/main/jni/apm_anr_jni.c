@@ -11,16 +11,21 @@
  *      保证系统的 ANR trace dump 行为不受影响
  * 3. 不做任何 JNI 回调、不分配内存、不加锁 —— Java 侧通过
  *    nativeConsumeSigquitTimestamp 轮询获取信号标志。
+ * 4. SIGQUIT 处置是进程级资源：注册/注销由互斥锁序列化并按引用计数共享，
+ *    同进程多个 AnrModule 实例互不撤销对方的检测；锁只在生命周期函数中
+ *    持有，信号处理器内绝不加锁。
  */
 
 #include <jni.h>
 
 #include <android/log.h>
 #include <dirent.h>
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/syscall.h>
 #include <time.h>
@@ -55,8 +60,18 @@ static pid_t s_signal_catcher_tid = -1;
 /** 注册前的原始 SIGQUIT 处理配置，注销时恢复。 */
 static struct sigaction s_old_sigquit_action;
 
-/** 处理器是否已安装（注册幂等保护）。 */
-static volatile sig_atomic_t s_handler_installed = 0;
+/** 处理器是否已安装（仅在 s_lifecycle_mutex 内读写）。 */
+static int s_handler_installed = 0;
+
+/**
+ * 进程级注册引用计数（仅在 s_lifecycle_mutex 内读写）。
+ * SIGQUIT 处置是进程级资源：同进程多个 AnrModule 实例共享一个处理器，
+ * 最后一个注销者才真正卸载，避免先停的实例撤掉仍在运行实例的检测。
+ */
+static int s_registrations = 0;
+
+/** 序列化注册/注销生命周期，防止并发 start/stop 竞态（信号处理器内绝不加锁）。 */
+static pthread_mutex_t s_lifecycle_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 /** SIGQUIT 接收线程句柄。 */
 static pthread_t s_receiver_thread;
@@ -90,6 +105,9 @@ static long long monotonic_time_ms(void) {
 static void sigquit_handler(int sig, siginfo_t *info, void *context) {
     (void)info;
     (void)context;
+    /* 保存被中断代码的 errno：clock_gettime/syscall 失败时会改写 errno，
+     * 处理器返回后被打断的代码可能正在读取它。 */
+    int saved_errno = errno;
 
     /* 时间戳为 0 时兜底写 1，保证 Java 侧能感知到信号 */
     long long now = monotonic_time_ms();
@@ -100,6 +118,7 @@ static void sigquit_handler(int sig, siginfo_t *info, void *context) {
     if (sig == SIGQUIT && s_signal_catcher_tid > 0) {
         syscall(SYS_tgkill, getpid(), s_signal_catcher_tid, SIGQUIT);
     }
+    errno = saved_errno;
 }
 
 /**
@@ -180,6 +199,7 @@ static void *sigquit_receiver_loop(void *arg) {
 /**
  * 注册 SIGQUIT 信号处理器。
  * 缓存 Signal Catcher tid → 安装 sigaction → 启动接收线程。
+ * 引用计数：处理器已安装时只递增计数并报告成功（进程级共享）。
  * 失败即关闭（fail-closed）：任何一步失败都不安装，返回 JNI_FALSE，
  * Java 侧降级为 Watchdog-only，绝不吞掉系统 ANR 信号。
  *
@@ -192,8 +212,12 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
     (void)env;
     (void)thiz;
 
-    /* 幂等保护：已安装时直接报告成功 */
+    pthread_mutex_lock(&s_lifecycle_mutex);
+
+    /* 已安装：递增引用计数，共享既有处理器（不清零时间戳，避免丢正在等待消费的信号） */
     if (s_handler_installed) {
+        s_registrations++;
+        pthread_mutex_unlock(&s_lifecycle_mutex);
         return JNI_TRUE;
     }
 
@@ -203,8 +227,12 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
     s_signal_catcher_tid = find_signal_catcher_tid();
     if (s_signal_catcher_tid <= 0) {
         LOGE("Signal Catcher thread not found; refusing to install SIGQUIT handler");
+        pthread_mutex_unlock(&s_lifecycle_mutex);
         return JNI_FALSE;
     }
+
+    /* 新会话不得消费上一会话遗留的未消费信号标记，否则重启后会误报 ANR */
+    atomic_store(&s_sigquit_timestamp_ms, 0);
 
     /* 安装 SIGQUIT 处理器，保存原始配置供注销恢复 */
     struct sigaction action;
@@ -214,6 +242,7 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
     action.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
     if (sigaction(SIGQUIT, &action, &s_old_sigquit_action) != 0) {
         LOGE("sigaction(SIGQUIT) failed");
+        pthread_mutex_unlock(&s_lifecycle_mutex);
         return JNI_FALSE;
     }
 
@@ -224,17 +253,24 @@ Java_com_apm_anr_AnrModule_nativeRegisterSigquitHandler(JNIEnv *env, jobject thi
         /* 回滚 sigaction，保持未安装状态 */
         sigaction(SIGQUIT, &s_old_sigquit_action, NULL);
         atomic_store(&s_receiver_running, 0);
+        pthread_mutex_unlock(&s_lifecycle_mutex);
         return JNI_FALSE;
     }
 
     s_handler_installed = 1;
+    s_registrations = 1;
     LOGI("SIGQUIT handler installed, signal catcher tid=%d", (int)s_signal_catcher_tid);
+    pthread_mutex_unlock(&s_lifecycle_mutex);
     return JNI_TRUE;
 }
 
 /**
- * 注销 SIGQUIT 信号处理器。
- * 恢复原始 sigaction 并停止接收线程。
+ * 注销 SIGQUIT 信号处理器（引用计数递减，最后一个注销者真正卸载）。
+ * 卸载顺序：先停止并回收接收线程，再恢复原始 sigaction。
+ * 顺序不可颠倒：接收线程是唯一解除 SIGQUIT 阻塞的线程，若先恢复原处置
+ * （ART 下通常为 SIG_DFL，默认终止进程），在接收线程退出前到达的 SIGQUIT
+ * 会按默认动作直接杀死宿主进程。线程退出后进程级 SIGQUIT 只会被
+ * Signal Catcher 的 sigwait 消费，此时恢复处置是安全的。
  *
  * @param env JNIEnv
  * @param thiz AnrModule 实例
@@ -244,20 +280,34 @@ Java_com_apm_anr_AnrModule_nativeUnregisterSigquitHandler(JNIEnv *env, jobject t
     (void)env;
     (void)thiz;
 
+    pthread_mutex_lock(&s_lifecycle_mutex);
+
     /* 未安装时无需注销 */
     if (!s_handler_installed) {
+        pthread_mutex_unlock(&s_lifecycle_mutex);
         return;
     }
 
-    /* 恢复原始信号处理配置 */
-    sigaction(SIGQUIT, &s_old_sigquit_action, NULL);
+    /* 仍有其他实例持有处理器：只递减计数，不卸载 */
+    if (s_registrations > 1) {
+        s_registrations--;
+        pthread_mutex_unlock(&s_lifecycle_mutex);
+        return;
+    }
 
-    /* 停止并回收接收线程 */
+    /* 先停止并回收接收线程：此后不再有线程解除 SIGQUIT 阻塞 */
     atomic_store(&s_receiver_running, 0);
     pthread_join(s_receiver_thread, NULL);
 
+    /* 再恢复原始信号处理配置 */
+    sigaction(SIGQUIT, &s_old_sigquit_action, NULL);
+
+    /* 丢弃本会话未消费的信号标记，避免泄漏到下一会话 */
+    atomic_store(&s_sigquit_timestamp_ms, 0);
     s_handler_installed = 0;
+    s_registrations = 0;
     LOGI("SIGQUIT handler uninstalled");
+    pthread_mutex_unlock(&s_lifecycle_mutex);
 }
 
 /**
