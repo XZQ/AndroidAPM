@@ -1,6 +1,6 @@
 # apm-remote-config 模块架构
 
-> 同步日期：2026-11-15
+> 同步日期：2026-11-21
 
 ## 1. 职责与依赖
 
@@ -91,7 +91,7 @@ LKG、ETag、可信时间与最高 revision 按 endpoint、appId、environment�
 
 1. 构造时同步加载并重新验签本地 LKG，不做网络。
 2. `Apm.init` 发布完整 runtime state 后调用 `start`。
-3. 使用 `ApmExecutors` 单线程 scheduler 立即刷新，之后 fixed delay；默认 15 分钟。每次刷新/启动后按当前文档 `expiresAt` 与受信时钟排定一次性到期闹钟，到期即通知，而不必等下一轮询。
+3. 使用 `ApmExecutors` 单线程 scheduler 立即刷新，之后 fixed delay；默认 15 分钟。每次刷新/启动后按当前文档 `expiresAt` 与受信时钟排定一次性到期闹钟，到期即通知，而不必等下一轮询。受信时钟已越过 `expiresAt` 时以零延迟立即补发（不静默返回）：否则「上一轮通知与本轮重排之间恰好到期」的文档会永远等不到到期通知，只能滞后到下一轮询——该竞态由 `expiry between notify and reschedule still delivers immediate notice` 确定性回归钉住。
 4. 新可信 revision、204 或过期导致有效 fingerprint 变化时回调 core；到期由步骤 3 的闹钟即时触发，模块开关 reconcile 不滞后一个轮询周期。
 5. core 在 `initLock` 下重新评估全局/模块开关并停止或恢复模块。
 6. `Apm.stop` 先停止 provider，再拆卸模块和 dispatcher。
@@ -125,7 +125,7 @@ LKG、ETag、可信时间与最高 revision 按 endpoint、appId、environment�
 - JDK Ed25519 生成签名，Tink Android verifier 验证 raw key/signature
 - 固定种子 JSON 语法变异，以及签名空白、错误长度和超长输入
 - HTTP identity/auth/ETag、304、响应上限
-- verified 200、204、network LKG、可信 expiry
+- verified 200、204、network LKG、可信 expiry、到期闹钟即时通知与「notify/reschedule 之间恰好到期」零延迟补发回归
 - rollback、同 revision equivocation、cache re-verification
 - core kill switch 停止/恢复与 managed provider shutdown
 - 全局/模块/事件采样和限流 precedence/bounds

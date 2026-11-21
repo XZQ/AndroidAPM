@@ -81,7 +81,7 @@ def add_summary_table(document: Document) -> None:
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "170", "165 Kotlin + 4 C + 1 proto"),
         ("测试文件", "130", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
-        ("当前完整测试", "132 suites / 986 tests", "根 Android 126 / 900 + model 5 / 63；included plugin 另有 1 suite / 23 tests，全部零失败"),
+        ("当前完整测试", "132 suites / 987 tests", "根 Android 126 / 901 + model 5 / 63；included plugin 另有 1 suite / 23 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 36 / min 24", "targetSdk 34；AAR 元数据 minCompileSdk=36 即接入方下限"),
         ("构建栈", "Java 17 toolchain / Gradle 9.6.0", "Gradle runtime JDK 17+ / AGP 9.5.1（内置 Kotlin）/ Kotlin 2.2.21"),

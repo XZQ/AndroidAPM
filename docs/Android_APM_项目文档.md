@@ -22,6 +22,16 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
+## 2026-11-21 环境问题根治（第二轮）
+
+把同日 ANR 轮「过程中排掉的环境问题」从临时绕过转为根治，公开 ABI 零变化，新增 6 测试。逐项见 `AGENTS.md` 同日第二轮条目，此处摘要。
+
+remote-config 到期竞态（真实缺陷）：rescheduleExpiryLocked 原在 delayMs<=0 时静默返回，受信时钟恰在「上一轮通知与本轮重排之间」越过 expiresAt 的文档永远等不到到期通知，只能滞后一个轮询周期（默认 15min）；现零延迟调度立即补发。新增确定性回归（第一次回调内推进 fake 时钟精确命中竞态窗口），旧代码必失败、新代码通过；ANR 轮全量门禁的偶发超时即此缺陷。
+
+release candidate 脚本：safe_clean 由批量 rmtree（触发沙箱 safe-delete 拦截）改为原子 rename 归档到 build/release-candidate-archive/，保留上一份候选证据；新增 ensure_consumer_sdk_config 自动从根 local.properties 传播 sdk.dir 到隔离 consumer（已有配置不覆盖，无来源 fail-closed）。verifier host tests 5→10。JAVA_HOME 持久化为用户级环境变量（本机环境，非源码）。
+
+验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 432/218/206/281、release verifier 10 tests、device-lab 策略与 45 host tests、强制重跑根 Android 126 suites / 901 tests + model 5 / 63 + included plugin 1 / 23 共 132 suites / 987 tests 全 0 failures/errors/skips、25 坐标候选（自动归档）与独立 consumer（自动 SDK 配置）含 ASM 插桩、文档 39 Markdown / 165 links。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
+
 ## 2026-11-21 ANR SIGQUIT 生命周期与分类修复
 
 逐项核实并修复 ANR 模块审查发现的 6 项问题，公开 ABI 零变化，新增 10 测试。逐项见 `AGENTS.md` 同日条目与 `docs/architecture/05_apm-anr.md`，此处摘要。
