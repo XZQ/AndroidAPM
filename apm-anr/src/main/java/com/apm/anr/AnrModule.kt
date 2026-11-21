@@ -412,63 +412,14 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     // ========================================================================
 
     /**
-     * 分类 ANR 原因。
-     * 通过分析主线程堆栈和多次采样结果判断：
-     * - LOCK：堆栈中包含 Object.wait / lock 等关键词
-     * - IO：堆栈中包含 read/write/open / FileInputStream 等关键词
-     * - CPU：堆栈频繁变化，无 IO/锁关键词
-     * - DEADLOCK：多次采样堆栈完全相同 + BLOCKED 状态
+     * 分类 ANR 原因（委托顶层 internal 纯函数，便于纯 JVM 直测）。
      *
      * @param mainStack 主线程堆栈。
      * @param samples 多次堆栈采样。
      * @return ANR 原因分类字符串。
      */
     private fun classifyAnrCause(mainStack: String, samples: List<String>): String {
-        val lowerStack = mainStack.lowercase()
-
-        // 检测锁等待
-        if (containsAny(lowerStack, LOCK_INDICATORS)) {
-            // 检测是否为死锁（多次采样堆栈完全相同）
-            if (samples.size >= MIN_SAMPLES_FOR_DEADLOCK && allSamplesIdentical(samples)) {
-                return ANR_CAUSE_DEADLOCK
-            }
-            return ANR_CAUSE_LOCK
-        }
-
-        // 检测 IO 阻塞
-        if (containsAny(lowerStack, IO_INDICATORS)) {
-            return ANR_CAUSE_IO
-        }
-
-        // 检测 CPU 密集
-        if (samples.size >= MIN_SAMPLES_FOR_DEADLOCK && !allSamplesIdentical(samples)) {
-            return ANR_CAUSE_CPU
-        }
-
-        // 堆栈中包含 Binder 调用
-        if (containsAny(lowerStack, BINDER_INDICATORS)) {
-            return ANR_CAUSE_BINDER
-        }
-
-        return ANR_CAUSE_UNKNOWN
-    }
-
-    /**
-     * 检查字符串是否包含任一关键词。
-     */
-    private fun containsAny(text: String, keywords: Array<String>): Boolean {
-        return keywords.any { text.contains(it) }
-    }
-
-    /**
-     * 检查多次堆栈采样是否完全相同。
-     * 相同表示主线程一直卡在同一个调用点（疑似死锁）。
-     */
-    private fun allSamplesIdentical(samples: List<String>): Boolean {
-        if (samples.isEmpty()) {
-            return false
-        }
-        return samples.all { it == samples[0] }
+        return classifyAnrCauseInternal(mainStack, samples)
     }
 
     // ========================================================================
@@ -580,8 +531,8 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         private const val MODULE_NAME = "anr"
         /** Watchdog 线程名。 */
         private const val THREAD_NAME = "apm-anr-watchdog"
-        /** SIGQUIT 分析线程名。 */
-        private const val SIGQUIT_ANALYSIS_THREAD_NAME = "apm-anr-sigquit"
+        /** SIGQUIT 分析线程名（须区别于 native 接收线程 "apm-anr-sigquit"，便于 trace 归因）。 */
+        private const val SIGQUIT_ANALYSIS_THREAD_NAME = "apm-anr-analysis"
 
         // --- 事件名 ---
         /** ANR 检测事件名。 */
@@ -611,54 +562,6 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         /** Watchdog 检测。 */
         private const val DETECTION_WATCHDOG = "watchdog"
 
-        // --- ANR 原因分类 ---
-        /** ANR 原因：CPU 密集。 */
-        private const val ANR_CAUSE_CPU = "CPU"
-        /** ANR 原因：IO 阻塞。 */
-        private const val ANR_CAUSE_IO = "IO"
-        /** ANR 原因：锁等待。 */
-        private const val ANR_CAUSE_LOCK = "LOCK"
-        /** ANR 原因：死锁。 */
-        private const val ANR_CAUSE_DEADLOCK = "DEADLOCK"
-        /** ANR 原因：Binder 调用阻塞。 */
-        private const val ANR_CAUSE_BINDER = "BINDER"
-        /** ANR 原因：未知。 */
-        private const val ANR_CAUSE_UNKNOWN = "UNKNOWN"
-
-        // --- 锁等待关键词 ---
-        /** 锁等待堆栈指示关键词。 */
-        private val LOCK_INDICATORS = arrayOf(
-            "object.wait", "object.wait(",
-            "locksupport.park", "locksupport.park(",
-            "reentrantlock", "abstractqueuedsynchronizer",
-            "wait(", "monitor.enter"
-        )
-
-        // --- IO 阻塞关键词 ---
-        /** IO 阻塞堆栈指示关键词。 */
-        private val IO_INDICATORS = arrayOf(
-            "fileinputstream", "fileoutputstream",
-            "randomaccessfile", "filechannel",
-            "socketinputstream", "socketoutputstream",
-            ".read(", ".write(", "openat"
-        )
-
-        // --- Binder 调用关键词 ---
-        /** Binder 堆栈指示关键词。 */
-        private val BINDER_INDICATORS = arrayOf(
-            "binder.executetransaction",
-            "binderproxy.transact",
-            "serviceproxy", "activitymanager"
-        )
-
-        // --- traces.txt 路径 ---
-        /** traces.txt 可能的文件路径。 */
-        private val TRACES_FILE_PATHS = arrayOf(
-            "/data/anr/traces.txt",
-            "/data/anr/traces.txt.bugreport",
-            "/data/system/dropbox/[ANR]"
-        )
-
         // --- 常量 ---
         /** 行分隔符。 */
         private const val LINE_SEPARATOR = "\n"
@@ -668,7 +571,94 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         private const val FINGERPRINT_LINES = 5
         /** 堆栈采样指纹行数。 */
         private const val STACK_FINGERPRINT_LINES = 5
-        /** 死锁检测最少采样数。 */
-        private const val MIN_SAMPLES_FOR_DEADLOCK = 2
+
+        // --- traces.txt 路径 ---
+        /** traces.txt 可能的文件路径（真实固定路径；dropbox 目录按事件散列命名，无法静态枚举）。 */
+        private val TRACES_FILE_PATHS = arrayOf(
+            "/data/anr/traces.txt",
+            "/data/anr/traces.txt.bugreport"
+        )
     }
+}
+
+// ============================================================================
+// ANR 原因分类（顶层 internal 纯函数，可纯 JVM 直测）
+// ============================================================================
+
+/** ANR 原因：CPU 密集。 */
+internal const val ANR_CAUSE_CPU = "CPU"
+/** ANR 原因：IO 阻塞。 */
+internal const val ANR_CAUSE_IO = "IO"
+/** ANR 原因：锁等待。 */
+internal const val ANR_CAUSE_LOCK = "LOCK"
+/** ANR 原因：死锁。 */
+internal const val ANR_CAUSE_DEADLOCK = "DEADLOCK"
+/** ANR 原因：Binder 调用阻塞。 */
+internal const val ANR_CAUSE_BINDER = "BINDER"
+/** ANR 原因：未知。 */
+internal const val ANR_CAUSE_UNKNOWN = "UNKNOWN"
+
+/** 死锁/采样判定最少采样数。 */
+private const val MIN_SAMPLES_FOR_CLASSIFICATION = 2
+
+/** 锁等待堆栈指示关键词。 */
+private val LOCK_INDICATORS = arrayOf(
+    "object.wait", "object.wait(",
+    "locksupport.park", "locksupport.park(",
+    "reentrantlock", "abstractqueuedsynchronizer",
+    "wait(", "monitor.enter"
+)
+
+/** IO 阻塞堆栈指示关键词。 */
+private val IO_INDICATORS = arrayOf(
+    "fileinputstream", "fileoutputstream",
+    "randomaccessfile", "filechannel",
+    "socketinputstream", "socketoutputstream",
+    ".read(", ".write(", "openat"
+)
+
+/** Binder 堆栈指示关键词（真实帧为 Binder.execTransact / BinderProxy.transact / AMS 代理）。 */
+private val BINDER_INDICATORS = arrayOf(
+    "binder.exectransact",
+    "binderproxy.transact",
+    "activitymanagerproxy", "activitymanagerservice"
+)
+
+/**
+ * 分类 ANR 原因（启发式，非系统级根因）。
+ * 判定顺序：LOCK/DEADLOCK → IO → BINDER → CPU → UNKNOWN。
+ * BINDER 必须先于 CPU：Binder 阻塞时相邻采样常落在不同代理调用上，
+ * 若先判「采样有变化=CPU」会把 Binder 等待误分类为 CPU 密集。
+ *
+ * @param mainStack 主线程堆栈。
+ * @param samples 多次堆栈采样（相同=卡在同一调用点，不同=堆栈在推进）。
+ * @return ANR 原因分类字符串。
+ */
+internal fun classifyAnrCauseInternal(mainStack: String, samples: List<String>): String {
+    val lowerStack = mainStack.lowercase()
+
+    // 检测锁等待；多次采样堆栈完全相同视为疑似死锁
+    if (LOCK_INDICATORS.any { lowerStack.contains(it) }) {
+        if (samples.size >= MIN_SAMPLES_FOR_CLASSIFICATION && samples.all { it == samples[0] }) {
+            return ANR_CAUSE_DEADLOCK
+        }
+        return ANR_CAUSE_LOCK
+    }
+
+    // 检测 IO 阻塞
+    if (IO_INDICATORS.any { lowerStack.contains(it) }) {
+        return ANR_CAUSE_IO
+    }
+
+    // 检测 Binder 调用阻塞（先于 CPU：堆栈帧证据优先于采样变化推断）
+    if (BINDER_INDICATORS.any { lowerStack.contains(it) }) {
+        return ANR_CAUSE_BINDER
+    }
+
+    // 检测 CPU 密集：采样有变化说明堆栈在推进
+    if (samples.size >= MIN_SAMPLES_FOR_CLASSIFICATION && samples.any { it != samples[0] }) {
+        return ANR_CAUSE_CPU
+    }
+
+    return ANR_CAUSE_UNKNOWN
 }
