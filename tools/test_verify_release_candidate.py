@@ -9,12 +9,17 @@ import zipfile
 from io import BytesIO
 from pathlib import Path
 
+from unittest import mock
+
+import verify_release_candidate
 from verify_release_candidate import (
     DEFAULT_VERSION,
     EXPECTED_BUNDLE_DEPENDENCIES,
     ReleaseCandidateError,
+    ensure_consumer_sdk_config,
     expected_coordinates,
     publication_files,
+    safe_clean,
     validate_repository,
     validate_signature_set,
 )
@@ -223,6 +228,66 @@ class ReleaseCandidateVerifierTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(ReleaseCandidateError, "partial PGP signature"):
                 validate_signature_set((first, second), require_signatures=False)
+
+
+class ReleaseCandidateEnvironmentTest(unittest.TestCase):
+    """Exercise archive-based cleanup and consumer SDK propagation."""
+
+    def test_safe_clean_archives_previous_repository(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = root / "build" / "release-candidate" / "repository"
+            repository.mkdir(parents=True)
+            (repository / "marker.pom").write_text("<project/>", encoding="utf-8")
+            with mock.patch.object(verify_release_candidate, "REPOSITORY_ROOT", root):
+                safe_clean(repository)
+            self.assertFalse(repository.exists())
+            archives = list((root / "build" / "release-candidate-archive").iterdir())
+            self.assertEqual(1, len(archives))
+            self.assertTrue((archives[0] / "marker.pom").is_file())
+
+    def test_safe_clean_refuses_non_canonical_target(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            with mock.patch.object(verify_release_candidate, "REPOSITORY_ROOT", root):
+                with self.assertRaisesRegex(ReleaseCandidateError, "non-canonical"):
+                    safe_clean(root / "somewhere-else")
+
+    def test_consumer_sdk_config_propagates_root_sdk_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "local.properties").write_text("sdk.dir=D:/Android-Sdk\n", encoding="utf-8")
+            consumer = root / "smoke-tests" / "maven-consumer"
+            consumer.mkdir(parents=True)
+            with mock.patch.object(verify_release_candidate, "REPOSITORY_ROOT", root), \
+                    mock.patch.dict("os.environ", {}, clear=True):
+                ensure_consumer_sdk_config()
+            self.assertEqual(
+                "sdk.dir=D:/Android-Sdk\n",
+                (consumer / "local.properties").read_text(encoding="utf-8"),
+            )
+
+    def test_consumer_sdk_config_keeps_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            consumer = root / "smoke-tests" / "maven-consumer"
+            consumer.mkdir(parents=True)
+            (consumer / "local.properties").write_text("sdk.dir=C:/other\n", encoding="utf-8")
+            with mock.patch.object(verify_release_candidate, "REPOSITORY_ROOT", root):
+                ensure_consumer_sdk_config()
+            self.assertEqual(
+                "sdk.dir=C:/other\n",
+                (consumer / "local.properties").read_text(encoding="utf-8"),
+            )
+
+    def test_consumer_sdk_config_fails_without_any_source(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "smoke-tests" / "maven-consumer").mkdir(parents=True)
+            with mock.patch.object(verify_release_candidate, "REPOSITORY_ROOT", root), \
+                    mock.patch.dict("os.environ", {}, clear=True):
+                with self.assertRaisesRegex(ReleaseCandidateError, "no SDK location"):
+                    ensure_consumer_sdk_config()
 
 
 if __name__ == "__main__":
