@@ -125,7 +125,12 @@ class SampleApplication : Application() {
                     enablePiiSanitization = true,
                     storageType = StorageType.SQLITE,
                     httpHeaders = mapOf(
-                        "Authorization" to "Bearer ${BuildConfig.APM_INGEST_KEY}"
+                        "Authorization" to "Bearer ${BuildConfig.APM_INGEST_KEY}",
+                        // The collector requires app/environment headers before it parses the
+                        // body (ingest.py _required_header); missing headers fail with 400.
+                        "X-Apm-App-Id" to packageName,
+                        "X-Apm-Environment" to "staging",
+                        "X-Apm-App-Version" to BuildConfig.VERSION_NAME
                     ),
                     resourceContext = ApmResourceContext(
                         serviceName = packageName,
