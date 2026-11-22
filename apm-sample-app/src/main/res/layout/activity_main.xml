@@ -189,6 +189,12 @@
                 android:text="@string/test_webview" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/traceButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="@string/test_trace" />
+
         <WebView
             android:id="@+id/demoWebView"
             android:layout_width="match_parent"

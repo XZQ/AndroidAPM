@@ -68,6 +68,7 @@ class ScenarioDriverTest {
         tapById("threadPoolButton"); Thread.sleep(3_000)
         tapById("batteryButton"); Thread.sleep(2_000)
         tapById("webviewButton"); Thread.sleep(3_000)
+        tapById("traceButton"); Thread.sleep(2_500)
 
         // Memory churn for GC evidence
         repeat(3) {

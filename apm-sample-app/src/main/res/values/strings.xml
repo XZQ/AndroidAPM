@@ -25,6 +25,7 @@
     <string name="test_thread_pool">Queue Threads</string>
     <string name="test_battery">Battery Signals</string>
     <string name="test_webview">Run WebView</string>
+    <string name="test_trace">Run Trace</string>
     <string name="webview_description">Local monitored WebView demonstration</string>
     <!-- SDK self-diagnostics -->
     <string name="diagnostics_title">SDK Self-Diagnostics</string>

@@ -21,6 +21,11 @@ import com.apm.core.Apm
 import com.apm.core.diagnostics.ApmDiagnostics
 import com.apm.model.ApmPriority
 import com.apm.sqlite.ApmSQLiteDatabase
+import com.apm.trace.ApmTrace
+import com.apm.otel.OtelConfig
+import com.apm.otel.OtelEventBridge
+import com.apm.model.ApmEvent
+import com.apm.model.ApmEventKind
 import java.io.File
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -58,6 +63,14 @@ class MainActivity : AppCompatActivity() {
 
     /** Timed wrapper around the sample database. */
     private lateinit var monitoredDatabase: ApmSQLiteDatabase
+
+    /** OTel-compatible mapping bridge used by the trace demo. */
+    private val otelBridge = OtelEventBridge(
+        OtelConfig(
+            serviceName = "apm-sample",
+            exportLogs = true
+        )
+    )
 
     /** WebView explicitly installed into the WebView monitor. */
     private lateinit var demoWebView: WebView
@@ -391,6 +404,7 @@ class MainActivity : AppCompatActivity() {
         findViewById<Button>(R.id.threadPoolButton).setOnClickListener { runThreadPoolDemo() }
         findViewById<Button>(R.id.batteryButton).setOnClickListener { runBatteryDemo() }
         findViewById<Button>(R.id.webviewButton).setOnClickListener { runWebViewDemo() }
+        findViewById<Button>(R.id.traceButton).setOnClickListener { runTraceDemo() }
     }
 
     /** Wires local SDK-health status and support-ZIP export. */
@@ -547,6 +561,45 @@ class MainActivity : AppCompatActivity() {
         return (SystemClock.elapsedRealtimeNanos() - startedNs) / 1_000_000L
     }
 
+    /** Runs one parent span with two nested child spans through the manual Trace API. */
+    private fun runTraceDemo() {
+        sampleExecutor.execute {
+            val parent = ApmTrace.startSpan("sample_trace_flow")
+                .setAttribute("flow", "button")
+            val firstChild = ApmTrace.span("child_prepare")
+                .setParent(parent)
+                .start()
+            Thread.sleep(SAMPLE_TRACE_CHILD_MS)
+            firstChild.end()
+            val secondChild = ApmTrace.span("child_finish")
+                .setParent(parent)
+                .setAttribute("attempt", "1")
+                .start()
+            Thread.sleep(SAMPLE_TRACE_CHILD_MS)
+            secondChild.end()
+            parent.end()
+            // Map the finished parent event through the OTel-compatible bridge so the
+            // host-side adapter path is exercised without any OTel SDK dependency.
+            val mapped = otelBridge.export(
+                ApmEvent(
+                    module = "trace",
+                    name = parent.name,
+                    kind = ApmEventKind.METRIC,
+                    fields = mapOf(
+                        "traceId" to parent.context.traceId,
+                        "spanId" to parent.context.spanId,
+                        "duration_ms" to parent.durationMs,
+                        "status" to "OK"
+                    )
+                )
+            )
+            postToast(
+                "Trace ${parent.context.traceId.take(8)} done: " +
+                    "${mapped.spans.size} span / ${mapped.metrics.size} metric / ${mapped.logs.size} log"
+            )
+        }
+    }
+
     /** Posts a toast from a sample worker back to the UI thread. */
     private fun postToast(message: String) {
         runOnUiThread { showToast(message) }
@@ -639,6 +692,8 @@ class MainActivity : AppCompatActivity() {
         private const val SAMPLE_ANR_BLOCK_MS = 8_000L
         /** Workload duration above the 300ms slow-method threshold. */
         private const val SAMPLE_SLOW_METHOD_MS = 500L
+        /** Duration of each nested trace child span. */
+        private const val SAMPLE_TRACE_CHILD_MS = 120L
         /** App-private support archive name. */
         private const val DIAGNOSTICS_EXPORT_FILE_NAME = "android-apm-diagnostics.zip"
         /** App-private IO sample file name. */

@@ -68,6 +68,8 @@ dependencies {
     implementation(project(":apm-ipc"))
     implementation(project(":apm-gc-monitor"))
     implementation(project(":apm-render"))
+    implementation(project(":apm-trace"))
+    implementation(project(":apm-otel-exporter"))
     implementation(libs.android.appcompat)
     androidTestImplementation("androidx.test:core-ktx:1.6.1")
     androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
