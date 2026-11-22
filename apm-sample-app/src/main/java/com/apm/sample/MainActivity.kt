@@ -338,6 +338,17 @@ class MainActivity : AppCompatActivity() {
             throw RuntimeException("APM Sample: deliberate crash for testing")
         }
 
+        findViewById<Button>(R.id.anrButton).setOnClickListener {
+            // Blocks the main thread past the 3s AnrModule threshold; the system may show
+            // an ANR dialog where "Wait" keeps the process alive to record the ANR event.
+            showToast("Blocking main thread ${SAMPLE_ANR_BLOCK_MS / 1000}s; tap Wait on the ANR dialog")
+            Thread.sleep(SAMPLE_ANR_BLOCK_MS)
+        }
+
+        findViewById<Button>(R.id.slowMethodButton).setOnClickListener {
+            runSlowMethodDemo()
+        }
+
         val networkModule = sampleApplication.networkModule
         findViewById<Button>(R.id.networkOkButton).setOnClickListener {
             networkModule.onRequestComplete(
@@ -514,6 +525,28 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Runs an instrumented main-thread method above the 300ms slow-method threshold. */
+    private fun runSlowMethodDemo() {
+        val elapsedMs = slowMethodWorkload(SAMPLE_SLOW_METHOD_MS)
+        showToast("Slow method completed: ${elapsedMs}ms")
+    }
+
+    /**
+     * Deliberately slow method detected by the ASM instrumentation. The loop body is kept
+     * observable so the JIT cannot constant-fold the delay away.
+     */
+    private fun slowMethodWorkload(durationMs: Long): Long {
+        val startedNs = SystemClock.elapsedRealtimeNanos()
+        var blackhole = 0
+        while (SystemClock.elapsedRealtimeNanos() - startedNs < durationMs * 1_000_000L) {
+            blackhole = blackhole xor (blackhole + 1)
+        }
+        if (blackhole == Int.MIN_VALUE) {
+            Log.i(SOAK_LOG_TAG, "unreachable")
+        }
+        return (SystemClock.elapsedRealtimeNanos() - startedNs) / 1_000_000L
+    }
+
     /** Posts a toast from a sample worker back to the UI thread. */
     private fun postToast(message: String) {
         runOnUiThread { showToast(message) }
@@ -602,6 +635,10 @@ class MainActivity : AppCompatActivity() {
         private const val ALLOC_REPEAT_COUNT = 6
         /** Size of each retained allocation block. */
         private const val ALLOC_BLOCK_BYTES = 2 * 1024 * 1024
+        /** Main-thread block duration above the 3s ANR threshold. */
+        private const val SAMPLE_ANR_BLOCK_MS = 8_000L
+        /** Workload duration above the 300ms slow-method threshold. */
+        private const val SAMPLE_SLOW_METHOD_MS = 500L
         /** App-private support archive name. */
         private const val DIAGNOSTICS_EXPORT_FILE_NAME = "android-apm-diagnostics.zip"
         /** App-private IO sample file name. */

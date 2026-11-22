@@ -1,6 +1,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- Required by the strict HTTP uploader; absent INTERNET makes socket() fail with EPERM. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
     <application
         android:name=".SampleApplication"
         android:allowBackup="true"

@@ -1,0 +1,40 @@
+<resources>
+    <string name="app_name">Android APM 演示</string>
+    <string name="title">Android APM 控制面板</string>
+    <!-- Memory -->
+    <string name="memory_title">内存</string>
+    <string name="allocate_memory">分配 12MB</string>
+    <string name="clear_memory">清空内存</string>
+    <string name="capture_snapshot">抓取快照</string>
+    <string name="test_leak">测试 Activity 泄漏</string>
+    <!-- Crash -->
+    <string name="crash_network_title">崩溃与网络</string>
+    <string name="test_crash">触发崩溃</string>
+    <!-- ANR and slow method -->
+    <string name="test_anr">触发 ANR</string>
+    <string name="test_slow_method">慢方法</string>
+    <!-- Network -->
+    <string name="test_network_ok">模拟正常请求</string>
+    <string name="test_network_slow">模拟慢请求</string>
+    <string name="test_network_error">模拟错误请求</string>
+    <!-- Explicit host integrations -->
+    <string name="explicit_integrations_title">显式集成场景</string>
+    <string name="test_io">执行 IO</string>
+    <string name="test_sqlite">执行 SQLite</string>
+    <string name="test_ipc">执行 IPC</string>
+    <string name="test_thread_pool">制造线程积压</string>
+    <string name="test_battery">电量信号</string>
+    <string name="test_webview">执行 WebView</string>
+    <string name="webview_description">本地受监控 WebView 演示</string>
+    <!-- SDK self-diagnostics -->
+    <string name="diagnostics_title">SDK 自诊断</string>
+    <string name="diagnostics_status">查看状态</string>
+    <string name="diagnostics_export">导出支持 ZIP</string>
+    <string name="diagnostics_status_result">健康=%1$b 丢弃=%2$d 写失败=%3$d 读失败=%4$d 内存=%5$dB 队列=%6$dB</string>
+    <string name="diagnostics_export_success">已导出 %1$d 条诊断记录</string>
+    <string name="diagnostics_export_failure">诊断导出失败</string>
+    <!-- Events -->
+    <string name="recent_events">最近事件</string>
+    <string name="finish_activity">结束（泄漏）</string>
+    <string name="leak_explanation">此页面故意制造泄漏。\n\n静态字段持有 Activity 引用。\n点击结束后，可在 logcat 中\n查看 \'memory_leak\' 事件。</string>
+</resources>

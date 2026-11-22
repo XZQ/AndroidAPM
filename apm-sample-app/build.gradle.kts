@@ -20,6 +20,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // Use a short-lived staging credential only. BuildConfig values are included in the APK.
         // The path is required: HttpApmUploader posts to the endpoint as-is and the collector
@@ -68,4 +69,8 @@ dependencies {
     implementation(project(":apm-gc-monitor"))
     implementation(project(":apm-render"))
     implementation(libs.android.appcompat)
+    androidTestImplementation("androidx.test:core-ktx:1.6.1")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.2.1")
+    androidTestImplementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    androidTestImplementation(libs.androidx.test.runner)
 }

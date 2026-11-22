@@ -107,6 +107,26 @@
                 android:text="@string/test_network_error" />
         </LinearLayout>
 
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/anrButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/test_anr" />
+
+            <Button
+                android:id="@+id/slowMethodButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/test_slow_method" />
+        </LinearLayout>
+
         <TextView
             style="@style/TextAppearance.AppCompat.Medium"
             android:layout_width="match_parent"

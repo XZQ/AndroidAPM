@@ -10,6 +10,9 @@
     <!-- Crash -->
     <string name="crash_network_title">Crash and Network</string>
     <string name="test_crash">Trigger Crash</string>
+    <!-- ANR and slow method -->
+    <string name="test_anr">Trigger ANR</string>
+    <string name="test_slow_method">Slow Method</string>
     <!-- Network -->
     <string name="test_network_ok">Simulate OK Request</string>
     <string name="test_network_slow">Simulate Slow Request</string>
@@ -33,4 +36,5 @@
     <!-- Events -->
     <string name="recent_events">Recent Events</string>
     <string name="finish_activity">Finish (Leak)</string>
+    <string name="leak_explanation">This Activity deliberately leaks.\n\nA static field holds a reference to it.\nAfter pressing Finish, check logcat\nfor \'memory_leak\' events.</string>
 </resources>
