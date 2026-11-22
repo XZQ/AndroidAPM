@@ -59,9 +59,10 @@ def arrow(x1: int, y1: int, x2: int, y2: int, label: str = "", dashed: bool = Fa
     dash = ' stroke-dasharray="12 9"' if dashed else ""
     label_svg = ""
     if label:
+        width = max(42, len(label) * 16 + 10)
         label_svg = (
-            f'<rect x="{(x1 + x2) / 2 - 72}" y="{(y1 + y2) / 2 - 26}" '
-            'width="144" height="30" rx="9" fill="#FFFFFF" opacity="0.94"/>'
+            f'<rect x="{(x1 + x2 - width) / 2}" y="{(y1 + y2) / 2 - 26}" '
+            f'width="{width}" height="30" rx="9" fill="#FFFFFF" opacity="0.94"/>'
             f'<text x="{(x1 + x2) / 2}" y="{(y1 + y2) / 2 - 5}" '
             f'class="label" text-anchor="middle">{escape(label)}</text>'
         )
@@ -111,7 +112,7 @@ def document(title: str, subtitle: str, elements: list[str]) -> str:
   <text x="70" y="70" class="title">{escape(title)}</text>
   <text x="70" y="108" class="subtitle">{escape(subtitle)}</text>
   <g filter="url(#shadow)">{''.join(elements)}</g>
-  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM · 2026-07-22</text>
+  <text x="1530" y="865" text-anchor="end" class="subtitle">AndroidAPM</text>
 </svg>'''
 
 
@@ -152,7 +153,7 @@ def module_dependencies() -> str:
         arrow(560, 500, 900, 345, "复用核心"),
         box_svg(Box(70, 510, 260, 140, "apm-plugin", ("included build", "AGP 插桩插件"), "#6D4AA5", "#F8F4FC")),
         arrow(200, 510, 200, 325, "应用构建"),
-        box_svg(Box(790, 500, 300, 160, "build-logic", ("included build", "约定插件 / 发布元数据"), "#52657A", "#F4F6F8")),
+        box_svg(Box(790, 500, 300, 160, "build-logic", ("included build", "Android Library 构建约定"), "#52657A", "#F4F6F8")),
         arrow(940, 500, 940, 345, "构建约定", dashed=True),
         pill(70, 765, "箭头指向被调用/依赖侧"),
         pill(430, 765, "uploader 不反向依赖 core", "#B25D16"),
@@ -174,7 +175,7 @@ def event_pipeline() -> str:
         arrow(920, 305, 975, 305),
         arrow(1225, 305, 1280, 305),
         arrow(1410, 390, 795, 560, "成功确认", dashed=True),
-        arrow(1100, 390, 1100, 610, "失败/限流", dashed=True),
+        arrow(1200, 390, 1200, 610, "失败/限流", dashed=True),
         box_svg(Box(670, 560, 250, 120, "删除已确认批次", ("ack 后 delete",), "#157A6E", "#F0FAF7")),
         box_svg(Box(975, 610, 250, 120, "保留并重试", ("至少一次交付",), "#B25D16", "#FFF8F1")),
         pill(60, 770, "已实现：持久化恢复", "#157A6E"),
@@ -220,7 +221,7 @@ def slow_method() -> str:
         box_svg(Box(385, 560, 565, 120, "构建期", ("只处理匹配类；插件未应用则不插桩",), "#6D4AA5", "#F8F4FC")),
         box_svg(Box(1015, 560, 525, 120, "运行期", ("超过阈值才形成事件；仍受采样与配置约束",), "#B25D16", "#FFF8F1")),
         pill(70, 770, "非 legacy Transform"),
-        pill(390, 770, "非全局零侵入", "#9B5C17"),
+        pill(450, 770, "非全局零侵入", "#9B5C17"),
     ]
     return document("AndroidAPM 慢方法插桩", "构建期改写字节码，运行时只上报命中事件", elements)
 

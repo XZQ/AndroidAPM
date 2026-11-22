@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from docx import Document
@@ -13,7 +14,7 @@ from docx.shared import Inches, Pt, RGBColor
 
 DOCS_DIR = Path(__file__).resolve().parent
 DIAGRAM_DIR = DOCS_DIR / "architecture" / "generated-diagrams"
-REPORT_DATE = "2026-11-21"
+REPORT_DATE = date.today().isoformat()
 RUNTIME_BASELINE = "develop（以 git log 为准）"
 
 
@@ -54,7 +55,7 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
     normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
 
     for style_name, size, color in (
-        ("Title", 24, "12355B"),
+        ("Title", 24, "000000"),
         ("Heading 1", 16, "12355B"),
         ("Heading 2", 12, "1F5A94"),
     ):
@@ -64,6 +65,12 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
         style.font.color.rgb = RGBColor.from_string(color)
         style._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
 
+    title_properties = document.styles["Title"]._element.find(qn("w:pPr"))
+    if title_properties is not None:
+        border = title_properties.find(qn("w:pBdr"))
+        if border is not None:
+            title_properties.remove(border)
+
     heading = document.add_paragraph(style="Title")
     heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
     heading.add_run(title)
@@ -72,7 +79,16 @@ def configure_document(document: Document, title: str, subtitle: str) -> None:
     run = subheading.add_run(subtitle)
     run.font.size = Pt(11)
     run.font.color.rgb = RGBColor.from_string("52657A")
-    document.add_paragraph()
+
+
+def configure_table_pagination(table) -> None:
+    """Keep rows intact and repeat the header when the table spans pages."""
+    for row in table.rows:
+        row._tr.get_or_add_trPr().append(OxmlElement("w:cantSplit"))
+    header = table.rows[0]
+    header._tr.get_or_add_trPr().append(OxmlElement("w:tblHeader"))
+    for cell in header.cells:
+        cell.paragraphs[0].paragraph_format.keep_with_next = True
 
 
 def add_summary_table(document: Document) -> None:
@@ -80,11 +96,11 @@ def add_summary_table(document: Document) -> None:
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
         ("主源码", "170", "165 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "130", "JVM、Robolectric、发布候选、instrumented benchmark、device-soak/device-lab host gate、插件和 native 契约测试"),
+        ("测试文件", "130", "Gradle 单元测试和 AndroidTest 源文件，另有 5 个 Python 测试文件"),
         ("当前完整测试", "132 suites / 987 tests", "根 Android 126 / 901 + model 5 / 63；included plugin 另有 1 suite / 23 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 36 / min 24", "targetSdk 34；AAR 元数据 minCompileSdk=36 即接入方下限"),
-        ("构建栈", "Java 17 toolchain / Gradle 9.6.0", "Gradle runtime JDK 17+ / AGP 9.5.1（内置 Kotlin）/ Kotlin 2.2.21"),
+        ("构建栈", "Java 21 toolchain / Gradle 9.6.0", "Gradle daemon JDK 21 / AGP 9.5.2（内置 Kotlin）/ Kotlin 2.2.21"),
         ("运行时代码基线", RUNTIME_BASELINE, "以当前源码和可执行验证为准"),
     ]
     table = document.add_table(rows=1, cols=3)
@@ -97,6 +113,7 @@ def add_summary_table(document: Document) -> None:
         set_cell_text(cells[0], label, bold=True)
         set_cell_text(cells[1], value)
         set_cell_text(cells[2], note)
+    configure_table_pagination(table)
 
 
 def add_bullets(document: Document, items: list[str]) -> None:
@@ -133,6 +150,7 @@ def add_capability_table(document: Document) -> None:
         set_cell_text(cells[0], kind, bold=True)
         set_cell_text(cells[1], scope)
         set_cell_text(cells[2], boundary)
+    configure_table_pagination(table)
 
 
 def add_diagram(document: Document, filename: str, caption: str) -> None:
@@ -142,7 +160,8 @@ def add_diagram(document: Document, filename: str, caption: str) -> None:
         return
     paragraph = document.add_paragraph()
     paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    paragraph.add_run().add_picture(str(path), width=Inches(6.7))
+    paragraph.paragraph_format.keep_with_next = True
+    paragraph.add_run().add_picture(str(path), width=Inches(6.35))
     caption_paragraph = document.add_paragraph(caption)
     caption_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
     for run in caption_paragraph.runs:
@@ -180,17 +199,10 @@ def build_status_report() -> Document:
 
     document.add_heading("结论先行", level=1)
     document.add_paragraph(
-        "AndroidAPM 已形成可构建、可测试的多模块 Android 客户端 APM SDK：采集事件进入有界异步管线，"
-        "通过 SQLite outbox 持久化并交给可注入上传器。它仍是客户端框架，不包含生产采集后端、查询、"
-        "告警和运营闭环。2026-07-23 的物理设备 microbenchmark 通过；FPS 静态页面 VSync observer 修复后，"
-        "两轮 smoke 在原 20% 门禁下以 12.928% / 12.362% CPU 通过；OnePlus Android 16 预检也在原预算下通过并产出 UID 功耗证据。"
-        "2026-07-31 真实 HttpApmUploader 已与独立参考服务端完成 V2/Gzip/exact ACK/typed persistence/重放去重联调；"
-        "该 SQLite 兼容证据不替代 PostgreSQL/TLS/代理故障或生产部署验收。"
-            "2026-07-24 当前 Redmi 的 checkin UID power 五分钟后仍为零，不构成功耗接受。"
-            "2026-07-25 的 24h 重试在完成前主动取消且无 JSON；长 profile 保留到预生产设备实验室，不阻塞当前客户端迭代。"
-            "2026-07-31 已固化 API 24–28 / 29–33 / 34–36 三 lane、六组 profile 工件与 exact provenance 汇总门禁；plan-only 通过不代表真机长稳通过。"
-            "2026-11-08 完成 AGP 9.5.1 / Gradle 9.6.0 / compileSdk 36 的整链迁移，24 份 ABI 基线零变化，"
-            "但 AAR 元数据 minCompileSdk=36 与插件的 AGP 9.5.1 依赖把接入方下限抬到 AGP 9.x 与 compileSdk ≥36。"
+        "AndroidAPM 是面向宿主应用的多模块 Android APM SDK。事件经有界队列进入 SQLite outbox，再由可注入的上传器交付。"
+        "当前构建使用 Gradle 9.6.0、AGP 9.5.2 和 JDK 21，接入方使用 JDK 21 与 compileSdk 36 或以上。"
+        "本地构建、CI 和参考 Collector 验证已有记录。生产 Collector 部署与真机 24h/72h 验收仍需单独执行。"
+        "完整的同期证据见项目文档与历史验证记录。"
     )
     add_summary_table(document)
 
@@ -203,7 +215,7 @@ def build_status_report() -> Document:
         [
             "Strict production profile 在创建 SDK 资源前校验显式 consent、HTTPS/自定义 uploader、SQLite、PII 与 debug logging。",
             "Consent revoke 不做优雅 drain；停止 delivery 后清理活动队列、SQLite/File outbox 与 IPC hand-off 文件。",
-            "V2 protobuf envelope 按实际编码字节拆批；2xx 只有 schema、batchId 和事件数精确 ACK 才删除 outbox。",
+            "V2/V3 protobuf envelope 按实际编码字节拆批；2xx 只有 schema、batchId 和事件数精确 ACK 才删除 outbox。",
             "Dispatcher 同时受 2048 条和 8 MiB 估算字节预算约束；IPC 与 SQLite 另按 encoded/file/durable bytes 独立限界。",
             "SQLite outbox 支持进程重启后的持久化恢复，并在上传确认成功后删除。",
             "当前语义是 acknowledged at-least-once；稳定 eventId 已贯穿 wire/storage，服务端仍须幂等。",
@@ -220,7 +232,7 @@ def build_status_report() -> Document:
             "累计值必须严格增长，平坦零值、回退、坏值和错误 UID 继续 fail closed。",
             "Device-soak schema v3 绑定 APK、clean source、matrix/budget/runner 哈希、lane 与完整设备身份；"
             "aggregate gate 要求同一 APK/source、全部 lane/profile 以及 OEM/设备/reset 多样性。",
-            "发布候选门禁校验 25 个 Maven 坐标、Bundle/Gradle 插件依赖图、Java 17 字节码与 ZIP 安全，"
+            "发布候选门禁校验 25 个 Maven 坐标、Bundle/Gradle 插件依赖图、AAR 的 minCompileSdk=36、Java 21 字节码与 ZIP 安全，"
             "生成逐文件 SHA-256 manifest 和 SPDX SBOM；真实外部 staging/promotion 仍需平台凭据。",
         ],
     )
@@ -245,6 +257,7 @@ def build_status_report() -> Document:
         cells = table.add_row().cells
         set_cell_text(cells[0], priority, bold=True)
         set_cell_text(cells[1], item)
+    configure_table_pagination(table)
 
     add_footer(document)
     return document
@@ -307,7 +320,6 @@ def build_architecture_report() -> Document:
     )
     add_diagram(document, "android-apm-slow-method-instrumentation.png", "图 4：构建期插桩与运行时上报")
 
-    document.add_page_break()
     document.add_heading("验证入口", level=1)
     document.add_paragraph("仓库的标准验证链如下，最终结果以项目状态文档和实际命令输出为准：")
     for command in (

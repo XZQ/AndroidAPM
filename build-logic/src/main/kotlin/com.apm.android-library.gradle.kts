@@ -1,7 +1,7 @@
 // 仓库统一的 Android library 约定插件。
 // 收敛所有监控/基础模块重复的 android {} 配置：compileSdk、minSdk、Java 版本。
 // Kotlin 编译由 AGP 9 内置 Kotlin 支持提供，不再单独应用 kotlin-android 插件。
-// 内置 Kotlin 的 jvmTarget 默认跟随 android.compileOptions.targetCompatibility（此处 17），
+// 内置 Kotlin 的 jvmTarget 默认跟随 android.compileOptions.targetCompatibility（此处 21），
 // 不再由根构建注入；consumer-rules、maven-publish 仍由根构建的 subprojects 块按插件类型统一注入。
 plugins {
     id("com.android.library")
@@ -14,9 +14,9 @@ val apmCompileSdk = 36
 val apmMinSdk = 24
 
 java {
-    // 编译器和测试运行时统一使用 Java 17，不受启动 Gradle 的兼容 JDK 版本影响。
+    // 编译器和测试运行时统一使用 Java 21，不受启动 Gradle 的兼容 JDK 版本影响。
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
@@ -28,8 +28,8 @@ android {
     }
 
     compileOptions {
-        // Java 与 Kotlin 产物统一生成 Java 17 字节码。
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        // Java 与 Kotlin 产物统一生成 Java 21 字节码。
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }

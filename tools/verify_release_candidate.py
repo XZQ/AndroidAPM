@@ -20,6 +20,9 @@ from xml.etree import ElementTree
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_VERSION = "0.1.0"
+JAVA_21_CLASS_MAJOR = 65
+MIN_COMPILE_SDK = 36
+AAR_METADATA_PATH = "META-INF/com/android/build/gradle/aar-metadata.properties"
 PROJECT_URL = "https://github.com/XZQ/AndroidAPM"
 SCM_CONNECTION = "scm:git:git://github.com/XZQ/AndroidAPM.git"
 ROOT_ARTIFACTS = (
@@ -283,6 +286,18 @@ def class_major_version(data: bytes, location: str) -> int:
     return int.from_bytes(data[6:8], byteorder="big")
 
 
+def validate_aar_metadata(archive: Path, zipped: zipfile.ZipFile) -> None:
+    """Require every published AAR to declare the supported compile SDK floor."""
+    if zipped.namelist().count(AAR_METADATA_PATH) != 1:
+        raise ReleaseCandidateError(f"{archive}: expected exactly one {AAR_METADATA_PATH}")
+    metadata = zipped.read(AAR_METADATA_PATH).decode("latin-1")
+    declared = re.findall(r"(?m)^[ \t]*minCompileSdk[ \t]*=[ \t]*([^\r\n]*)", metadata)
+    if [value.strip() for value in declared] != [str(MIN_COMPILE_SDK)]:
+        raise ReleaseCandidateError(
+            f"{archive}: expected minCompileSdk={MIN_COMPILE_SDK}, got {declared!r}"
+        )
+
+
 def inspect_zip(
     archive: Path,
     *,
@@ -294,6 +309,8 @@ def inspect_zip(
     non_directory_count = 0
     try:
         with zipfile.ZipFile(archive) as zipped:
+            if archive.suffix == ".aar":
+                validate_aar_metadata(archive, zipped)
             for member in zipped.infolist():
                 validate_archive_member_name(archive, member.filename)
                 if member.is_dir():
@@ -629,7 +646,7 @@ def validate_repository(
             class_count = inspect_zip(
                 binary,
                 require_content=True,
-                expected_class_major=61,
+                expected_class_major=JAVA_21_CLASS_MAJOR,
             )
             if coordinate.artifact in {"apm-model", "apm-plugin"} and class_count == 0:
                 raise ReleaseCandidateError(f"{binary}: binary JAR contains no classes")

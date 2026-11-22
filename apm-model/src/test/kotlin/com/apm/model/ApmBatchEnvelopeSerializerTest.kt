@@ -30,12 +30,8 @@ class ApmBatchEnvelopeSerializerTest {
             val event = ApmEvent("model", "decimal", fields = mapOf("value" to BigDecimal(BigInteger.ONE, scale)))
             val durable = ApmEventCodec.encode(event)
             assertTrue(durable.size < 1024)
-            // Java's decimal parser rejects the exponent implied by Int.MIN_VALUE scale;
-            // test that wire guard directly, while representable exponents exercise durable replay.
-            val decoded = if (scale == Int.MIN_VALUE) {
-                assertThrows(NumberFormatException::class.java) { ApmEventCodec.decode(durable) }
-                event
-            } else ApmEventCodec.decode(durable)
+            val decoded = ApmEventCodec.decode(durable)
+            assertEquals(event.fields["value"], decoded.fields["value"])
             assertThrows(IllegalArgumentException::class.java) { ApmTypedValue.from(decoded.fields["value"]) }
             assertEquals(null, ApmBatchEnvelopeSerializer.serializeWithinBudget(
                 listOf(decoded), resource(), 1024, FIXED_SENT_AT_MS

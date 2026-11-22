@@ -29,7 +29,7 @@ Bundle 通过 `api(project(...))` 暴露 22 个运行时制品：
 - `apm-sample-app`：接入示例，不是 SDK 制品
 - `apm-benchmark`：非发布测量入口
 
-接入方下限由制品元数据决定，而不是由 Bundle 的 POM 声明：Bundle 传递的每个 AAR 都带 `minCompileSdk=36`，`com.apm:apm-plugin` 与插件 marker 依赖 AGP 9.5.1。因此宿主必须使用 AGP 9.x 与 `compileSdk ≥ 36`；使用 AGP 8.x 或更低 `compileSdk` 时，构建会在 AAR 元数据校验阶段失败，而不是在运行期降级。
+接入方下限由制品元数据决定，而不是由 Bundle 的 POM 声明：Bundle 传递的每个 AAR 都带 `minCompileSdk=36`，`com.apm:apm-plugin` 与插件 marker 依赖 AGP 9.5.2。因此宿主必须使用 AGP 9.x、JDK 21 与 `compileSdk ≥ 36`；使用 AGP 8.x 或更低 `compileSdk` 时，构建会在 AAR 元数据校验阶段失败，而不是在运行期降级。
 
 ## 3. 运行时边界
 
@@ -57,6 +57,6 @@ Bundle 通过 `api(project(...))` 暴露 22 个运行时制品：
 2. Bundle POM 对 22 个 `com.apm` 运行时制品声明 compile-scope 依赖；
 3. `com.apm:apm-plugin` 与 `com.apm.slow-method` marker 同时发布且版本一致；
 4. 隔离 Maven consumer 只从候选仓库解析 Bundle 和插件，仍能编译多个传递模块的代表性 API并执行 ASM transformation；
-5. POM、Gradle metadata、AAR/JAR/sources、Java 17 class major、ZIP 安全、逐文件 SHA-256 和 SPDX SBOM 全部通过 fail-closed 校验。
+5. POM、Gradle metadata、AAR/JAR/sources、Java 21 class major、ZIP 安全、逐文件 SHA-256 和 SPDX SBOM 全部通过 fail-closed 校验。
 
 入口是 `python tools/verify_release_candidate.py`，详细签名与外部仓库边界见 [发布流程](../RELEASE_PROCESS.md)。这些检查只证明本地制品图完整；仓库没有 Maven Central 或外部私有仓库凭据、staging/promotion 结果，因此不能据此宣称外部制品已经可用。

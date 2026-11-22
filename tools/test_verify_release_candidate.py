@@ -13,6 +13,7 @@ from unittest import mock
 
 import verify_release_candidate
 from verify_release_candidate import (
+    AAR_METADATA_PATH,
     DEFAULT_VERSION,
     EXPECTED_BUNDLE_DEPENDENCIES,
     ReleaseCandidateError,
@@ -25,7 +26,7 @@ from verify_release_candidate import (
 )
 
 
-CLASS_17 = b"\xca\xfe\xba\xbe\x00\x00\x00\x3d"
+CLASS_21 = b"\xca\xfe\xba\xbe\x00\x00\x00\x41"
 
 
 def pom_xml(
@@ -74,19 +75,21 @@ def pom_xml(
 
 
 def write_jar(path: Path, *, unsafe: bool = False) -> None:
-    """Write a small JVM 17 JAR."""
+    """Write a small JVM 21 JAR."""
     with zipfile.ZipFile(path, "w") as archive:
-        archive.writestr("../secret.class" if unsafe else "example/Type.class", CLASS_17)
+        archive.writestr("../secret.class" if unsafe else "example/Type.class", CLASS_21)
 
 
-def write_aar(path: Path) -> None:
-    """Write a small AAR with nested JVM 17 bytecode."""
+def write_aar(path: Path, *, metadata: str | None = "minCompileSdk=36\n") -> None:
+    """Write a small AAR with nested JVM 21 bytecode."""
     classes = BytesIO()
     with zipfile.ZipFile(classes, "w") as archive:
-        archive.writestr("example/Type.class", CLASS_17)
+        archive.writestr("example/Type.class", CLASS_21)
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr("AndroidManifest.xml", "<manifest/>")
         archive.writestr("classes.jar", classes.getvalue())
+        if metadata is not None:
+            archive.writestr(AAR_METADATA_PATH, metadata)
 
 
 class ReleaseCandidateVerifierTest(unittest.TestCase):
@@ -156,6 +159,26 @@ class ReleaseCandidateVerifierTest(unittest.TestCase):
             self.assertIn("sourceIdentity", manifest_document)
             self.assertEqual("SPDX-2.3", sbom_document["spdxVersion"])
             self.assertGreaterEqual(len(sbom_document["packages"]), 25)
+
+    def test_aar_requires_exact_compile_sdk_floor(self) -> None:
+        cases = (
+            (None, "expected exactly one .*aar-metadata"),
+            ("aarMetadataVersion=1.0\n", "expected minCompileSdk=36"),
+            ("minCompileSdk=35\n", "expected minCompileSdk=36"),
+            ("minCompileSdk=37\n", "expected minCompileSdk=36"),
+            ("minCompileSdk=36\nminCompileSdk=36\n", "expected minCompileSdk=36"),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            repository = self.create_repository(root)
+            archive = next(
+                path for path in repository.rglob("*.aar") if path.parent.parent.name == "apm-core"
+            )
+            for metadata, message in cases:
+                with self.subTest(metadata=metadata):
+                    write_aar(archive, metadata=metadata)
+                    with self.assertRaisesRegex(ReleaseCandidateError, message):
+                        validate_repository(repository, root / "evidence")
 
     def test_missing_publication_fails(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

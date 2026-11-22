@@ -8,7 +8,7 @@
 
 模块化的 Android 应用性能监控（APM）客户端 SDK：15 个监控模块加 5 个基础模块，用单个 `apm-bundle` 坐标即可获得完整端上能力。
 
-默认行为面向生产——`PRODUCTION_STRICT` fail-closed 配置、显式同意与撤回清理、稳定事件身份、SQLite durable outbox、并发上传租约、动态短期鉴权、Ed25519 签名远程配置、批量 HTTP 传输，以及独立于事件链路的 SDK 自诊断日志。
+SDK 默认使用 `COMPATIBILITY`。生产接入可显式启用 `PRODUCTION_STRICT`，在初始化前校验同意状态、交付配置和隐私保护。事件默认通过 SQLite outbox 持久化，SDK 自诊断使用独立日志。
 
 > **范围**：本仓库只负责 Android 端的采集、保护、持久化与传输。生产 Collector、查询/告警后台、Native 符号化服务和托管平台不在本仓库，统一由独立 `AndroidAPM-Server` 仓库维护。
 
@@ -43,10 +43,10 @@
 | 项 | 值 |
 |---|---|
 | SDK 版本 | `0.1.0` |
-| 构建链 | Gradle 9.6.0 / AGP 9.5.1 / Kotlin 2.2.21（AGP 内置 Kotlin）/ Java 17 toolchain |
-| Android | compileSdk 36 / minSdk 24 / targetSdk 34，Java 17 字节码 |
-| 消费方下限 | AAR 元数据 `minCompileSdk=36`；`com.apm:apm-plugin` 随附 AGP 9.5.1 → 接入方须 AGP 9.x |
-| 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、170 个主源码文件、130 个测试/benchmark 文件 |
+| 构建链 | Gradle 9.6.0 / AGP 9.5.2 / Kotlin 2.2.21（AGP 内置 Kotlin）/ Java 21 toolchain |
+| Android | compileSdk 36 / minSdk 24 / targetSdk 34，Java 21 字节码 |
+| 消费方下限 | AAR 元数据 `minCompileSdk=36`；`com.apm:apm-plugin` 随附 AGP 9.5.2 → 接入方须 AGP 9.x、JDK 21 |
+| 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、170 个主源码文件、130 个 Gradle 测试/benchmark 源文件，另有 5 个 Python 测试文件 |
 | 测试 | 132 suites / 987 tests（根 Android 126/901、model 5/63、plugin 1/23），0 failures / 0 errors / 0 skips |
 | 门禁 | `python tools/verify_ci.py`：公开 ABI、四组依赖指纹、发布候选、隔离 consumer、强制重跑测试、文档 |
 
@@ -129,7 +129,7 @@
 | [`apm-otel-exporter`](docs/architecture/19_apm-otel-exporter.md) | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
 | [`apm-plugin`](docs/architecture/09_apm-slow-method.md) | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
-| `apm-sample-app` | 15 个监控模块的本地演示，含 IO/SQLite/WebView/IPC/线程池/Battery 显式接线与 `logcat://sample` 输出 |
+| `apm-sample-app` | 15 个监控模块和宿主显式接线的演示。默认输出 `logcat://sample`，可显式启用 Strict V3。 |
 | [`apm-benchmark`](docs/architecture/22_apm-benchmark.md) | 非发布双层门禁：AndroidX codec/SQLite/Dispatcher 固定预算，以及启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 的设备 campaign |
 
 ## 快速接入
@@ -156,7 +156,7 @@ dependencies {
 }
 ```
 
-发布以本地候选形式验证（25 坐标、POM、Java 17 字节码、逐文件 SHA-256、SPDX SBOM、隔离 consumer），尚未发布到 Maven Central 或外部私有制品库。流程见 [发布与供应链门禁](docs/RELEASE_PROCESS.md)。
+发布以本地候选形式验证（25 坐标、POM、Java 21 字节码、逐文件 SHA-256、SPDX SBOM、隔离 consumer），尚未发布到 Maven Central 或外部私有制品库。流程见 [发布与供应链门禁](docs/RELEASE_PROCESS.md)。
 
 ### 2. 初始化
 
@@ -482,11 +482,17 @@ ApmDiagnostics.clearAllProcesses()
 
 ### 环境
 
-- JDK 17（`.java-version` 为推荐版本）；低于 17 的 Gradle runtime 会在项目配置前被拒绝并提示修复 `JAVA_HOME`。
+- 安装 JDK 21，并将 `JAVA_HOME` 指向该 JDK 以运行完整验证。项目的 Gradle daemon 与编译工具链都使用 JDK 21。
 - Android SDK：platform-36 与 build-tools 36.0.0（AGP 9.5 的下限）。
-- `smoke-tests/maven-consumer` 是独立 Gradle 构建，不继承主工程 `local.properties`，跑全量门禁时必须显式提供 `ANDROID_HOME`。
+- 完整门禁中的 Maven consumer 会使用自身的 `local.properties`、`ANDROID_HOME`，或由门禁从主项目 `local.properties` 复制的 `sdk.dir`。
 
-### 唯一门禁入口
+### 示例应用的 Strict V3
+
+给 Gradle 提供 `apm.endpoint`（测试 Collector 的 HTTPS 接入地址）和 `apm.ingestKey`（短期测试凭据），再构建 `apm-sample-app`。Debug 与 Release 均支持这两个属性。省略 `apm.endpoint` 时使用内置的测试地址。未提供接入凭据时使用 `logcat://sample`，设备长稳实验的离线模式使用专用的失败 uploader。
+
+`apm.ingestKey` 会写入该次构建的 `BuildConfig`，因此持有 APK 的人可以读取该值。仅使用低权限、短期的测试凭据。生产应用应通过 `HttpHeaderProvider` 获取短期 Token。
+
+### 完整门禁
 
 ```powershell
 python tools/verify_ci.py
@@ -511,7 +517,7 @@ python tools/verify_release_candidate.py --allow-dirty
 
 ### 跨仓协议闭环
 
-单独执行，不放进只依赖本仓库的门禁。准备 JDK 17、`uv` 与 `AndroidAPM-Server` 的当前 `main` checkout（需含 inbox 表 readiness，即 `a0d75e1` 之后）：
+单独执行，不放进只依赖本仓库的门禁。准备 JDK 21、`uv` 与 `AndroidAPM-Server` 的当前 `main` checkout（需含 inbox 表 readiness，即 `a0d75e1` 之后）：
 
 ```powershell
 python tools/verify_collector_e2e.py --server-repo D:\path\to\AndroidAPM-Server
@@ -543,7 +549,7 @@ python tools/verify_release_candidate.py
 
 该命令要求 clean worktree。真正外部上传前必须注入 PGP 私钥运行 `--require-signatures`，再用目标仓库的 HTTPS 凭据执行 staging/promotion；仓库不包含这些凭据，也不含外部发布完成证据。
 
-按 [AGENTS.md](AGENTS.md) 与 [项目文档](docs/Android_APM_项目文档.md) 中标注的日期判断哪些命令是当前 tip 的现场验证，不能把较早结果自动外推到新提交。历史验证与真机记录见 [变更历史](docs/CHANGELOG.md)。
+当前验证范围见 [项目文档](docs/Android_APM_项目文档.md)，历史命令和真机证据见 [历史验证记录](docs/HISTORICAL_VERIFICATION.md)。
 
 ## 完成边界
 
@@ -567,7 +573,8 @@ python tools/verify_release_candidate.py
 | [API 兼容策略](docs/API_COMPATIBILITY.md) | 版本规则、公开面与消费方下限 |
 | [发布与供应链门禁](docs/RELEASE_PROCESS.md) | 25 坐标、签名、promotion 顺序 |
 | [Collector Wire V3](docs/protocol/COLLECTOR_WIRE_V3.md) / [V2](docs/protocol/COLLECTOR_WIRE_V2.md) | 严格协议与兼容协议 |
-| [变更历史](docs/CHANGELOG.md) | 按日期的变更、验证证据与真机记录 |
+| [变更历史](docs/CHANGELOG.md) | 按日期的变更索引 |
+| [历史验证记录](docs/HISTORICAL_VERIFICATION.md) | 详细验收与真机记录 |
 | [AGENTS.md](AGENTS.md) | 仓库内交接账本与逐日现场验证 |
 | [CLAUDE.md](CLAUDE.md) | 面向 AI 协作的速览约束 |
 

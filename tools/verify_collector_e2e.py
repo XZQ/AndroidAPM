@@ -80,7 +80,7 @@ def java_home() -> Path:
     """Resolve a complete JDK from JAVA_HOME."""
     configured = os.environ.get("JAVA_HOME")
     if not configured:
-        raise RuntimeError("JAVA_HOME must point to JDK 17 or newer")
+        raise RuntimeError("JAVA_HOME must point to JDK 21 or newer")
     home = Path(configured).resolve()
     executable(home / "bin", "java")
     executable(home / "bin", "javac")

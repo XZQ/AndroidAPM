@@ -10,10 +10,10 @@
 3. **命名常量**：魔法数字/字符串提取为 `const val`（0/1/-1 除外）；禁止裸包名反射引入类
 
 ## 项目信息
-- Multi-module Gradle (Kotlin 2.2.21, AGP 9.5.1, Gradle 9.6.0, Java 17 toolchain, Gradle runtime JDK 17+, compileSdk 36, minSdk 24)
-- JVM 字节码目标保持 Java 17；构建与验证命令见 `AGENTS.md`
-- 发布下限：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方须 AGP 9.x 与 compileSdk ≥36；Kotlin 元数据保持 2.2.0
-- `settings.gradle.kts` 对 Gradle runtime JDK 17+ fail fast；完整客户端 CI 使用 `python tools/verify_ci.py`
+- Multi-module Gradle (Kotlin 2.2.21, AGP 9.5.2, Gradle 9.6.0, Java 21 toolchain, Gradle daemon JDK 21, compileSdk 36, minSdk 24)
+- JVM 字节码目标为 Java 21；构建与验证命令见 `AGENTS.md`
+- 发布下限：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.2，接入方须 AGP 9.x、JDK 21 与 compileSdk ≥36；Kotlin 元数据保持 2.2.0
+- `settings.gradle.kts` 对 Gradle daemon JDK 21 fail fast；完整客户端 CI 使用 `python tools/verify_ci.py`
 - 发布型 Kotlin 制品的公开 ABI 必须通过 `apiCheck`；版本与基线更新遵守 `docs/API_COMPATIBILITY.md`
 
 ## Git 提交

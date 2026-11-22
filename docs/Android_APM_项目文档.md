@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-21｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜130 个测试/benchmark 文件
+> 文档同步：2026-11-22｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜130 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -22,175 +22,9 @@ monitor module
 
 Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样、聚合与限流，同步到 SQLite 或 critical IPC hand-off point；较低调用方 priority 自动提升为 CRITICAL，返回成功前不执行网络 IO。上传进程消费 CRITICAL IPC 时仍同步落 store，只有下游接受后删除 ready 文件；false、recoverable 存储失败或 consumer 未就绪会保留整文件重试，已发布 `.ipc` 不按年龄先行删除，只有未完成 `.tmp` 在 5 分钟后清理。每个事件拥有稳定 `eventId`，上传 Worker 原子 claim 后由 owner ACK/失败释放，租约过期可重领。上传成功后删除，失败保留并重试；这是 at-least-once，不是 exactly-once，网络响应不确定或整文件重试时服务端仍须按 `eventId` 去重。
 
-## 2026-11-21 环境问题根治（第二轮）
+## 近期变更
 
-把同日 ANR 轮「过程中排掉的环境问题」从临时绕过转为根治，公开 ABI 零变化，新增 6 测试。逐项见 `AGENTS.md` 同日第二轮条目，此处摘要。
-
-remote-config 到期竞态（真实缺陷）：rescheduleExpiryLocked 原在 delayMs<=0 时静默返回，受信时钟恰在「上一轮通知与本轮重排之间」越过 expiresAt 的文档永远等不到到期通知，只能滞后一个轮询周期（默认 15min）；现零延迟调度立即补发。新增确定性回归（第一次回调内推进 fake 时钟精确命中竞态窗口），旧代码必失败、新代码通过；ANR 轮全量门禁的偶发超时即此缺陷。
-
-release candidate 脚本：safe_clean 由批量 rmtree（触发沙箱 safe-delete 拦截）改为原子 rename 归档到 build/release-candidate-archive/，保留上一份候选证据；新增 ensure_consumer_sdk_config 自动从根 local.properties 传播 sdk.dir 到隔离 consumer（已有配置不覆盖，无来源 fail-closed）。verifier host tests 5→10。JAVA_HOME 持久化为用户级环境变量（本机环境，非源码）。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 432/218/206/281、release verifier 10 tests、device-lab 策略与 45 host tests、强制重跑根 Android 126 suites / 901 tests + model 5 / 63 + included plugin 1 / 23 共 132 suites / 987 tests 全 0 failures/errors/skips、25 坐标候选（自动归档）与独立 consumer（自动 SDK 配置）含 ASM 插桩、文档 39 Markdown / 165 links。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-21 ANR SIGQUIT 生命周期与分类修复
-
-逐项核实并修复 ANR 模块审查发现的 6 项问题，公开 ABI 零变化，新增 10 测试。逐项见 `AGENTS.md` 同日条目与 `docs/architecture/05_apm-anr.md`，此处摘要。
-
-native 信号安全：SIGQUIT 处理器保存/恢复被中断代码的 errno；注册与注销都清零未消费时间戳（上一会话遗留信号不再误报）；卸载顺序改为先 join 接收线程再恢复原 sigaction（原顺序有「恢复 SIG_DFL 后信号杀进程」竞态）；补 stdlib.h。进程级引用计数 + pthread_mutex：同进程多个 AnrModule 实例共享处理器、互不撤销对方检测，register/unregister 串行化防并发竞态，信号处理器内绝不加锁。
-
-Kotlin 侧：SIGQUIT 分析线程改名 apm-anr-analysis（原与 native 接收线程重名）；原因分类提取为顶层 internal 纯函数 classifyAnrCauseInternal，判定顺序修正为 LOCK/DEADLOCK → IO → BINDER → CPU → UNKNOWN（Binder 阻塞时采样常变化，旧顺序误判 CPU），Binder 关键词改为真实帧；删除 dropbox glob 死路径。新增 AnrCauseClassificationTest（10 tests）。
-
-依赖元数据补登记（非新增依赖）：Gradle 缓存 .module 优先解析暴露 5 个已登记组件伴生 pom/module 校验和缺失，逐一对照 Maven Central 官方 sha256 MATCH 后补登记，根指纹 431→432（组件数口径）。环境修复（非源码）：smoke-tests/maven-consumer/local.properties（gitignored）补 sdk.dir。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 432/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 126 suites / 900 tests + model 5 / 63 + included plugin 1 / 23 共 132 suites / 986 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档 39 Markdown / 163 links。native 行为变更无 JVM 直测，建议真机抽查 start→stop→start 不误报、stop 后 SIGQUIT 不杀进程、双实例先后 stop 检测不失效。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-15 native IO 吞吐语义收敛（第四轮）
-
-2026-11-15 深度核实第三轮「仍待审」两项并按最佳实践处置，公开 ABI 零变化，测试数不变（native 行为变更无 JVM 直测）。逐项见 `AGENTS.md` 同日第四轮条目，此处摘要。
-
-session-less fd 吞吐语义（已修复）：native read/write hook 原先对无会话 fd（generation==0，含 hook 安装前已打开、socket/eventfd/管道、stdin/stdout/stderr）以 path=unknown 上报，把非文件 IO 计入文件吞吐造成污染；现改为只上报有会话跟踪的文件 IO（session_matches 初始 0、仅 generation 匹配时置 1），跳过无会话 fd，使文件吞吐统计准确并减少无意义 JNI 跨越；generation 校验仍防 fd 复用串线。FD 泄漏/Closeable 泄漏检测不受影响。
-
-每 syscall 原生侧阈值门控（刻意不做）：默认 enableThroughputStats=true 时每次 read/write 都需上报计数，原生门控仅在关闭吞吐（非默认）时受益，且需把阈值/开关下沉 native、改 JNI 契约并真机验证，风险大于收益，保留现状并已在 10_apm-io.md 记录决策。native 行为变更无法 JVM 直测，建议真机抽查文件吞吐不再含 unknown。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 431/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 890 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 976 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-15 最佳实践落地：未消费依赖清理 + 会话表有界化（第三轮）
-
-2026-11-15 把第二轮「仍待审」中可安全落地者按最佳实践处置，公开 ABI 零变化，新增 1 个测试。逐项见 `AGENTS.md` 同日第三轮条目，此处摘要。
-
-未消费依赖清理：移除 sample-app 的 core-ktx/material（代码零引用）与 junit/mockito testImplementation（无 test source set）、benchmark 的 androidx-test-ext-junit（androidTest 仅用 InstrumentationRegistry，来自 monitor）、apm-core 零消费的 implementation(lifecycle.process)（apm-memory 仍 api 提供，经 bundle 的消费方不受影响；apm-core 发布 POM 随之去除该运行时依赖，属发布说明项）。删除孤儿 catalog 条目。根指纹干净重生成 473→431；sample-app 移除显式 core-ktx 后由 appcompat 传递解析 core/core-ktx 1.13.0（原 1.13.1，demo 无功能影响），新增两组件校验和已对照 Google Maven 官方 sha256 逐一 MATCH；consumer/plugin/build-logic 指纹不变（281/218/206）。
-
-会话表有界化：NativeIoHook activeSessions/openFdPaths 增加 4096 上限——未启用 Closeable 泄漏检测时 GC 清理线程不运行，只创建不 close 的 wrapper 会无限累积，超限逐出最旧会话保证内存有界；新增 session-cap 测试。
-
-IPC 字节预算决策（刻意不改）：publishEncodedFile 保留跨进程锁内自愈式 listFiles+length 重算，不做缓存——跨进程缓存有预算漂移/超限风险，16MiB 预算内有界且 consumer 快速消费，正确性优先于边际性能。仍待审：native IO 每 syscall JNI 门控（需真机）、session-less fd 吞吐语义。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 431/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 890 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 976 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-15 待审项深度核实与修复（第二轮）
-
-2026-11-15 对同日第一轮「待审」清单逐项读码核实，确认并修复可安全落地的问题，公开 ABI 零变化，新增 6 个测试。逐项清单见 `AGENTS.md` 同日第二轮条目，此处摘要。
-
-WebView：`uninstall` 根治卸载线程契约——捕获安装线程 Looper，跨线程卸载把客户端恢复 post 回安装线程，避免 `CalledFromWrongThreadException` 让视图带着 wrapper 失去安装记录；ResourceWaterfall 与 JS Bridge/Console 一致尊重总开关，仅当 `enableWebviewMonitor` 与 `enableResourceWaterfall` 同时开启才创建模块持有 recorder，禁用总开关返回 null。remote-config：start/每次 refresh 后按文档 `expiresAt` 与受信时钟排定一次性到期闹钟，到期即通知 core reconcile，模块开关不再滞后一个轮询周期。native IO：移除 C 会话表只写无读的读写字节死累加，`hooked_close` 注释更正，duplicate-read 路径表饱和后新路径不再竞争全局锁。OTel：resource 属性预计算一次，log body 有界（32 字段/单值 200/总长 4000）。SQLite：update/delete 改在 finally 上报，与 insert/execSQL 一致，失败慢操作同样有耗时诊断。
-
-仍待审（未改）：native IO 每 syscall JNI 门控（仅 throughput 关闭时受益、需真机验证）、session-less fd 以 unknown 计入吞吐、`enableCloseableLeak=false` 时会话 map 无界、IPC `publishEncodedFile` 每次发布 O(files) stat、sample-app/benchmark 未消费依赖与 apm-core lifecycle.process 移除（需四组指纹重生成 + POM release note）。docs 三个 shell helper 为可用手动 adb 调试工具，保留。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 473/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 889 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 975 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档校验通过。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-15 全仓「损坏/不一致/低效/不再需要」审查与修复
-
-2026-11-15 全仓审查与修复（JDK 17.0.21+9，叠加 2026-11-14 两轮之后的工作树）：并行三路审查（文档一致性 / 死代码 / 低效与残留缺陷）加自查，修复确信项、其余列为待审，公开 ABI 零变化。逐项清单见 `AGENTS.md` 同日条目，此处摘要。
-
-环境修复（非源码）：本机 Android SDK 已迁至 `D:/Android-Sdk`，`local.properties`（gitignored）随之更新；Gradle 模块缓存陈旧导致严格依赖校验在构建 classpath 上报未登记的 `kotlinx-coroutines-bom:1.8.0`，经干净重解析确认为缓存伪影而非新增传递依赖，未改任何 verification-metadata。
-
-代码修复：线程监控周期快照由 `Thread.getAllStackTraces()`（VM 全局 safepoint 全线程堆栈物化）改为沿根 `ThreadGroup` 枚举存活线程（只读 name/state/id），堆栈仅在 BLOCKED 上报时按线程抓取，新增 `ThreadEnumerationTest`；gc-monitor 四处诊断数值改 `Locale.ROOT`；`WebviewModule.onStop` 卸载循环逐项隔离，单个非创建线程 restore 失败不再中断其余视图清理；`ProcessEventCoordinator` IPC 文件名清洗由失效的字面 `String.replace` 改编译 `Regex`；移除 `NativeIoHook` 零引用死常量；`OtelConfig` KDoc 更正为纯映射、无 OTel 依赖。
-
-文档一致性：测试/benchmark 文件数统一为 129、benchmark host suite 41→45、`01_apm-core` UploaderFactory 非持久一律异步包装 + 持久组合快速失败、`02_…` persistent worker 重试为 `config.maxRetries` 默认 3（非「10 retries」）、`15_apm-thread-monitor` BLOCKED 连续 3 采样与枚举机制、`18_apm-trace` 补两个测试套件、多处架构文档同步日期与基线对齐。
-
-待审（未改）：native IO 每 syscall JNI 门控、WebView 卸载线程契约根治、remote-config 到期即时通知、sample-app/benchmark 未消费依赖与 apm-core lifecycle.process 的 POM 影响移除（需指纹重生成）等，见本轮交付说明。
-
-验证：完整 `python tools/verify_ci.py` 通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组指纹 473/218/206/281、release verifier、device-lab 策略与 45 host tests、强制重跑根 Android 125 suites / 883 tests + model 5 / 63 + included plugin 1 / 23 共 131 suites / 969 tests 全 0 failures/errors/skips、25 坐标候选与独立 consumer 含 ASM 插桩、文档 39 Markdown / 153 links。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz（Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-14 测试密度补强（apm-io / apm-memory）
-
-2026-11-14 测试密度补强（JDK 17.0.21+9）：补齐全仓 test/main 行数比最低的两个模块（apm-io 0.26→0.51、apm-memory 0.40→0.53），纯测试与文档变更，公开 ABI 零变化。完整清单见 `AGENTS.md` 同日条目，此处摘要。
-
-**apm-io**：新增 `NativeIoHookTest` 覆盖 wrapper 字节/操作计数与 EOF/flush/重复 close 不计数、吞吐量开关门控、非正字节忽略、Native 事件归属拆分（read/write 计数、open/close 与零字节不计）、路径维度读写拆分、防御性快照隔离、256 路径上限与 `<other>` 溢出桶、destroy 清空与后续回调忽略、零拷贝链条饱和不污染吞吐量；`IoModuleTest` 增补未启动时 wrapper 直通与手动回调 no-op。
-
-**apm-memory**：新增 `MemorySampleSchedulerTest`（首次采样立即触发、reschedule 取消旧周期、stop 取消待执行采样、stop 后重调度静默拒绝）、`NativeHeapMonitorTest`（enable 幂等、disable 门控回默认统计、Debug 读取路径）、`LeakCheckQueueResultTest`（retained 目标交付 LeakResult 的 suspectFields 出站字段提示、32 条提示上限、sink 异常隔离）。
-
-**模块文档**：`03_apm-memory.md` 标注 ReferenceChainAnalyzer 已弃用未接线（同日处置轮已加 @Deprecated，目标 0.2.0 移除）并更新测试章节与降级边界；`10_apm-io.md` 同步行为测试覆盖。
-
-验证：合并同日两轮后根 `testDebugUnitTest --rerun-tasks --no-daemon` 通过——根 Android 124 suites / 880 tests + model 5 / 63 + included plugin 1 / 23 共 130 suites / 966 tests，全 0 failures/errors/skips；完整 `python tools/verify_ci.py` 通过。
-
-## 2026-11-14 已知限制处置与可观测性补强
-
-2026-11-14 已知限制处置（JDK 17.0.21+9，基于 177dc16）：把 2026-11-11 审查记录的「刻意不改」项转化为可执行处置，公开 ABI 零变化。完整清单见 `AGENTS.md` 同日条目，此处摘要三项。
-
-**弃用时间表**：`ReferenceChainAnalyzer`/`ReferenceChainResult`/`RefNode`/`GcRootType` 标记 `@Deprecated`（运行时零接线，生产引用链分析应使用 LeakCanary/Shark 或专用 Hprof 解析库），按「计划移除先弃用、至少保留一个 minor 周期」目标 0.2.0 移除；`docs/API_COMPATIBILITY.md` 建立公开面全部 17 项 `@Deprecated` 的移除时间表（新增 4 项 + 既有 13 项运行时已忽略的弃用配置字段），既有字段 0.2.0 逐项评估。`@Deprecated` 注解与 internal overload 均不进入 ABI 基线，`apiCheck` 零变化。
-
-**tombstone 可观测性**：降级扫描的静默失败改为经模块 logger 写入独立诊断 journal——目录不可读（生产 SELinux 常态）每次启动一条 WARN，扫描异常记录异常类型一条 WARN；公开 `checkRecentTombstone()` 签名不变，模块内部经 internal overload 传入 `CrashModule` 的生命周期 logger。native crash 生产回退依赖 API 30+ `ApplicationExitInfo` 的能力现状不变。
-
-**测试补齐**：apm-trace 新增 `TraceConfigTest`（默认值契约、disabled 下 `traced` 行为、`maxSpanDurationMs` 超时分支）与 `IdGeneratorTest`（traceId/spanId 小写十六进制格式、并发唯一性）；apm-crash 新增 `NativeCrashTombstoneLoggingTest`（不可读目录恰好一条 WARN、60 秒限频、公开无参入口安全）。同轮复核更正三项在用代码误判：`LeakResult`（MemoryModule→MemoryReporter 正常接线）、`StackFingerprinter`（EventAggregator 使用）、`LogcatApmUploader`（UploaderFactory 为 `logcat://` 构建），均不处置。
-
-验证：定向 crash 8 suites / 31 tests、memory 8 / 44、trace 3 / 23 全通过；完整 `python tools/verify_ci.py` 通过，强制重跑根 Android 120 suites / 851 tests + model 5 / 63 + plugin 1 / 23 共 126 suites / 937 tests，全 0 failures/errors/skips；24 份 ABI 基线零变化。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz 验收（AndroidAPM-Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-11 全仓深度审查与修复
-
-2026-11-11 全仓深度审查与修复（JDK 17.0.21+9，基于 d738899）：并行分模块审查加集成模块自审，确认并修复一批真实缺陷，公开 ABI 零变化。完整清单与逐项说明见 `AGENTS.md` 同日条目，此处摘要按严重度分组。
-
-协议层最严重的一处是 `ProtobufWriter.writeVarint64` 对负 int64 只写 1 字节：负数跳过 varint 循环，使含负时间戳的整个 wire 批次不可解析或被静默篡改，且持久 codec 用定长 8 字节能正常往返、毒行无法被现有 preflight 隔离，会连累同批有效行被重试耗尽剪除。改为按 protobuf 规范以 64 位补码编码为 10 字节，并新增用规范 varint 读取器完整遍历消息的回归（-1 / -1000 / Long.MIN_VALUE 与正边界）。
-
-核心两处 P1 都属于「对 SDK 自有代码可证安全的边界，仍执行或等待宿主可控工作」：其一，非持久交付路径在进程级 `EventDeliveryBarrier` 锁内执行阻塞式 `upload()`，FILE + enableRetry=false 的原始 HTTP 或自定义传输可把 CRITICAL 同步交接与同意擦除拖住数分钟；`UploaderFactory` 改为非持久路径一律经有界异步 `RetryingApmUploader` 包装（关闭重试时单次尝试），并对「持久 outbox + 异步接受型 uploader」这一会 ACK 未交付行、进程死亡即丢事件的危险组合快速失败。其二，`DiagnosticSanitizer.sanitizeThrowable` 无防护调用可被宿主覆写的 `getMessage()/getStackTrace()`，错误上报路径自身抛异常会永久杀死 dispatcher worker 或 sdk_health/AutoThrottle 周期任务；逐项隔离降级为仅类名，并给 worker 批处理与自监控 tick 加最终可恢复边界（fatal Error 仍传播）。
-
-生命周期 P1 集中在宿主安全与会话正确性：LeakCheckQueue 锁内执行宿主 onLeak 回调（经 Apm.emit 同步触达宿主 BizContextProvider）改为锁内认领、锁外交付，避免慢 provider 卡死 stop/撤回；MemorySampleScheduler 与进程生命周期回调的竞态加执行器关闭防护 + 会话门禁，杜绝主线程 RejectedExecutionException 崩溃宿主；RenderModule FrameMetrics 监听器加异常隔离 + 失败摘除；ANR JNI 找不到 Signal Catcher 时 fail-closed 拒装并返回 jboolean，绝不吞掉系统 SIGQUIT；LaunchModule 跨 stop/re-init 重置会话级热/温启动计数（冷启动进程级状态保留）；BatteryModule 主线程周期任务加异常边界。P2 批次涵盖 ANR 看门狗/指纹/traces、ThreadMonitor 任务边界与 BLOCKED 连续采样、HprofDumper fork 超时杀死回收子进程、ExitReasonCollector 读满上限与逐条水位、Locale.ROOT 数值、native crash 移除 SIGPIPE 拦截、RetryPolicy 校验与丢弃归因、header 值上限、line protocol 转义 \r、SQLiteEventStore.close 同步、versionCode ASCII 收紧、ProcessUtils 进程名回退、dropRate 契约文档等。
-
-刻意不改并已记为已知限制：Crash 超大身份写 null 清除本进程陈旧摘要是经测试的刻意契约（审查一度误判为擦除外方摘要，已回退）；`ReferenceChainAnalyzer` 为未接线死代码（多处 hprof 格式错误 + 无界内存）；tombstone 回退在生产 SELinux 下不可读（真实回退是 ApplicationExitInfo）；unsafe-mode native 上报为 debug-only。此三项不在本轮做高风险或 ABI 变更。
-
-验证：`python tools/verify_ci.py` 完整通过（GATE_EXIT=0）——root/plugin apiCheck 与 24 份 ABI 基线零变化、四组依赖指纹 473/218/206/281、release verifier 5 tests、device-lab 策略、45 项 benchmark/device-lab host tests、强制重跑根 Android 117 suites / 842 tests + model 5 / 63 + included plugin 1 / 23 共 123 suites / 928 tests 全 0 failures/errors/skips、25 坐标发布候选（22 AAR / 26 JAR / 25 POM）与独立 consumer `--refresh-dependencies` clean assembleDebug 含 ASM 插桩、文档 39 Markdown / 147 links。同时修正历史条目把合并总数误标为「根 Android」再叠加 model/plugin 的重复计数（2026-11-08 的 129/1005 实为 123/922）。外部依赖项不变：真机 24h/72h 长稳（待设备）、生产 PostgreSQL/TLS/SigNoz 验收（AndroidAPM-Server）、外部 Maven staging/promotion（待凭据）。
-
-## 2026-11-08 AGP 9 与 Gradle 9.6 迁移
-
-2026-11-08 AGP 9.5.1 / Gradle 9.6.0 全链迁移（JDK 17.0.21+9）：AGP 9.5 的下限是 Gradle 9.6.0、Build Tools 36.0.0、JDK 17，因此 `compileSdk` 一并 35→36（四处：约定插件、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`，`targetSdk` 仍 34）。AGP 9 默认启用内置 Kotlin，`org.jetbrains.kotlin.android` 从约定插件、根构建、benchmark、sample 与独立 consumer 全部移除，版本目录删除该别名；根 `subprojects` 里用 `KotlinAndroidProjectExtension` 设置 jvmTarget 的块删除，因为内置 Kotlin 的 jvmTarget 默认跟随 `compileOptions.targetCompatibility`（17）。`android.newDsl` 默认开启后，`com.android.build.gradle.LibraryExtension` 不再是扩展实例的类型（装饰实例实现新接口，强转会 ClassCastException），根构建改用 `com.android.build.api.dsl.LibraryExtension`。
-
-迁移中最关键的判断是 **Kotlin 版本不能跟着往上走**：内置 Kotlin 使用构建类路径上的 KGP，类路径没有才回落到 AGP 自带版本（9.5.1 为 2.2.10）。把 catalog 的 `kotlin` 升到 2.4.21 时，AAR 内的 `*.kotlin_module` 元数据变成 2.4.0，独立 consumer 用默认 AGP 9 工具链（2.2.10）编译立即报 `Module was compiled with an incompatible version of Kotlin`；回退 2.2.21 后一切恢复正常。元数据版本即消费方编译器下限，发布型 SDK 不应单方面抬高。同时把 `DiagnosticRecorder` 的 `java.lang.Object` 监视器换成 `ReentrantLock`+`Condition`（`awaitNanos`/`signalAll`，有界等待语义等价），去掉裸 monitor。
-
-验证：`apiCheck` 与 24 份 ABI 基线零变化；根 Android 117 suites / 839 tests、model 5 / 60、included plugin 1 / 23，共 123 suites / 922 tests 全 0 failures/errors/skips；全模块 `lintDebug` 0 error；`:apm-sample-app:assembleDebug`（含 `com.apm.slow-method` 的 `transformDebugClassesWithAsm`）与 benchmark Release AndroidTest 编译通过；25 坐标候选（22 AAR / 26 JAR / 25 POM）与独立 Maven consumer 在严格依赖校验下完成 clean assembleDebug 与 ASM 插桩；文档 37 Markdown / 79 links。四组指纹干净重建为 473 / 218 / 206 / 281 组件（consumer 保留 `com.apm`、`com.apm.slow-method` 信任组）。**代价**：AAR 元数据 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方必须使用 AGP 9.x 与 compileSdk ≥36。另需登记一个官方矩阵无法满足的组合：KGP 2.2.x 支持到 Gradle 8.14，AGP 9.5 却要求 Gradle ≥9.6；本仓库用完整门禁覆盖该偏离，后续升 Kotlin 前要先决定消费方编译器下限策略。`tools/verify_release_candidate.py` 的脏树身份同时改为 `git diff --binary --no-textconv`：textconv 依赖本地 Git 配置与外部 `file` 命令，含 `.docx` 等二进制变更时会失败或跨机不一致。
-
-## 2026-11-08 compileSdk 35 与测试密度
-
-2026-11-08 compileSdk 35 迁移、测试密度补强与文档冗余清理（JDK 17.0.21+9，基于 a2625ec 之后的本轮提交）：`compileSdk` 34→35 共四处（`build-logic` 的 `apmCompileSdk` 约定、`apm-benchmark`、`apm-sample-app`、`smoke-tests/maven-consumer`），本地 SDK 已补装 platform-35；`targetSdk` 保持 34（sample 应用行为不变），androidx 依赖未随 compileSdk 升级，`apiCheck` 与 24 份 ABI 基线零变化。AGP 8.13.2 / Gradle 8.13 / Kotlin 2.2.21 保持不变（AGP 9 需 Gradle 9.6+；同日第二轮已完成迁移，见上方条目）。测试密度补强四个零直接覆盖文件：`QueryPlanAnalyzerTest`（sqlite 规则矩阵与门控）、`ApmSlowMethodTracerTest`（配对/嵌套/unwind/容量/线程隔离）、`StackSamplingProfilerTest`（Robolectric 门控与生命周期）、`FrameMetricsWindowAccumulatorTest`（空窗口/重置/淘汰/容量）；`apm-slow-method` 新增 `testImplementation(libs.robolectric)`（复用既有坐标，四组指纹不变）。test/main 行数比：apm-slow-method 0.32→0.81、apm-sqlite 0.37→0.66、apm-fps 0.40→0.51，全项目 0.62→0.64。验证：`apiCheck` + 全模块测试 + sample Debug + benchmark Release/AndroidTest Kotlin + 全部 `lintDebug` 在 compileSdk 35 下通过（0 errors）；memory 两条 ObsoleteSdkInt 与 crash 一条 UseRequiresApi 维持保留，sample-app 新增一条 compileSdk 36 可用的信息提示。文档整理：删除 `docs/superpowers/` 10 个零引用过程文档（2,958 行），Markdown 由 47 降至 37。外部依赖项：`apm-benchmark/run_device_soak.py` 与矩阵/预算/host tests 已完备，物理设备到位即可执行 24h/72h 长稳；生产 PostgreSQL/TLS/SigNoz 验收归属 `AndroidAPM-Server`，外部 Maven staging/promotion 归属发布流程且需仓库凭据。
-
-## 2026-10-13 深度审查
-
-2026-10-13 最终本地验收（JDK 17.0.14，源码 e0b75c1）：`python tools/verify_ci.py` 完整通过。强制 Android 113 suites / 803 tests、model 5 / 60、included plugin 1 / 23，共 119 suites / 886 tests，均 0 failures/errors/skips；根/plugin API check、24 份 ABI 基线、四组严格依赖元数据、5 项 release verifier 与 41 项 benchmark/device-lab host tests 通过。本地候选为 25 coordinates / 22 AAR / 26 JAR / 25 POM，sourceRevision=e0b75c13e72ed866a793c7702853b094fce7eb68、sourceDirty=false；独立 consumer 使用 --refresh-dependencies 完成 clean assembleDebug 和 ASM transformation。sample Debug、benchmark Release 与 Release AndroidTest Kotlin 编译通过；八个受影响模块 lint 无错误，警告明细见审查记录；文档 47 Markdown / 79 links 通过。本机无连接设备且缺少 AndroidAPM-Server，本轮未执行真机或 Collector E2E，也未向外部 Maven 发布。
-
-2026-10-13 深度审查已完成 16 项问题修复：清理与新 init 的所有权、旧 ANR/Hprof/Launch 回调的会话隔离、WebView 宿主回调与后台线程约束、页面/资源/文件容量、HTTP 响应体与内存 retry 生命周期、签名配置 scope、完整 Header 脱敏、ART Hprof 流式布局、Native handler 重启以及 Launch 时钟。既有 wire/codec/SQLite schema 保持；ABI 仅手工追加两个 ApmContext synthetic 会话交接 overload。 逐项计划、实际验证与限制见 [本轮审查记录](REVIEW_2026_10_13.md)。
-
-## 2026-09-23 对前一日修改的复核
-
-逐项复核 2026-09-22 的五个本地提交后，插件延迟注册、包边界排除和 app-exit 摘要所有权方向正确，另确认并修复两个必须阻止发布的问题：
-
-1. 独立 `transformJar`/`transformDirectory` 在插件 classpath 无法解析宿主兄弟类型时曾回退 `java/lang/Object`。该结果虽然包含 tracer 调用，但当原方法随后按真实共同父类调用时会在 JVM 类加载阶段触发 `VerifyError`。转换器现保留输入 class 的精确 StackMapFrame，只使用 `COMPUTE_MAXS`，并给新增 catch-all handler 写入不读取 locals 的最小 Throwable frame；回归会定义完整宿主层次、加载并实际执行转换结果。
-2. 包名归一化只处理 `/`，Windows `transformDirectory` 产生的反斜杠 class 路径可能绕过 `android.*` 等排除项。现在点分名、Jar 斜杠和 Windows 反斜杠路径进入同一包边界判断，并有直接回归覆盖。
-
-JDK 17 定向验证通过 included plugin 1 suite / 23 tests、plugin `apiCheck`、crash 6 suites / 28 tests、crash `apiCheck` 和文档 46 Markdown / 70 links。为验证实际声明顺序，临时把 sample 的慢方法插件放在 Android application 插件之前，Debug 构建仍完成 451 个强制任务、`transformDebugClassesWithAsm` 和 APK 打包；验证后构建脚本已恢复原顺序。该证据证明本机 Gradle/JVM 插桩链，不替代 ART/OEM 真机执行。
-
-## 2026-09-12 审查修复与最终验收
-
-最终整合验收（2026-09-12，JDK 17.0.14，源码 62665ae）：python tools/verify_ci.py 完整通过。强制重跑 Android 105 suites / 739 tests、model 5 / 60、included plugin 1 / 18，共 817 tests，均 0 failures/errors/skips。根/plugin apiCheck、全部 24 ABI 基线、4 组严格依赖元数据、5 项发布候选 verifier 测试与 41 项 benchmark/device-lab host 测试通过。本地 Maven 候选为 25 coordinates / 22 AAR / 26 JAR / 25 POM，manifest 的 sourceRevision=62665aecc0388df355439a9531c88badb816d3c5、sourceDirty=false；独立 consumer 使用 --refresh-dependencies clean assembleDebug 完成 ASM transformation。sample debug、benchmark release 与 AndroidTest Kotlin 编译通过。verify_collector_e2e.py 对 AndroidAPM-Server 的干净提交 24f5b8b4a6a2de12e29887421362e53558783133 完成真实 V2/V3 Gzip HTTP、exact ACK、typed/occurrence 持久化、installation HMAC 与重放去重。文档检查为 46 Markdown / 70 links。各项受影响模块 lint 无错误；保留 memory 的两条 ObsoleteSdkInt 与 crash 的一条 UseRequiresApi 既有警告。无物理设备连接；该结果不代表真机长稳、Native signal 或生产 PostgreSQL/TLS/SigNoz 接受，也未向外部 Maven 发布。
-
-1. 撤回同意与最终存储交接现在共享进程内屏障；异步批次、同步关键事件和停止后的 dormant cleanup 均受约束。脱敏等宿主回调在屏障外执行，返回后检查永久关闭的会话门禁；再次 grant/init 不会复活旧调用。已开始的自定义 store/transport 若超过 3 秒仍未退出，清理返回 storageCleared=false，禁止另开 helper 绕过，并可稍后重试。普通 stop 仍先有界 drain，再封闭旧会话。新增真实 SQLite 回归覆盖异步/同步迟到写入、新授权及 dormant 路径，另覆盖重入和交接等待超时。 本项 clean core 测试 30 suites / 236 tests 全通过；storage 6 / 43 保持通过，core lint 无问题、core apiCheck 与文档校验通过。
-
-2. 聚合输入先按原字段名/类型脱敏；周期与关闭 flush 不再重复执行自定义规则。独立使用 EventAggregator 时也将敏感数字字段排除出统计，保留原名供后续脱敏。数字文本保持文本维度（包括前导零和状态码），只对显式 Number 计算统计。回归覆盖数值 sessionId/phone/token、codec round trip、数字文本分组和有状态规则只执行一次。 本项 core 30 suites / 239 tests、lint、apiCheck 和文档校验通过。
-
-3. BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算精确展开长度，覆盖零、符号、极端 scale 和尾零。typed event 的十进制文本总量最多 2 Mi 字符，并受 batch byte budget 下界约束；wire 保持 plain decimal，未改 schema/codec。预算 splitter 在编码整批前拒绝超限，HttpApmUploader 返回新增 DECIMAL_BUDGET_EXCEEDED，已有 owner-aware discard 路径隔离该行并计入 UPLOAD_PROTOCOL_REJECTED，有效行继续精确 ACK。新增公开 validateDecimalFieldBudget 方法与枚举项均为 additive ABI。 本项 model 5 / 60、core 30 / 239、uploader 4 / 31 测试无失败；model/uploader apiCheck、uploader lint、24 基线及文档检查通过。独立 -Xmx32m JVM 对原 203-byte durable / 1E+100000000 探针返回有界拒绝，未发生 OOM。
-
-4. Activity/Fragment 泄漏检查改为模块会话共享的一个后台队列，最多 128 个弱引用观察项、一个待执行回调，同批只请求一次 GC，GC 请求至少间隔 5 秒。目标 class/scene 在销毁时复制，队列和延迟闭包不强持有 Activity/Fragment；Fragment 仅 onFragmentDestroyed 触发检查，View 销毁与返回栈正常保留不触发。unregister/shutdown 清空所属观察项，GC 期间取消也禁止迟到结果。轻量反射仅输出 bounded suspectFields，referenceChain 留空；它是疑似保留检测，不是 GC Root 证明，也不覆盖独立 View 泄漏。后台 GC 仍可能暂停应用线程，真机开销需实际验收。 本项 memory 7 suites / 33 tests 和 apiCheck 通过；lint 0 errors，保留 MemorySampler 的 2 条既有 ObsoleteSdkInt 警告；文档检查通过。
-
-5. 百分位抽样改为 Algorithm R，使用有界均匀随机索引替换 reservoir，修复旧公式在 65,536 个样本以内几乎只替换第 0 槽的问题。生产使用正常随机源，测试注入固定 seed；min/max/sum 保持全量统计，百分位仍是默认 256 点的近似值。内部 population 使用 Long，既有 Int count 达上限后饱和而不溢出。回归覆盖 10,000 样本分布突变及反转、256/257/65,535/65,536/65,537/100,000 边界。 本项 core 30 suites / 241 tests、lint、apiCheck 和文档检查通过。
-
-6. 默认 OkHttp EventListener 在 callEnd/callFailed 结算唯一请求 summary，totalMs 包括 body 消费/关闭；requestBodyEnd/responseBodyEnd 提供已完成阶段的实际字节数，失败 body 耗时同样保留。与拦截器同时接入时按 Call/模块协商所有权，避免重复。单独拦截器或显式 reportSummary=false 的兼容组合，在流 EOF/已知长度完成/close/IOException 时只结算一次；它无法观察未进入拦截器的提前取消，因此推荐 listener。headers/body/total 保留独立口径，不在 headers 到达时计为成功。宿主仍负责消费或关闭 body，SDK 不主动读取正文。 本项 clean network 4 suites / 27 tests、lint（无问题）、apiCheck 与文档检查通过。
-
-7. 普通 ALERT 的首条事件立即交付；窗口内重复次数通过 count 增量摘要交付，摘要使用新 eventId 并保留 occurrence/维度，extras 标记 duplicate_delta 与首条 eventId。固定窗口过期、容量淘汰、普通关闭 flush 都输出尚未交付的增量，不修改已发出的行。消费方对该标记求和 count，不能把它当累计更新。去重键使用完整有界规范文本与模块/事件/异常身份，避免 hashCode 碰撞；聚合层还隔离进程、release、scene、context 等维度，无 at 栈帧或元数据冲突时直接通过。支持 stack_trace/stacktrace/stackTrace；内置 Crash/ANR 的 critical 同步通道仍绕过聚合。本次不把普通 ALERT 的问题误记为内置 Java Crash 丢次数。 本项 core 30 suites / 245 tests、lint、apiCheck 和文档检查通过。
-
-8. 历史 app_exit 保留系统记录的退出时间/进程，使用退出前写入平台摘要的完整 occurrence，不绑定当前 release。摘要最多 128 字节，五字段不能完整容纳或历史摘要不可验证时，strict V3 在入队前明确丢弃并计入 HISTORICAL_OCCURRENCE_UNAVAILABLE，同时推进处理水位，不伪造身份或降级 V2。新增 CrashModule(CrashConfig, Boolean) overload 可关闭平台摘要写入/清理；原 CrashConfig constructor/copy/component 保持。模块 stop/撤回仅尝试清当前进程摘要，不能删除 OS 已保留的退出记录。后台 trace 读取与最终交接受会话取消门禁约束，原 context 不会进入新 init。 本项 JDK 17.0.14 下 core 30 suites / 248 tests、crash 6 suites / 27 tests，均零失败/错误/跳过；两模块 apiCheck 通过。core lint 无问题；crash lint 为零错误和一条既有 UseRequiresApi 建议（保留原 TargetApi，模块未引入该注解依赖）。24 份 ABI 基线和文档 46 Markdown / 70 links 检查通过。
-
-## 2026-09-07 审查修复
-
-本轮修复 8 个已复现问题，并保留既有 V3/ABI 契约：
-
-1. HTTP 关闭后禁止新请求与后续物理分批，并异步取消活动连接，避免平台 `disconnect` 锁阻塞撤回流程。`ConsentRevocationResult.uploadWorkerStopped` 区分真实退出、等待超时与未知；无法撤销服务端已接收的请求。
-2. 异步入口保留不可变标量，`StringBuilder`/`StringBuffer` 在调用时最多复制 64 Ki 字符并参加脱敏；未知对象替换为 `[unsupported]`，不调用任意宿主 `toString`。原生 String 保留原值，由原有事件/队列预算约束。
-3. 邮箱匹配改用线性扫描；长无命中、长近匹配与固定种子历史语义对照均有回归。
-4. 失败退避使用单调截止时间，落盘 signal 不再缩短 `Retry-After`；shutdown 可中断等待。
-5. 聚合按 occurrence、场景、进程/线程、优先级、上下文及非数值维度分组，生成独立 eventId，统计值保持 Double/Int，并携带每字段样本数。文本事件、字段冲突、超过 64 字段或 16 KiB 模板预算的事件完整绕过聚合；关闭 flush 同样先脱敏。
-6. 旧 codec V1/V2/V3 行缺少 occurrence 时，SQLite 的 V3 上传路径按 owner 单独 discard，并计入 `UPLOAD_PROTOCOL_REJECTED`；有效新行正常获得精确 ACK，不连带消耗重试。自定义 store 若未实现可选 discard 接口，只有拒绝行进入原有 retry/TTL 策略。不补造历史身份、不自动降级协议。
-7. FrameMetrics 用实际 `TOTAL_DURATION` 与 API 31+ `DEADLINE`（旧平台回退刷新周期）判断 missed deadline；空闲间隔只影响 render rate，不产生掉帧/frozen，也不单凭低 render rate 告警。Choreographer fallback 保留连续回调间隔口径。
-8. OkHttp `callEnd` 表示最终成功结束；中间 `connectFailed` 不污染成功重试、重定向或复用连接的最终状态，`callFailed` 仍报告最终 transport failure。
-
-新增真实 SQLite + Gzip HTTP + V3 精确 ACK 组合回归，覆盖旧 outbox、聚合身份、脱敏和成功行独立交付。该证据属于本机测试，不替代真机或生产 Collector 验收。
-
-本轮最终验证（2026-09-07，JDK 17.0.14）：`python tools/verify_ci.py` 完整通过；强制重跑 Android 101 suites / 700 tests、model 5 suites / 57 tests、独立 plugin 1 suite / 18 tests，全部 0 failures/errors/skipped。根与 plugin API check、24 份基线、4 组严格依赖元数据、5 项发布候选 verifier 测试、41 项 benchmark/device-lab host 测试通过；本地候选验证 25 坐标 / 22 AAR / 26 JAR / 25 POM，独立 Maven consumer 使用 `--refresh-dependencies` 完成 clean assembleDebug 和 ASM transformation。core/storage/uploader/network/fps lint 均无问题，sample debug、benchmark release 与 AndroidTest Kotlin 编译通过。`verify_collector_e2e.py` 对参考服务端实际工作树完成真实 V2/V3 Gzip HTTP、exact ACK、typed/occurrence 持久化、installation HMAC 和重放去重验证。候选来自尚未提交的工作树，manifest 的 sourceDirty=true；这不是外部 Maven 发布或真机/生产 PostgreSQL/TLS/SigNoz 验收。
+按日期的功能和构建变更见 [变更历史](CHANGELOG.md)。依赖排查、历史测试和真机证据见 [历史验证记录](HISTORICAL_VERIFICATION.md)。
 
 ## 二、事实源与接手顺序
 
@@ -225,13 +59,13 @@ JDK 17 定向验证通过 included plugin 1 suite / 23 tests、plugin `apiCheck`
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
 | 主源码 | 170：165 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 文件 | 129 |
+| 测试/benchmark 源文件 | 130（Gradle 的 `src/test` 与 `src/androidTest`，另有 5 个 Python 测试文件） |
 | Kotlin | 2.2.21 |
-| AGP | 9.5.1 |
+| AGP | 9.5.2 |
 | Gradle | 9.6.0 |
-| Gradle runtime | JDK 17+ |
-| Java toolchain | 17 |
-| JVM bytecode | Java 17 |
+| Gradle daemon | JDK 21 |
+| Java toolchain | 21 |
+| JVM bytecode | Java 21 |
 | Android SDK | compileSdk 36 / minSdk 24 / targetSdk 34 |
 
 不要在文档中维护“最新文档提交号”；文档提交本身会让该值立即过期。使用 `git log --oneline -n 10` 查看实际 tip。
@@ -277,7 +111,7 @@ JDK 17 定向验证通过 included plugin 1 suite / 23 tests、plugin `apiCheck`
 | `apm-otel-exporter` | 输出 OTel-compatible Span/Metric/Log Map；不负责 SDK/网络发送 |
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
 | `build-logic` | Android library convention plugin |
-| `apm-sample-app` | 集成 15 个监控模块的演示应用；实际演示 IO/SQLite/WebView/IPC/线程池/Battery 显式接线，并显式配置 `logcat://sample` 输出 |
+| `apm-sample-app` | 演示 15 个监控模块与宿主显式接线。默认输出 `logcat://sample`，可配置 Strict V3 发送到测试 Collector。 |
 | `apm-benchmark` | 非发布双层性能门：AndroidX codec/SQLite 固定预算 + sample-App 启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 离线重启 campaign |
 
 ## 五、统一事件模型
@@ -443,117 +277,13 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 
 ## 十一、构建与发布
 
+2026-11-22 将项目的 Gradle daemon、测试工具链和 Java/Kotlin 字节码目标迁移至 JDK 21，并将 AGP 升级到 9.5.2。Android Studio Sync、全模块 Debug 构建、benchmark Release 与 AndroidTest Kotlin 编译通过。样例 APK 元数据记录 AGP 9.5.2，已核验 Debug AAR 中的实现类为 Java 21 字节码。
+
 Android Studio 同步会解析依赖的 Javadoc 和示例源码，这些文件也受 Gradle 依赖校验约束。2026-11-22 对照 Maven Central 与 Google Maven 官方原件核对 SHA-256 后，将本次同步所需的校验和登记到根 `gradle/verification-metadata.xml`，并在 Android Studio 重跑完整同步通过。新增缺失记录前，应查看 Gradle 校验报告并确认本机缓存与官方原件一致。
 
-根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 Java 17 toolchain，同时允许 Gradle/AGP 支持的更新 JDK 作为 Gradle runtime；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 17。构建链为 Gradle 9.6.0 / AGP 9.5.1 / Kotlin 2.2.21（AGP 9 内置 Kotlin，`jvmTarget` 跟随 `compileOptions.targetCompatibility`），`compileSdk` 为 36（`targetSdk` 仍 34）；发布 AAR 的 `minCompileSdk=36` 与插件的 AGP 9.5.1 依赖把接入方下限定为 AGP 9.x 与 `compileSdk ≥ 36`，Kotlin 元数据保持 2.2.0。仓库以 `.java-version` 声明推荐 JDK 17，`settings.gradle.kts` 在项目配置前拒绝低于 17 的 Gradle runtime；`python tools/verify_ci.py` 是平台无关的完整客户端门禁，会检查 Java、23 个根发布制品与 included `apm-plugin` 的公开 ABI、四个 Gradle build root 的依赖 SHA-256 元数据、25 坐标发布候选、device-lab plan 和 benchmark host tests，并强制重跑根 Android/model、included plugin 和文档校验。Kotlin binary-compatibility-validator 0.18.2 从 Android Release/JVM 产物生成已提交基线；24 个制品中除不承载实现类的 `apm-bundle` 外均要求非空，sample/benchmark 明确排除。版本、基线更新和门禁边界见 [API 兼容策略](API_COMPATIBILITY.md)，制品签名、SBOM、凭据和外部仓库边界见 [发布与供应链门禁](RELEASE_PROCESS.md)。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`verifyReleasePerformanceBudgets` 把 connected microbenchmark 与 fail-closed verifier 串联；`run_device_soak.py` 生成显式物理机工件，`verifyDeviceSoakFromResults` 只验证显式 profile/result，不搜索旧文件；`verifyDeviceLabMatrix` 只验证计划，`verifyDeviceLabCoverageFromResults` 才验证全部显式 schema-v3 工件、exact provenance 和完整矩阵。`apm-plugin` 现在既作为 included build 独立测试，也独立发布实现坐标和 `com.apm.slow-method` marker。
+根构建统一 group/version、POM 元数据、sources JAR/AAR 和可选 signing。主构建、`apm-plugin`、`build-logic` 与独立 Maven consumer 均使用 JDK 21 运行 Gradle daemon，并以 Java 21 toolchain 编译和测试；Android、纯 JVM、Gradle 插件与 consumer 的 Java/Kotlin 字节码目标统一为 21。构建链为 Gradle 9.6.0 / AGP 9.5.2 / Kotlin 2.2.21（AGP 9 内置 Kotlin，`jvmTarget` 跟随 `compileOptions.targetCompatibility`），`compileSdk` 为 36（`targetSdk` 仍 34）；发布 AAR 的 `minCompileSdk=36` 与插件的 AGP 9.5.2 依赖把接入方下限定为 AGP 9.x、JDK 21 与 `compileSdk ≥ 36`，Kotlin 元数据保持 2.2.0。仓库以 `.java-version` 声明推荐 JDK 21，`settings.gradle.kts` 在项目配置前拒绝低于 21 的 Gradle runtime；`python tools/verify_ci.py` 是平台无关的完整客户端门禁，会检查 Java、23 个根发布制品与 included `apm-plugin` 的公开 ABI、四个 Gradle build root 的依赖 SHA-256 元数据、25 坐标发布候选、device-lab plan 和 benchmark host tests，并强制重跑根 Android/model、included plugin 和文档校验。Kotlin binary-compatibility-validator 0.18.2 从 Android Release/JVM 产物生成已提交基线；24 个制品中除不承载实现类的 `apm-bundle` 外均要求非空，sample/benchmark 明确排除。版本、基线更新和门禁边界见 [API 兼容策略](API_COMPATIBILITY.md)，制品签名、SBOM、凭据和外部仓库边界见 [发布与供应链门禁](RELEASE_PROCESS.md)。`build-logic` 收敛发布型 Android library 的 compileSdk/minSdk/Java 版本；`apm-bundle` 不承载实现类，通过 `api(project(...))` 生成传递依赖 POM，为完整能力接入提供单一坐标；`apm-benchmark` 直接应用官方 Benchmark 插件并明确排除 Maven publication。`verifyReleasePerformanceBudgets` 把 connected microbenchmark 与 fail-closed verifier 串联；`run_device_soak.py` 生成显式物理机工件，`verifyDeviceSoakFromResults` 只验证显式 profile/result，不搜索旧文件；`verifyDeviceLabMatrix` 只验证计划，`verifyDeviceLabCoverageFromResults` 才验证全部显式 schema-v3 工件、exact provenance 和完整矩阵。`apm-plugin` 现在既作为 included build 独立测试，也独立发布实现坐标和 `com.apm.slow-method` marker。
 
-2026-08-02 的 Android Studio Sync 修复保持上述严格依赖校验不变：IDE model import 会额外解析命令行 CI 不需要的 Gradle、AGP、Kotlin 插件、Gradle Libs 及其传递依赖 source/POM/module artifact，原元数据因而在多个 build root fail closed。连续 Sync 首先暴露根构建的 `28`、`121`、`7` 项以及 `build-logic` 的 `23` 项；随后改为对三个 Sync build root 的共享缓存做穷举，不再依赖下一轮错误报告。当前 root / `apm-plugin` / `build-logic` 分别登记 `298` / `154` / `176` 个源码制品，覆盖 Kotlin 标准 `sources` 与 `gradle813-sources` 双文件名、AndroidX samples、Gradle 8.13 及完整缓存 Groovy 3.0.22 源码族；缓存内 POM/module 缺项和此前不存在的 BOM/Groovy components 也已补齐。全部本机值与 Google Maven、Maven Central、Gradle Libs/Plugin Portal、Gradle module 内置 SHA-256 或官方分发源交叉核对，没有增加 trusted group、正则信任或关闭 verification。四份 metadata 当前 component 数为 `569` / `239` / `240` / `409`（root / `apm-plugin` / `build-logic` / consumer；该数字为 2026-08-02 口径，2026-11-08 AGP 9 迁移后按最终工具链重建为 `473` / `218` / `206` / `281`）；供应链策略检查及 root、两个 included build 各自带 `--refresh-dependencies` 的 `:prepareKotlinBuildScriptModel` 均通过。这是构建元数据定向验证，不替代 2026-07-31 的全量测试基线。
-
-2026-07-16 在 JDK 17.0.14 执行的开发验证：
-
-```powershell
-./gradlew.bat testDebugUnitTest --rerun-tasks --no-daemon
-./gradlew.bat :apm-model:test --rerun-tasks --no-daemon
-./gradlew.bat assembleDebug --no-daemon
-./gradlew.bat -p apm-plugin test --rerun-tasks --no-daemon
-./gradlew.bat :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon
-```
-
-同日执行的完整发布验证链：
-
-```powershell
-./gradlew.bat lintDebug assembleRelease publishToMavenLocal --no-daemon
-./gradlew.bat -p smoke-tests/maven-consumer clean assembleDebug --no-daemon
-```
-
-全部命令通过。现场产物与报告为：
-
-- root Gradle 94 个 JUnit XML 测试套件、595 个测试，0 failures / 0 errors / 0 skipped；included `apm-plugin` 另有 18 个测试通过；
-- 23 份 `lint-results-debug.html`；
-- `apm-sample-app-release-unsigned.apk`，4,708,872 字节；
-- Maven Local 下当前 `com.apm:*-0.1.0` 发布包含 21 个 AAR、23 个 JAR、22 个 POM；
-- `apm-benchmark` 未进入 Maven Local publication，Release 与 AndroidTest Kotlin 均编译成功；
-- 独立 `smoke-tests/maven-consumer` 清理后重新解析本地制品并构建成功。
-
-2026-07-21 的客户端 P0 hardening 在 JDK 17.0.14 下通过 `:apm-core:testDebugUnitTest --no-daemon`：23 个 suite、153 个测试、0 failures/errors/skips；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。当天根 `testDebugUnitTest` 尝试因共享 Gradle distribution/transform cache 被外部清理而失效，不构成源码通过或失败基线；该旧状态已由下面 2026-07-22 的稳定缓存全根刷新取代。
-
-2026-07-22 的第二批 hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-storage:testDebugUnitTest --no-daemon`：core 23 suites / 160 tests，storage 6 suites / 36 tests，均为 0 failures/errors/skips；storage 在分块 trim 加固后另以 `--rerun-tasks` 完整重跑 36 个测试并通过。`python docs/verify_docs.py` 再次通过 40 个 Markdown 文件和 37 个本地链接。这是 AutoThrottle 恢复与 durable payload 预算的定向增量证据；当前全根基线见下方闭环刷新。
-
-2026-07-22 的第三批 measurement/self-observability hardening 在 JDK 17.0.14 下以 `--rerun-tasks` 强制重跑：FPS 4 suites / 31 tests，core 23 suites / 162 tests，均为 0 failures/errors/skips。补入 API 26 delayed-frame 门禁后又执行 `:apm-fps:testDebugUnitTest :apm-fps:lintDebug --no-daemon` 并通过；当前 `apm-fps` 与 `apm-core` lint 文本报告均为 `No issues found`，`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。该定向证据覆盖 FPS 单调时间窗口、FrameMetrics primitive rolling accumulator、API 26 门禁和 `sdk_health` 独立摘要/HIGH 事件双通道；当前全根基线见下方闭环刷新。
-
-2026-07-22 的第四批 dispatcher isolation hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：23 suites / 167 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。确定性压力测试覆盖默认模块隔离、其他模块容量保留、HIGH 绕过并淘汰旧低优事件、百分比约束、关闭开关、总 drop 与 `dispatcherModuleIsolationDropCount` 独立计数。该定向证据只证明共享入口的容量隔离；当前全根基线见下方，dispatcher 并行吞吐和真机性能仍是不同验证维度。
-
-2026-07-22 的第五批 biz-context latency hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：24 suites / 172 tests，0 failures/errors/skips，lint 为 `No issues found`；`python docs/verify_docs.py` 通过 40 个 Markdown 文件和 37 个本地链接。测试覆盖同步不可变快照、异步 SDK 线程执行、首次空值/LKG、recoverable provider 失败、显式请求合并和公共 init/refresh/stop 生命周期。该定向基线证明 `ASYNC_CACHED` emit 不执行宿主 provider；`SYNCHRONOUS` 兼容模式仍依赖接入方遵守 O(1)/无 IO/无等待锁契约。
-
-2026-07-22 的第六批 consumer distribution 验证在 JDK 17.0.14 下执行根 `publishToMavenLocal --no-daemon`、隔离 consumer `clean assembleDebug --no-daemon` 以及 `:apm-bundle:lintDebug :apm-bundle:assembleRelease --no-daemon`，全部通过。隔离 consumer 只声明 `com.apm:apm-bundle:0.1.0`，仍可编译来自 core、memory、network、model 和 OTel exporter 的代表性 API。Maven Local 当前包含 22 个 AAR、24 个 JAR 和 23 个 POM；bundle POM 传递暴露 22 个 `com.apm` 运行时制品，AAR 不承载 SDK 实现类。`python docs/verify_docs.py` 通过 41 个 Markdown 文件和 39 个本地链接。该结果证明本地发布与单依赖编译链，不代表 Maven Central 或其他外部仓库已经发布。
-
-2026-07-22 的第七批 HttpURLConnection integration 验证在 JDK 17.0.14 下执行 `:apm-network:testDebugUnitTest :apm-network:lintDebug --rerun-tasks --no-daemon`：3 suites / 21 tests，0 failures/errors/skips，lint 为 `No issues found`。测试覆盖成功和 HTTP error 返回、headers/body IOException、宿主非网络异常、停止态、report sink recoverable 失败隔离及 fatal VM error 可见性。`python docs/verify_docs.py` 通过 41 个 Markdown 文件和 39 个本地链接。该结果证明显式 helper 的执行/异常契约，不替代真实代理、TLS、重定向、OEM 网络栈集成测试。
-
-2026-07-22 的第八批 performance-budget 验证在 JDK 17.0.14 下执行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"`：5 tests 通过；已有 emulator JSON 仅通过显式 `--allow-emulator` 验证 3 个预算匹配与归一化输出；`:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon` 构建通过。固定预算覆盖 durable encode 30 µs/48 allocations、decode 60 µs/72 allocations、32-event SQLite batch 8 ms/2,048 allocations；缺项、坏指标、超预算和默认 emulator 检测都会使 gate 失败。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。物理机仍因安装策略不能产生接受结果，因此该增量证明门禁代码与构建入口，不伪装成真机预算已通过。
-
-2026-07-22 的第九批 typed-durable-field 验证在 JDK 17.0.14 下执行 `:apm-model:test :apm-storage:testDebugUnitTest :apm-benchmark:compileReleaseAndroidTestKotlin --rerun-tasks --no-daemon`：model 4 suites / 40 tests、storage 6 suites / 36 tests，均为 0 failures/errors/skips，benchmark AndroidTest Kotlin 编译通过。测试覆盖 12 类受支持标量的值与运行时类型保真、任意对象字符串 fallback、4,096 字符大数边界、v1/v2 读取以及未知 v3 tag fail-closed；storage 全套证明 SQLite append/read/claim/replay 未回归。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。该变更只升级本地 durable payload，不改变 Line/Protobuf 字符串 wire map。
-
-2026-07-22 的客户端闭环全根刷新在 JDK 17.0.14 下执行根 `testDebugUnitTest --rerun-tasks --no-daemon`：92 suites / 605 tests；同一源码状态的 `:apm-model:test`：4 suites / 40 tests；included `apm-plugin test --rerun-tasks --no-daemon`：1 suite / 18 tests。全部为 0 failures/errors/skips。根 Android + model 形成当前 96 suites / 645 tests 的客户端基线，plugin 18 tests 独立报告；这取代 2026-07-16 的 595-test 旧根基线。`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。
-
-2026-07-22 的第十批 strict-production/consent hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest --rerun-tasks --no-daemon`：25 suites / 180 tests，0 failures/errors/skips；`:apm-core:lintDebug --rerun-tasks --no-daemon` 通过，文本报告为 `No issues found`；`python docs/verify_docs.py` 通过 42 个 Markdown 文件和 41 个本地链接。测试覆盖 compatibility/strict 配置、显式 consent、活动 runtime 清理、冷启动 dormant outbox 清理、sticky re-init 拒绝与 IPC artifact 删除。该结果是当前源码的 core 定向证据；前述 605-test 仍是最近全根运行，不将旧全根结果自动外推到本变更。
-
-2026-07-22 的第十一批 collector-wire-V2 hardening 在 JDK 17.0.14 下执行 `:apm-model:test :apm-uploader:testDebugUnitTest :apm-uploader:lintDebug :apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：model 5 suites / 46 tests、uploader 4 suites / 24 tests、core 25 suites / 180 tests，均为 0 failures/errors/skips，两个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。测试覆盖完整 scalar type mapping、append-only event field 15、稳定 batch identity、固定 resource、按实际编码字节拆分/拒绝、协议保留请求头、exact whole-batch ACK、strict 协议/resource 校验和 legacy 兼容。该结果是当前源码的定向证据；前述 605-test 仍是最近全根运行。
-
-2026-07-22 的第十二批 critical-handoff/loss-attribution hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug :apm-storage:testDebugUnitTest :apm-storage:lintDebug :apm-anr:testDebugUnitTest :apm-anr:lintDebug --rerun-tasks --no-daemon`：core 27 suites / 184 tests、storage 6 suites / 37 tests、ANR 5 suites / 26 tests，均为 0 failures/errors/skips，三个 lint 报告均为 `No issues found`；`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。测试覆盖 CRITICAL promotion、ANR 同步 hand-off 成功/失败、remote IPC rejection 归因、queue/storage/uploader drop reasons、reason/priority/reset 一致性、UNATTRIBUTED、SQLite capacity/prune priority recovery 与 fatal error 可见性。该结果是当前源码的定向证据；前述 605-test 仍是最近全根运行。
-
-2026-07-22 的第十三批 time-semantics/event-snapshot hardening 在 JDK 17.0.14 下以 `--rerun-tasks` 执行 core 与 15 个监控/扩展模块的定向测试：77 suites / 527 tests，0 failures/errors/skips；根 `lintDebug --rerun-tasks --no-daemon` 通过。同一源码随后完整刷新：根 96 suites / 630 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，全部 0 failures/errors/skips；根 Android + model 当前为 101 suites / 676 tests，plugin 18 tests 独立报告，并取代前述 605-test 根基线。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。覆盖 duration/expiry/dedup/rate-limit 的单调时钟、collector epoch 时间、span 逆序结束保护、按实际 interval 计算 FPS，以及直接事件在异步边界的 fields/globalContext/extras 不可变快照。
-
-2026-07-22 的第十四批 cross-layer byte-budget hardening 在 JDK 17.0.14 下执行 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon`：core 27 suites / 194 tests，0 failures/errors/skips，lint 为 `No issues found`；执行 `:apm-storage:testDebugUnitTest :apm-storage:lintDebug --rerun-tasks --no-daemon`：storage 6 suites / 37 tests，0 failures/errors/skips，lint 为 `No issues found`。覆盖 dispatcher 条数 + 8 MiB 估算字节双准入、多 victim 优先级淘汰、`queueBytes` 健康字段、IPC 4 MiB pending / 256 KiB event / 1 MiB file / 16 MiB directory 四层预算、lock-free pending + 单一 fixed-delay writer、同步 critical 精确拒绝原因和流式 ready-file 读取，并复核 SQLite 256 KiB/event + 64 MiB live payload 预算。同一源码完整刷新通过根 96 suites / 636 tests、model 5 suites / 46 tests、included plugin 1 suite / 18 tests，全部 0 failures/errors/skips；根 Android + model 当前为 101 suites / 682 tests，plugin 18 tests 独立报告，取代前述 630-test 根基线。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 47 个本地链接。
-
-2026-07-22 的第十五批 physical-device-soak gate 在 JDK 17.0.14 下执行 `python -m unittest discover -s apm-benchmark/tests -p "test_*.py"`：14 个 host tests 通过；`:apm-sample-app:assembleDebug :apm-sample-app:lintDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过，sample lint 为 0 errors / 25 warnings。新增 A/B control、失败 uploader 离线积压、冷进程分段重启、主线程 primitive latency reservoir，以及 `/proc` CPU、PSS、app-private disk、UID batterystats、thermal 采集；`smoke`/`24h`/`72h` 校验对物理机、实际时长、重启次数、离线模式、资源上限和长稳功耗证据 fail closed。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 48 个本地链接。该结果证明客户端/host harness 与构建链；Xiaomi 安装仍被设备策略拒绝，因此没有物理数值，也没有把 24/72 小时声明为已执行。
-
-`apm-model`、`apm-core`、`apm-plugin` 与 sample 的代表性 class 文件均由 `javap -verbose` 确认为 major version 61，即 Java 17 字节码。同日另用 JDK 21.0.11 启动 Gradle，根构建配置与 `:apm-model:test` 成功，生成的 model class 仍为 major version 61。
-
-2026-07-22 设备侧验证：ADB 可见 Xiaomi `22041216UC` 与 Android 17 emulator。当时新的 sample-App smoke runner 安装 5,916,050 字节 debug APK 时再次被 `INSTALL_FAILED_USER_RESTRICTED: Install canceled by user` 拒绝，尚未进入只清理 `com.apm.sample.debug` 数据的 acquisition 阶段；早先 benchmark APK 也被同一设备安全策略拒绝，因此当日未产生物理性能数值。emulator 在显式抑制 AndroidX 的 `EMULATOR` 环境门禁后完成三个 microbenchmark 方法并生成 JSON/Perfetto，但 runner 最终因 `IsolationActivity` 45 秒启动超时将任务标记失败。模拟器结果只证明 instrumentation 执行链，不作为真机性能结论。
-
-2026-07-23 在同一台物理 Redmi/Xiaomi `22041216UC`（Android 13）上重新验证。JDK 17.0.14 下 `:apm-sample-app:assembleDebug :apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过；启用设备的 USB 安装控制后，sample 与 benchmark AndroidTest APK 均可通过直接 ADB 安装。MIUI 会拒绝 benchmark 进程后台拉起 AndroidX `IsolationActivity`，因此只对 `com.apm.benchmark.test` 临时允许该 app-op，正式 `AndroidBenchmarkRunner` 随后无错误完成 3/3 测试，结束后权限已恢复为原始 `ignore`。fail-closed JSON 预算验证通过：durable encode median `4,640.93 ns` / `22.00 allocations`，decode `4,841.81 ns` / `46.00 allocations`，32-event SQLite transaction `1,258,990.52 ns` / `1,400.21 allocations`。但 Gradle aggregate task 的 session-based APK 安装仍被该 OEM 以 `INSTALL_FAILED_USER_RESTRICTED` 拒绝，因此不能把 Gradle 一键任务写成通过；接受数值来自直接安装同一构建 APK 后运行其声明的正式 runner，且未抑制 AndroidX 环境错误。
-
-同日最初完整执行两次物理 `smoke` acquisition。两次都满足实际时长、2 次进程启动、离线模式、启动增量、SDK init、主线程操作 P95、PSS、app-private disk 与 thermal 约束，但平均 CPU 分别为 `28.425%` 和 `32.046%`，连续超过 checked-in `20%` 上限，校验器均 fail closed。当时的阶段性结论是“microbenchmark 三项预算通过、smoke CPU 预算失败”；该失败随后按下段证据完成归因、修复与原预算复验。
-
-随后保持 `device-soak-budgets.json` 的 `20%` smoke CPU 上限不变执行归因。稳定区间的线程级 `/proc` 采样显示 SDK-enabled 主线程约 `26.4%`，而 SDK-disabled control 主线程约 `0.8%`；10 events/second 下 `Apm.emit` P95 约 `1.7ms`，不足以解释差值。根因是 FPS monitor 在静态页面仍持续 repost Choreographer callback，主动把主线程按每个 VSync 唤醒。修复后 API 24+ 以仅在真实渲染时触发的 FrameMetrics 为主源，FrameMetrics 禁用或注册失败时才保留 Choreographer fallback。JDK 17.0.14 下 FPS `4` suites / `34` tests、lint 与 sample debug APK 构建通过，测试为 0 failures/errors/skips，lint 为 `No issues found`。同一 Redmi、同一配置、相同 APK SHA-256 `e22185f6b09182e5705cea27d80f74f3ac4f05d89ac2223638c02bc4e8f55c1d` 的两轮完整 smoke 分别以 CPU `12.928%`、`12.362%` 通过原 `20%` 门禁；实际时长 `30.562s` / `30.534s`，每轮 2 次进程启动，主线程 P95 `1,853.462us` / `1,796.539us`，其余 smoke 预算也全部通过。该证据关闭 smoke CPU 缺口，但不替代尚未执行的 `24h`、`72h` 与长稳功耗验收。
-
-同日继续修正 device-soak 的 A/B 指标口径。历史 result schema v1 的 `cpuAveragePercent` 实际是 enabled segments 的绝对进程 CPU，只有 `startupDeltaMs` 使用 control 差值；当前 result schema v2 保留这个绝对门禁字段，并新增 `cpuControlPercent`、`cpuEnabledAveragePercent` 和带符号的 `cpuDeltaPercent`。校验器会从 control/enabled 原始 jiffies 与 elapsed samples 独立重算并核对三者，旧 schema v1 工件仍按原绝对 CPU 语义兼容。`device-soak-budgets.json` 未修改，17 个 host Python tests 通过，已接受的 schema-v1 smoke 工件继续通过原 `20%` 上限。此次只是 host 证据模型增强，没有产生新的 schema-v2 真机结果，也不能把单一前置 control 的 delta 当成 24h/72h 配对因果估计。
-
-同日完成 `apm-uploader` 模块内线程策略收口。由于底层 uploader 不能反向依赖 `apm-core`，`RetryingApmUploader` 继续保留自己的有序 worker 和 delayed-retry scheduler；两者现在统一由模块内命名工厂创建，显式设置 daemon 与 `Thread.MIN_PRIORITY`，并保持 `apm-upload-retry` / `apm-upload-retry-scheduler` 稳定线程名。JDK 17.0.14 下 `:apm-uploader:testDebugUnitTest :apm-uploader:lintDebug --rerun-tasks --no-daemon` 通过 4 suites / 25 tests，0 failures/errors/skips，lint 为 `No issues found`；测试在真实 delegate 调用线程上核对名称、daemon 和 priority，而不是只检查构造参数。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 49 个本地链接，两个 DOCX 派生报告也已从同一源重新生成并校验容器及正文。
-
-同日完成 dispatcher 分阶段尾延迟证据。仅在 self-monitor 开启时，worker 以单调纳秒包围六个固定阶段，使用 6 × 22 个固定桶、无逐样本对象分配的短同步直方图，并在周期报告时生成 count、向上取整平均微秒、P95 桶上界和最大微秒；关闭 self-monitor 时直接执行原 block，不读取时钟。JDK 17.0.14 下 `:apm-core:testDebugUnitTest :apm-core:lintDebug --rerun-tasks --no-daemon` 通过 27 suites / 197 tests，0 failures/errors/skips，lint 为 `No issues found`。测试覆盖确定性平均/P95 上界/max/reset、健康事件与独立 journal 字段一致，以及真实 dispatcher 配置全阶段均被观测。`python docs/verify_docs.py` 通过 43 个 Markdown 文件和 49 个本地链接，两个 DOCX 报告重新生成并确认包含 P95 证据。该结果证明证据机制，不代表已有真机/24h 尾延迟分布，也不触发自动并行化。
-
-同日连接 OnePlus `PLK110`（Android 16）继续 24h 前置验证。该 OEM 允许直接安装 debug sample，却拒绝 ADB shell 执行 `pm clear`，返回 `SecurityException` / `android.permission.CLEAR_APP_USER_DATA`。device-soak runner 现在只对这一精确权限拒绝回退为卸载并重装同一个明确选择的 sample APK，其他 ADB 失败仍 fail closed；工件记录 `appDataResetStrategy`。21 个 host Python tests 通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 成功。当前 APK SHA-256 `213f5d73c93472b77da0909ac7be4c4cb92ededcc00a3dc5bfa548681689cb59` 在该设备完成 schema-v2 smoke，reset strategy 为 `uninstall-reinstall`，实际时长 `30.225s`、2 次进程启动、enabled CPU `6.161%`、control CPU `6.793%`、主线程 P95 `354.896us`、UID 功耗 `29.062 mAh/hour`，原预算全项通过。`python docs/verify_docs.py` 通过 43 个 Markdown / 49 个本地链接，两份 DOCX 已重生成并验证包含 OnePlus/功耗证据。该结果证明第二种 OEM 的干净基线回退与 UID 功耗采集可用，不替代 24h/72h 验收。
-
-随后为 24h acquisition 增加 ADB transport 有界恢复，但严格区分命令副作用：只读 `getprop/pidof/proc/dumpsys/run-as/package/get-state` 对三类明确瞬断最多重试 30 次、每次间隔一秒；install/uninstall/pm clear/Activity start/force-stop 从不自动重放。持续离线即使发生在 smoke 可选功耗字段也会失败，工件新增 `transientAdbRetryCount`，verifier 校验非负整数及已知 reset strategy。25 个 host tests 通过。同一 OnePlus 复验在 `transientAdbRetryCount=0` 的正常路径下以实际 `30.221s`、2 starts、enabled CPU `5.134%`、control CPU `7.164%`、主线程 P95 `360.677us`、PSS 增长 `3,327 KiB`、disk 增长 `49,152 bytes`、UID 功耗 `29.423 mAh/hour` 全项通过原预算；工件 SHA-256 为 `63649b00680b9211325929b9601936a2b84cf5b68a5c5095c41fd289ad07bbc4`。该证据验证正常命令分类，不声称 24h 已完成。
-
-从提交 `97cdc90` 启动的首次 OnePlus 后台 24h 在第一小时内因设备持续离线超过当时统一的 30 秒窗口而失败；stderr 精确记录 `shell pidof ... device not found`，没有结果 JSON，因此不存在 duration/restart/power 接受结论。基于该真实设备实验室失败，重连窗口改为 profile-aware：smoke 保持 30 秒，24h/72h 默认 300 秒，可选 CLI 值绝对限制为 600 秒；工件同时记录 window 与 retry count，副作用命令的单次语义不变。26 个 host tests 与 Python 编译检查通过。随后重新上线的是 Redmi `22041216UC`：当前代码 smoke 实际 `30.553s`、2 starts、CPU `11.319%`、主线程 P95 `1,838.231us`，原预算通过，工件记录 `adbReconnectTimeoutSeconds=30`、retry count `0`、`pm-clear`，SHA-256 `e2893814fc981ece690e9452e14f324e7933f9b186c0e7003b44874424ea4c15`。该 Redmi 仍未产出 UID 功耗，所以当时没有用它启动必然缺证据的 24h；下一段记录后续设备选择。
-
-2026-07-24 当前 Redmi 的 MIUI 在 package-scoped 人类可读 `batterystats` 中省略 sample UID，但 Android current checkin `-c` 仍输出精确 UID `10217` 的 `pwi,uid`。runner 因此增加精确 UID fallback，并把累计值严格增长设为功耗证据前提；平坦 `0→0`、回退、错误 UID、非有限或坏值都保持缺失，不再通过 `max(0, delta)` 生成伪零功耗。30 个 host Python tests 与 Python 编译检查通过，JDK 17.0.14 下 `:apm-benchmark:assembleRelease :apm-benchmark:compileReleaseAndroidTestKotlin --no-daemon` 通过。当前 Redmi 在 10 events/second 下运行五分钟后 checkin computed power 仍为 `0`，所以这只是 OEM 能力诊断，不是功耗验收，checked-in 预算没有变化。
-
-2026-07-25 项目决定不再为当前客户端 SDK 迭代长期占用个人手机。已启动的 Redmi 24h 重试在完成前被明确取消，host runner 与 sample 进程均已停止，未生成结果 JSON；这不构成长 profile 通过，也不记为门禁失败。`24h`/`72h` fail-closed profiles、严格功耗证据与原预算继续保留，但执行延期到预生产准入阶段，由受控设备实验室或校准功耗设施完成。当前真机结论仍是历史三项 microbenchmark 与原预算 smoke 通过；新增 Dispatcher 两项和长稳尚未验收。
-
-2026-07-31 在当前 `develop` tip 使用 JDK 17.0.14 强制重跑完整客户端测试：根 `testDebugUnitTest :apm-model:test --rerun-tasks --no-daemon` 通过 Android 98 suites / 663 tests 与 model 5 suites / 51 tests，included `apm-plugin test --rerun-tasks --no-daemon` 通过 1 suite / 18 tests，全部为 0 failures/errors/skips。根 Android + model 当前完整基线更新为 103 suites / 714 tests，plugin 18 tests 独立报告；该结果取代同日 701-test Android + model 基线及 2026-07-22 的 636-test 根 / 682-test Android + model 基线，但不改变尚待设备实验室执行的五项 microbenchmark、24h/72h 结论。
-
-同一源码的 critical-handoff 故障注入定向验证在 JDK 17.0.14 下覆盖 core/crash/ANR/storage：`43` suites / `284` tests 全部通过且为 0 failures/errors/skips，对应 lint 与根 `apiCheck` 通过。Crash helper 覆盖成功、false、recoverable exception、fatal VM error，并断言原 uncaught handler 恰好委托一次；critical IPC E2E 覆盖 codec、原子文件发布、scanner、同步 dispatcher store，首次注入磁盘异常时保留 `.ipc`，第二次接受后才删除，且 `eventId`、CRITICAL priority、fields 不变。SQLite 真实测试还关闭并重开 store，验证 CRITICAL durable row 恢复。
-
-同一源码的宿主接入诊断定向验证在 JDK 17.0.14 下覆盖 core 与 Network/SQLite/IPC/WebView/ThreadPool/Battery/IO：`49` suites / `359` tests 全部通过，0 failures/errors/skips；对应 lint 与 `apm-core:apiCheck` 通过。新增确定性测试覆盖固定顺序空快照、模块/registration/observation 五态、stop 清零活跃 registration、re-init 清除旧证据、late callback 拒绝和并发精确计数。`python tools/verify_ci.py` 随后以同一源码通过 24 份 ABI、完整测试和 44 Markdown / 55 links 文档门禁。
-
-同日 Collector V2 不再只有双方各自的 mock/单元证据。独立 `AndroidAPM-Server` 的 `codex/collector-v2-e2e` 分支（验证 tip `2feb2f5`）实现并验证 V2 envelope、typed scalar、resource/header 一致性、提交后 exact ACK 和 `(tenant_id,event_id)` 去重；服务端门禁为 57 tests、ruff/mypy/docs 全绿。客户端新增 `tools/verify_collector_e2e.py`，以真实 `HttpApmUploader` 经 Gzip HTTP 重放相同 batch，并从 test-only SQLite 核对 2 个唯一事件、12 种标量、非有限浮点安全文本、resource 和协议元数据。该结果证明跨语言 wire 兼容，不替代 PostgreSQL/TLS/代理故障/SigNoz/生产部署。
-
-2026-08-28 在该历史 V2 闭环上新增 V3 occurrence-bound 闭环。客户端以增量 `Apm.init(application, config, occurrenceContext)` 和 `ApmEvent.withOccurrenceContext` 保持既有 `ApmEvent/ApmConfig` constructor/copy/component ABI，durable codec 升至 V4 并继续读取 V1/V2/V3；`apiCheck` 与 24 份基线完整性检查通过。真实 probe 现在分别发送并重放两个 2-event V2/V3 batch，测试用 SQLite inbox 最终只有 4 个 eventId，并独立核对 V2 typed scalar、V3 release/versionCode/build/variant/native frame、低质量 request/batch 声明不覆盖 occurrence、tenant-scoped HMAC/key version 和 installation 明文不入 `payload_json`。该结果仍不替代 PostgreSQL/TLS/代理丢 ACK/真实 SigNoz/生产部署。
-
-当前 V3 工作树同日使用 JDK `17.0.14` 完整执行 `python tools/verify_ci.py` 并最终 `PASSED`：强制重跑 Android 99 suites / 679 tests、model 5 / 57、included plugin 1 / 18，全部零失败/错误/跳过；24 份 ABI、四份 dependency-verification metadata、5 个 release-candidate verifier tests、41 个 benchmark/device-lab host tests、25 coordinates / 22 AAR / 26 JAR / 25 POM 候选校验、带 `--refresh-dependencies` 的隔离 consumer/ASM/Debug 构建和 46 Markdown / 70 links 文档验证全部通过。设备矩阵步骤只验证计划，没有评估物理工件；该门禁也不替代外部 Maven promotion、真机 24h/72h 或生产服务端验收。
-
-同日受控设备实验室资产完成固化：`device-lab-matrix.json` 定义物理 ARM64 API 24–28、29–33、34–36 三个不重叠 lane 和 6 个 lane/profile 工件，profile 级别要求 smoke/24h/72h 的 3/2/1 台设备、smoke/24h 的 3/2 个厂商以及 smoke 的两种 reset strategy。result schema v3 在 v2 CPU 口径上强制 exact APK、clean source revision、matrix/budget/runner hash、lane、UTC 与完整 device identity；旧 v1/v2 仅做历史单工件读取，aggregate gate 只接受当前 schema 并检查单 APK/source 一致性。40 个 host Python tests 与编译检查通过，plan gate 明确只验证 3 lanes / 6 requirements、没有评估真机证据；JDK 17.0.14 下 benchmark/sample 的 504 个强制 Gradle 动作通过。完整 `python tools/verify_ci.py` 同时通过 24 份 ABI、Android 98 suites / 654 tests、model 5 / 46、plugin 1 / 18，全部零失败/错误/跳过。文档验证为 44 Markdown / 55 links，两份 DOCX 通过 package/relationship/XML/key-text 检查；本机缺 LibreOffice/`soffice`，所以不声明页面级视觉验收。该资产没有生成 schema-v3 24h/72h 数值。
-
-同日发布与供应链门禁完成：根构建、`apm-plugin`、`build-logic` 和隔离 consumer 分别提交严格 SHA-256 dependency verification metadata；策略校验覆盖 554 / 238 / 239 / 409 个依赖 component，consumer 的 trust 只允许由候选脚本逐文件复核的 `com.apm` 与插件 marker。`tools/verify_release_candidate.py` 在独立文件仓库发布并校验 25 个坐标、22 个 AAR、26 个 JAR、25 个 POM，精确核对 Bundle 的 22 个运行时依赖和插件 marker，检查固定版本、POM 元数据、Gradle metadata、sources、Java 17 class major、ZIP 安全与敏感文件名，并生成逐文件 SHA-256 manifest 和 SPDX 2.3 distribution SBOM。隔离 consumer 同时从该仓库解析 Bundle 与 `com.apm.slow-method`，ASM transformation 和 `assembleDebug` 通过；5 个 verifier host tests 覆盖完整候选、缺失 POM、Bundle 依赖缺失、ZIP traversal 和签名策略。外部仓库 URL 仅允许 HTTPS，配置 URL 后缺少凭据或 PGP key 会在上传前失败。
-
-仓库没有真实外部 Maven 凭据、Maven Central/private staging 或 promotion 结果；通过本地候选、未签名 CI 或 `publishToMavenLocal` 都不代表外部仓库已发布。真正上传前必须在 clean commit 上运行 `--require-signatures`，再按目标仓库流程 staging、重新消费和 promotion。
-
-同日 Dispatcher 性能热点按源码证据完成优化并补上专用物理门禁。满 2,048 条队列插入 HIGH/CRITICAL 时不再复制、排序所有较低优先级候选，而是固定 LOW→NORMAL→HIGH 做最多三次 FIFO 扫描，只分配最终足够的 victim list；默认聚合关闭时不再为每条 resolved event 创建单元素 List，非 durable 存储无拒绝项时也不再创建空 rejected-ID HashSet。混合优先级回归测试证明 LOW-first 与同级 oldest-first 不变；JDK 17.0.14 下 core 28 suites / 205 tests、lint 与 benchmark Release/AndroidTest Kotlin 编译通过，41 个 host tests 全绿。`benchmark-budgets.json` 当前要求 codec/SQLite 历史三项以及 32 accepted emit、满队列 HIGH admission 共五项；本机无连接设备，后两项尚无物理数值，不能把历史三项结果外推为当前五项 gate 通过。
-
-同日隐私、安全与协议模糊边界完成加固。durable codec 在分配前验证剩余字节，严格拒绝非法 UTF-8、截断和尾随内容，并在写入时执行 2 MiB 总预算；远程配置在 canonicalization/验签前限制 bytes/depth/nodes/text、拒绝重复 key，并严格校验 Ed25519 key/signature Base64 与解码长度；PII 新增 auth/authentication/auth-header 变体且保留 `author`；V2 ACK 数字只接受规范正十进制，`Retry-After` 乘法饱和。固定种子回归覆盖截断/位翻转、JSON 语法变异、混合 PII 和 ACK 歧义。定向结果为 core 28 suites / 207 tests、remote-config 3 / 14、uploader 4 / 27、model 5 / 51，零失败；相关 lint 与全仓 API 门禁通过。完整 `tools/verify_ci.py` 还通过 41 个 host tests、依赖 checksum、隔离发布候选与 consumer 构建。该确定性语料是回归 fuzz，不冒充持续随机 fuzz、生产代理/TLS 或第三方渗透测试。
+发布候选校验逐个读取 AAR 元数据，要求 `minCompileSdk=36`，并校验 Java 21 class file major 65。历史构建与真机记录见 [历史验证记录](HISTORICAL_VERIFICATION.md)。
 
 ## 十二、测试策略
 
@@ -591,7 +321,7 @@ Android Studio 同步会解析依赖的 Javadoc 和示例源码，这些文件�
 
 - `docs/architecture/`：当前模块架构事实源
 - `docs/architecture/21_apm-bundle.md`：单依赖分发的依赖集合、边界与取舍
-- `docs/CHANGELOG.md`：按日期归档的变更与验证索引；README 不再承载历史段落，只描述当前事实
+- [变更历史](CHANGELOG.md)记录版本变化，[历史验证记录](HISTORICAL_VERIFICATION.md)保留详细验收证据。
 - `docs/AndroidAPM_第一性原理SDK评审_2026-07-21.md`：其他 AI 初始评审的源码闭环复核；按证据等级区分客户端架构、短时真机、长稳/OEM 和端到端产品准入，不作为生产验收证书
 - `docs/APM_Review_2026-07-08.md`：历史评审与当前处置状态
 - `docs/APM_Optimization_2026-07-08.md`：历史优化建议与落地状态

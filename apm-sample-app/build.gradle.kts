@@ -4,9 +4,9 @@ plugins {
 }
 
 java {
-    // Gradle 可由兼容的新 JDK 启动，应用编译仍固定使用 Java 17 toolchain。
+    // Gradle 可由兼容的新 JDK 启动，应用编译仍固定使用 Java 21 toolchain。
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
@@ -20,33 +20,27 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0"
+
+        // Use a short-lived staging credential only. BuildConfig values are included in the APK.
+        val strictEndpoint = (project.findProperty("apm.endpoint") as String?)
+            ?: "https://43.133.227.175"
+        val ingestKey = (project.findProperty("apm.ingestKey") as String?) ?: ""
+        buildConfigField("String", "APM_STRICT_ENDPOINT", "\"$strictEndpoint\"")
+        buildConfigField("String", "APM_INGEST_KEY", "\"$ingestKey\"")
     }
 
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
-            // Opt-in strict V3 delivery to the Seoul staging collector. The ingest key
-            // is injected at build time (-Papm.ingestKey=... or ~/.gradle/gradle.properties)
-            // and never committed; without it the release build keeps logcat delivery.
-            val strictEndpoint = (project.findProperty("apm.endpoint") as String?)
-                ?: "https://43.133.227.175"
-            val ingestKey = (project.findProperty("apm.ingestKey") as String?) ?: ""
-            buildConfigField("String", "APM_STRICT_ENDPOINT", "\"$strictEndpoint\"")
-            buildConfigField("String", "APM_INGEST_KEY", "\"$ingestKey\"")
         }
         getByName("debug") {
             applicationIdSuffix = ".debug"
-            val strictEndpoint = (project.findProperty("apm.endpoint") as String?)
-                ?: "https://43.133.227.175"
-            val ingestKey = (project.findProperty("apm.ingestKey") as String?) ?: ""
-            buildConfigField("String", "APM_STRICT_ENDPOINT", "\"$strictEndpoint\"")
-            buildConfigField("String", "APM_INGEST_KEY", "\"$ingestKey\"")
         }
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 
     buildFeatures {

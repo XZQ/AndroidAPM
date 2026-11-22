@@ -129,7 +129,7 @@ class CanonicalRemoteConfigJsonTest {
     }
 
     companion object {
-        /** JCA algorithm name available on the JDK 17 test runtime. */
+        /** JCA algorithm name available on the JDK 21 test runtime. */
         private const val ED25519_ALGORITHM = "Ed25519"
 
         /** Raw RFC 8032 public key length. */

@@ -1,6 +1,6 @@
 # AndroidAPM 公共 API 兼容策略
 
-> 同步日期：2026-11-14｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-22｜当前 SDK 版本：0.1.0
 
 ## 目标与范围
 
@@ -16,13 +16,14 @@
 
 ## 消费方下限
 
-2026-11-08 的 AGP 9 迁移抬高的是**构建下限**，不是 ABI：
+发布制品的接入要求如下。
 
 - 所有发布 AAR 的元数据为 `minCompileSdk=36`（`compileSdk = 36`），接入方必须使用 `compileSdk ≥ 36`，否则 AAR 在解析期即被拒绝；
-- `com.apm:apm-plugin` 与 `com.apm.slow-method` 插件 marker 使用 AGP 9.5.1 构建并声明对应依赖，接入方必须使用 AGP 9.x；
+- `com.apm:apm-plugin` 与 `com.apm.slow-method` 插件 marker 使用 AGP 9.5.2 构建并声明对应依赖，接入方必须使用 AGP 9.x；
+- JVM 制品与插件使用 Java/Kotlin 21 字节码，Gradle 插件和纯 JVM 制品要求 JDK 21；
 - Kotlin 元数据保持 2.2.0（`Kotlin 2.2.21`），因此默认 AGP 9 工具链（内置 Kotlin 2.2.10）可直接读取，未被同步抬高。
 
-这项下限属于发布契约的一部分：变更 `compileSdk`、AGP 主版本或 Kotlin 元数据版本时，必须在发布说明中显式声明，并同步更新本节与 `README.md` 的“当前基线”。24 份 ABI 基线本身在迁移前后零变化，`minCompileSdk` 由 AAR 元数据而非 `.api` 文件表达，因此 `apiCheck` 不会替接入方发现这项变化。
+这项下限属于发布契约的一部分：变更 `compileSdk`、AGP 主版本、目标 JVM 版本或 Kotlin 元数据版本时，必须在发布说明中显式声明，并同步更新本节与 `README.md` 的“当前基线”。24 份 ABI 基线本身在迁移前后零变化，`minCompileSdk` 由 AAR 元数据而非 `.api` 文件表达，因此 `apiCheck` 不会替接入方发现这项变化。
 
 ## 版本规则
 

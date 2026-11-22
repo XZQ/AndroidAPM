@@ -1,6 +1,6 @@
 [versions]
 kotlin = "2.2.21"
-agp = "9.5.1"
+agp = "9.5.2"
 lifecycle = "2.8.7"
 junit = "4.13.2"
 fragment = "1.8.5"

@@ -12,7 +12,7 @@ from typing import Sequence
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-MINIMUM_JAVA_MAJOR = 17
+MINIMUM_JAVA_MAJOR = 21
 JAVA_VERSION_PATTERN = re.compile(r'version "(?P<version>[^"]+)"')
 
 
@@ -31,7 +31,9 @@ def java_executable() -> Path:
     resolved = shutil.which("java")
     if resolved:
         return Path(resolved)
-    raise RuntimeError("No Java executable was found. Set JAVA_HOME to JDK 17 or newer.")
+    raise RuntimeError(
+        f"No Java executable was found. Set JAVA_HOME to JDK {MINIMUM_JAVA_MAJOR} or newer."
+    )
 
 
 def parse_java_major(version_output: str) -> int:

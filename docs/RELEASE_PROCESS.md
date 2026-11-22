@@ -1,6 +1,6 @@
 # AndroidAPM 发布与供应链门禁
 
-> 同步日期：2026-11-08｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-22｜当前 SDK 版本：0.1.0
 
 ## 发布范围
 
@@ -12,11 +12,11 @@
 
 `apm-sample-app`、`apm-benchmark` 和 `build-logic` 不得进入发布仓库。Bundle POM 必须精确传递 22 个运行时制品；插件 marker 必须只依赖同版本 `com.apm:apm-plugin`。
 
-本次候选由 Gradle 9.6.0 / AGP 9.5.1 / Kotlin 2.2.21 与 `compileSdk 36` 构建，发布说明必须显式写出**消费方下限**：所有 AAR 的元数据为 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.1，接入方须使用 AGP 9.x 与 `compileSdk ≥ 36`；Kotlin 元数据保持 2.2.0，不额外抬高编译器下限。`apiCheck` 与 ABI 基线不会发现这项变化——它由 AAR 元数据表达，因此候选门禁与发布说明都不能省略。
+本次候选由 Gradle 9.6.0 / AGP 9.5.2 / Kotlin 2.2.21 与 `compileSdk 36` 构建，发布说明必须显式写出**消费方下限**：所有 AAR 的元数据为 `minCompileSdk=36`，`com.apm:apm-plugin` 依赖 AGP 9.5.2，接入方须使用 AGP 9.x、JDK 21 与 `compileSdk ≥ 36`；Kotlin 元数据保持 2.2.0，不额外抬高编译器下限。发布候选门禁逐个校验 AAR 的 `minCompileSdk=36`，并校验 Java 21 的 class file major 65。
 
 ## 本地发布候选
 
-在 clean worktree 和 JDK 17+ 环境执行：
+在 clean worktree 和 JDK 21 环境执行：
 
 ```powershell
 python tools/verify_release_candidate.py
@@ -26,7 +26,7 @@ python tools/verify_release_candidate.py
 
 1. 清理且只清理 `build/release-candidate/repository`；
 2. 将 23 个根制品及 Gradle 插件/marker 发布到独立文件仓库；
-3. fail closed 校验 25 个坐标、POM 必填元数据、固定依赖版本、Bundle/marker 依赖图、AAR/JAR/sources/Gradle metadata、ZIP 路径安全、敏感文件名和 Java 17 class major；
+3. fail closed 校验 25 个坐标、POM 必填元数据、固定依赖版本、Bundle/marker 依赖图、AAR/JAR/sources/Gradle metadata、ZIP 路径安全、敏感文件名和 Java 21 class file major 65；
 4. 生成逐文件 SHA-256 清单 `build/reports/release-candidate/release-manifest.json`；
 5. 生成包含分发坐标和 POM 直接依赖的 SPDX 2.3 SBOM `build/reports/release-candidate/release-sbom.spdx.json`；
 6. 让隔离 consumer 仅从该仓库解析 `apm-bundle` 与 `com.apm.slow-method`，再清理构建。
@@ -82,6 +82,6 @@ $env:SIGNING_PASSWORD = "<secret>"
 4. 上传到目标仓库的 staging 区；
 5. 从 staging 重新消费 Bundle 和插件；
 6. 执行仓库特定 close/promotion；
-7. 推送版本 tag，并记录 tag、commit、候选 manifest、SBOM 和仓库 promotion 身份；发布说明同时声明当前消费方下限（AGP 9.x / `compileSdk ≥ 36`）。
+7. 推送版本 tag，并记录 tag、commit、候选 manifest、SBOM 和仓库 promotion 身份；发布说明同时声明当前消费方下限（AGP 9.x、JDK 21、`compileSdk ≥ 36`）。
 
 任一步失败都不得继续 promotion，也不得用 `publishToMavenLocal` 或未签名候选代替外部发布证据。

@@ -143,9 +143,9 @@ tasks.register<Exec>("verifyDeviceLabCoverageFromResults") {
 }
 
 java {
-    // Benchmark 与 SDK 模块使用相同的 Java 17 编译/测试工具链。
+    // Benchmark 与 SDK 模块使用相同的 Java 21 编译/测试工具链。
     toolchain {
-        languageVersion.set(JavaLanguageVersion.of(17))
+        languageVersion.set(JavaLanguageVersion.of(21))
     }
 }
 
@@ -169,8 +169,8 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
 }
 
