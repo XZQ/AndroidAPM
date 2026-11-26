@@ -107,8 +107,8 @@ publishing {
             }
             developers {
                 developer {
-                    id.set("YSHEN53")
-                    name.set("YSHEN53")
+                    id.set("XZQ")
+                    name.set("XZQ")
                 }
             }
             scm {

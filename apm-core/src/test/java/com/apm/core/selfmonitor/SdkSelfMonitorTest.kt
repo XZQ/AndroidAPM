@@ -19,6 +19,16 @@ class SdkSelfMonitorTest {
         assertEquals(0L, monitor.getTotalDispatcherModuleIsolationDropCount())
     }
 
+    /** 构造参数 reportIntervalMs 应被保留以供核心周期调度器统一读取。 */
+    @Test
+    fun `custom reportIntervalMs is preserved for scheduler wiring`() {
+        val defaultMonitor = SdkSelfMonitor()
+        val customMonitor = SdkSelfMonitor(15_000L)
+
+        assertEquals(60_000L, defaultMonitor.reportIntervalMs)
+        assertEquals(15_000L, customMonitor.reportIntervalMs)
+    }
+
     /** recordEmit 应递增发射计数。 */
     @Test
     fun `recordEmit increments emit count`() {

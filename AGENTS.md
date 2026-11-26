@@ -21,7 +21,7 @@ This is the repository-local handoff entry for AndroidAPM. Treat the current sou
 - Gradle 9.6.0, AGP 9.5.2, Kotlin 2.2.21, and JDK 21 for the daemon and Java/Kotlin compilation and tests across all four Gradle build roots. JVM bytecode target is 21. Android compileSdk is 36, minSdk is 24, and targetSdk is 34.
 - The project has 27 build units, 169 main sources, and 131 test and benchmark sources in Gradle source sets. The five Python test files are counted separately.
 - Use `python tools/verify_ci.py` with `JAVA_HOME` set to JDK 21. The gate checks 24 ABI baselines, four strict dependency verification files, 25 local Maven coordinates, and a build of the independent Maven consumer.
-- Current automated verification runs 985 root Android, model, and Gradle plugin tests (132 suites: 126/897 root Android, 5/65 model, 1/23 plugin) plus 56 Python gate/benchmark tests, Android Studio Sync, all-module `assembleDebug`, and sample/benchmark AndroidTest Kotlin compilation. See the [project baseline](docs/Android_APM_项目文档.md) and [historical verification](docs/HISTORICAL_VERIFICATION.md).
+- Current automated verification runs 989 root Android, model, and Gradle plugin tests (132 suites: 126/901 root Android, 5/65 model, 1/23 plugin) plus 56 Python gate/benchmark tests, Android Studio Sync, all-module `assembleDebug`, and sample/benchmark AndroidTest Kotlin compilation. See the [project baseline](docs/Android_APM_项目文档.md) and [historical verification](docs/HISTORICAL_VERIFICATION.md).
 
 ## Project Boundary
 

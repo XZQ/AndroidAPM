@@ -162,8 +162,13 @@ private const val NANOS_PER_MICROSECOND = 1_000L
  *
  * 线程安全：普通计数器使用 Atomic 类型；dispatcher 阶段直方图使用单 worker 下
  * 无竞争的短同步区间，并与报告线程生成一致快照。
+ *
+ * @param reportIntervalMs 健康报告调度周期（毫秒）；小于等于 0 表示不启动周期性调度
  */
-class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS) {
+class SdkSelfMonitor(
+    /** 健康报告调度周期（毫秒），供核心自监控调度器读取。 */
+    internal val reportIntervalMs: Long = DEFAULT_REPORT_INTERVAL_MS
+) {
     /** 发射事件计数。 */
     private val emitCount = AtomicLong(0L)
 

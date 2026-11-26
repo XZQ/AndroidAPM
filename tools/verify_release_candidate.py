@@ -227,7 +227,7 @@ def validate_pom(
         "https://www.apache.org/licenses/LICENSE-2.0.txt"
     ):
         raise ReleaseCandidateError(f"{pom}: unexpected license URL")
-    if required_text(root, "./developers/developer/id", pom) != "YSHEN53":
+    if required_text(root, "./developers/developer/id", pom) != "XZQ":
         raise ReleaseCandidateError(f"{pom}: unexpected developer id")
     required_text(root, "./developers/developer/name", pom)
     if required_text(root, "./scm/url", pom) != PROJECT_URL:

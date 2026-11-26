@@ -73,6 +73,64 @@ class GrayReleaseControllerTest {
         assertTrue("Sample count $sampleCount should be between 400 and 600",
             sampleCount in 400..600)
     }
+
+    /** 远程 sample_rate 应按 feature + userId 稳定分桶，且匿名会话内结果稳定。 */
+    @Test
+    fun `remote sample rate buckets users deterministically per feature`() {
+        val provider = object : DynamicConfigProvider {
+            override fun getBoolean(key: String, defaultValue: Boolean): Boolean = true
+            override fun getLongValue(key: String, defaultValue: Long): Long = defaultValue
+            override fun getFloatValue(key: String, defaultValue: Float): Float = when (key) {
+                "apm.feature.module.fps.sample_rate" -> 0.5f
+                "apm.feature.feature_a.sample_rate" -> 0.2f
+                "apm.feature.feature_b.sample_rate" -> 0.2f
+                else -> defaultValue
+            }
+            override fun getString(key: String, defaultValue: String): String = defaultValue
+        }
+        val controller = GrayReleaseController(provider)
+
+        // 50% 灰度在大样本用户上均匀切分，且同一 userId 多次判定一致
+        val enabledCount = (1..1000).count { controller.isEnabled("module.fps", userId = "user_$it", defaultValue = true) }
+        assertTrue("Enabled count $enabledCount should be between 400 and 600", enabledCount in 400..600)
+        val stableUserResult = (1..10).map { controller.isEnabled("module.fps", userId = "stable_user_42", defaultValue = true) }
+        assertEquals(1, stableUserResult.toSet().size)
+
+        // 不同功能使用各自盐值，避免 20% 灰度完全锁定同一批用户
+        val cohortA = (1..500).filter { controller.isEnabled("feature_a", userId = "u_$it", defaultValue = true) }.toSet()
+        val cohortB = (1..500).filter { controller.isEnabled("feature_b", userId = "u_$it", defaultValue = true) }.toSet()
+        assertNotEquals("Independent features should not select identical cohorts", cohortA, cohortB)
+
+        // userId 缺失时回退进程级会话标识，保证会话内多次查询不抖动
+        val anonymousResults = (1..10).map { controller.isEnabled("module.fps", userId = null, defaultValue = true) }
+        assertEquals(1, anonymousResults.toSet().size)
+    }
+
+    /** 远程布尔 false 优先于正采样率关闭，而本地 override 优先于零采样率强制开启。 */
+    @Test
+    fun `disabled remote boolean overrides positive sample rate and local override wins`() {
+        val provider = object : DynamicConfigProvider {
+            override fun getBoolean(key: String, defaultValue: Boolean): Boolean = when (key) {
+                "apm.feature.disabled_feature.enabled" -> false
+                "apm.feature.zero_rate_feature.enabled" -> true
+                else -> defaultValue
+            }
+            override fun getLongValue(key: String, defaultValue: Long): Long = defaultValue
+            override fun getFloatValue(key: String, defaultValue: Float): Float = when (key) {
+                "apm.feature.disabled_feature.sample_rate" -> 1.0f
+                "apm.feature.zero_rate_feature.sample_rate" -> 0.0f
+                else -> defaultValue
+            }
+            override fun getString(key: String, defaultValue: String): String = defaultValue
+        }
+        val controller = GrayReleaseController(provider)
+
+        assertFalse(controller.isEnabled("disabled_feature", userId = "user_1", defaultValue = true))
+        assertFalse(controller.isEnabled("zero_rate_feature", userId = "user_1", defaultValue = true))
+
+        controller.setFeatureOverride("zero_rate_feature", true)
+        assertTrue(controller.isEnabled("zero_rate_feature", userId = "user_1", defaultValue = true))
+    }
 }
 
 /**

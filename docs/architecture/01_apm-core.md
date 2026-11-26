@@ -210,7 +210,7 @@ claim/count/ACK/fail/prune/upload 的 recoverable `Exception` 在 worker 内降�
 - ERROR/FATAL bypass
 - bucket map 维护 LRU，上限 256
 
-`GrayReleaseController` 通过稳定 userId/sample rate 和 override 决定模块是否启用。`DynamicConfigProvider` 是接口，core 不绑定具体网络实现；`apm-remote-config` 提供生产实现。
+`GrayReleaseController` 按本地 override → `apm.feature.<feature>.enabled` → 可选 `apm.feature.<feature>.sample_rate`（默认 `1.0f`）顺序决定功能/模块是否启用：当 `sample_rate < 1.0f` 时，对 `<feature>:<subject>` 做万分位确定性哈希分桶（`subject` 优先取非空 `userId`，核心模块门禁在匿名场景回退 `resourceContext.installationId`，再缺失时回退进程级 `ProcessSessionId`），既保证同一用户/会话内结果稳定，又避免不同功能灰度完全锁定同一批人群。`DynamicConfigProvider` 是接口，core 不绑定具体网络实现；`apm-remote-config` 提供生产实现。
 
 `DynamicEventPolicy` 在 dispatcher worker 上读取签名快照，避免给调用线程增加 IO。采样使用 eventId 稳定 hash，basis points 限制为 0–10000；限流容量限制为 0–1,000,000，窗口限制为 1 秒–24 小时。每个 (module, name) 流的六个插值键缓存在有界（256）并发 map 中并校验流身份；module/name 任一超过 128 字符时仍正常求值但不进入长期缓存，provider 查找仍逐事件执行。键按默认、模块、事件逐级覆盖：
 
@@ -311,7 +311,7 @@ Consent revocation 使用独立顺序：先在 `initLock` 下设置 sticky gate 
 - 客户端具备 eventId 和 concurrent outbox lease，但 exactly-once 仍依赖服务端按 eventId 幂等
 - self-monitor health event 不是独立控制平面；详细错误由独立本地 journal 补足
 - diagnostics 默认不自动上传，分享流程由宿主显式控制
-- 公共 API 无法实现的通用隐藏 Hook 配置保留为 deprecated/false；真实能力使用显式 API
+- 公共 API 无法实现的通用隐藏 Hook 历史占位配置已在 `0.2.0` 移除；真实能力统一使用显式 API
 - compatibility 保持源兼容；生产必须显式选择 strict 并声明 consent
 - consent gate 是进程本地；多进程撤回需要宿主传播，磁盘路径为 app-private shared artifacts
 - PII 默认开启；aggregation/multi-process 默认关闭，生产配置仍需明确评审

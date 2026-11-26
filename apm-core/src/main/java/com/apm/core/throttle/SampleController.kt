@@ -1,5 +1,6 @@
 package com.apm.core.throttle
 
+import com.apm.core.ProcessSessionId
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -57,11 +58,11 @@ class GrayReleaseController(private val configProvider: DynamicConfigProvider = 
     private val featureFlags = ConcurrentHashMap<String, Boolean>()
 
     /**
-     * 检查功能是否开启。优先查本地覆盖，再查远程配置。
+     * 检查功能是否开启。优先查本地覆盖，再查远程布尔开关与可选灰度采样比例。
      *
      * @param feature 功能标识，如 "hprof_dump"、"native_monitor"
-     * @param userId 用户 ID（预留，可用于按用户灰度）
-     * @return true 表示功能已开启
+     * @param userId 可选稳定用户或安装标识；缺失时回退进程会话标识保证单次会话内稳定
+     * @return true 表示功能已开启且命中灰度范围
      */
     fun isEnabled(feature: String, userId: String? = null): Boolean {
         return isEnabled(feature, userId, false)
@@ -70,15 +71,42 @@ class GrayReleaseController(private val configProvider: DynamicConfigProvider = 
     /**
      * Checks a feature flag with an explicit default for absent remote config.
      *
+     * Evaluation order:
+     * 1. Local override via [setFeatureOverride] wins unconditionally.
+     * 2. Remote boolean `apm.feature.<feature>.enabled` (defaults to [defaultValue]); `false` rejects immediately.
+     * 3. Optional remote float `apm.feature.<feature>.sample_rate` (defaults to `1.0f`); `< 1.0f` deterministically
+     *    buckets `"$feature:$subject"` where `subject` is non-empty [userId] or [ProcessSessionId.get].
+     *
      * @param feature feature identifier
-     * @param userId optional stable user identifier
-     * @param defaultValue default when no override exists
+     * @param userId optional stable user or installation identifier
+     * @param defaultValue default when no boolean override exists
      * @return resolved feature state
      */
     fun isEnabled(feature: String, userId: String? = null, defaultValue: Boolean): Boolean {
-        // 本地覆盖优先
+        // 本地覆盖优先（强制全开或强制全关）
         featureFlags[feature]?.let { return it }
-        return configProvider.getBoolean("apm.feature.$feature.enabled", defaultValue)
+        // 远程布尔总开关关闭时直接拒绝，跳过后续分桶计算
+        val enabled = configProvider.getBoolean(
+            "$FEATURE_KEY_PREFIX$feature$ENABLED_KEY_SUFFIX",
+            defaultValue
+        )
+        if (!enabled) {
+            return false
+        }
+        // 未配置 sample_rate 时默认 1.0f 零分配放行，保持完全向后兼容
+        val sampleRate = configProvider.getFloatValue(
+            "$FEATURE_KEY_PREFIX$feature$SAMPLE_RATE_KEY_SUFFIX",
+            FULL_SAMPLE_RATE
+        )
+        if (sampleRate >= FULL_SAMPLE_RATE) {
+            return true
+        }
+        // 优先使用稳定 userId，缺失时回退进程级 sessionId；拼接 feature 避免不同功能锁定同一批用户
+        val subject = if (!userId.isNullOrEmpty()) userId else ProcessSessionId.get()
+        if (sampleRate <= 0.0f) {
+            return false
+        }
+        return bucketForFeatureSubject(feature, subject) < (sampleRate * MODULUS).toInt()
     }
 
     /**
@@ -93,22 +121,57 @@ class GrayReleaseController(private val configProvider: DynamicConfigProvider = 
 
     /**
      * 判断用户是否在采样范围内。
-     * 使用 userId hashCode 取模，保证同一用户结果稳定。
+     * 使用 FNV-1a + Murmur3 雪崩混合哈希取模，保证同一用户结果稳定且连续编号用户均匀分布。
      *
      * @param userId 用户唯一标识
      * @param sampleRate 采样率 0.0~1.0
      * @return true 表示命中采样
      */
     fun isInSample(userId: String, sampleRate: Float): Boolean {
-        if (sampleRate >= 1.0f) {
+        if (sampleRate >= FULL_SAMPLE_RATE) {
             return true
         }
         if (sampleRate <= 0.0f) {
             return false
         }
-        // 取模保证同一用户结果稳定，避免重复开关
-        val hash = (userId.hashCode() and HASH_MASK) % MODULUS
-        return hash < (sampleRate * MODULUS).toInt()
+        // 雪崩哈希取模保证同一用户结果稳定，且消除连续数字/同前缀 ID 的多项式哈希聚集偏差
+        return bucketFor(userId) < (sampleRate * MODULUS).toInt()
+    }
+
+    /**
+     * 对单键计算 32 位雪崩哈希并映射到 [0, MODULUS) 桶。
+     */
+    private fun bucketFor(key: String): Int {
+        var hash = FNV_OFFSET_BASIS
+        for (i in key.indices) {
+            hash = (hash xor key[i].code) * FNV_PRIME
+        }
+        return finalizeBucket(hash)
+    }
+
+    /**
+     * 无额外字符串分配地计算 feature + ':' + subject 的雪崩分桶值。
+     */
+    private fun bucketForFeatureSubject(feature: String, subject: String): Int {
+        var hash = FNV_OFFSET_BASIS
+        for (i in feature.indices) {
+            hash = (hash xor feature[i].code) * FNV_PRIME
+        }
+        hash = (hash xor COHORT_SEPARATOR_CODE) * FNV_PRIME
+        for (i in subject.indices) {
+            hash = (hash xor subject[i].code) * FNV_PRIME
+        }
+        return finalizeBucket(hash)
+    }
+
+    /** 应用 MurmurHash3 32-bit finalizer 消除低位相关性并映射到万分位区间。 */
+    private fun finalizeBucket(rawHash: Int): Int {
+        var mixed = rawHash xor (rawHash ushr SHIFT_16)
+        mixed *= MURMUR_MIX_1
+        mixed = mixed xor (mixed ushr SHIFT_13)
+        mixed *= MURMUR_MIX_2
+        mixed = mixed xor (mixed ushr SHIFT_16)
+        return (mixed and HASH_MASK) % MODULUS
     }
 
     companion object {
@@ -116,5 +179,27 @@ class GrayReleaseController(private val configProvider: DynamicConfigProvider = 
         private const val HASH_MASK = 0x7FFFFFFF
         /** 取模基数，控制采样精度到万分之一。 */
         private const val MODULUS = 10000
+        /** 默认全量放行比例。 */
+        private const val FULL_SAMPLE_RATE = 1.0f
+        /** 远程灰度配置键前缀。 */
+        private const val FEATURE_KEY_PREFIX = "apm.feature."
+        /** 远程布尔开关配置键后缀。 */
+        private const val ENABLED_KEY_SUFFIX = ".enabled"
+        /** 远程灰度采样率配置键后缀。 */
+        private const val SAMPLE_RATE_KEY_SUFFIX = ".sample_rate"
+        /** feature 与 subject 之间的分隔符编码（':'）。 */
+        private const val COHORT_SEPARATOR_CODE = 58
+        /** 32-bit FNV-1a 初始偏移基数（0x811c9dc5）。 */
+        private const val FNV_OFFSET_BASIS = -0x7ee3623b
+        /** 32-bit FNV-1a 质数因子（16777619）。 */
+        private const val FNV_PRIME = 0x01000193
+        /** MurmurHash3 fmix32 第一轮乘数常量（0x85ebca6b）。 */
+        private const val MURMUR_MIX_1 = -0x7a143595
+        /** MurmurHash3 fmix32 第二轮乘数常量（0xc2b2ae35）。 */
+        private const val MURMUR_MIX_2 = -0x3d4d51cb
+        /** 雪崩混合右移位数（16 位）。 */
+        private const val SHIFT_16 = 16
+        /** 雪崩混合右移位数（13 位）。 */
+        private const val SHIFT_13 = 13
     }
 }

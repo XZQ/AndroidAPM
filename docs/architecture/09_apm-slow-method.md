@@ -1,16 +1,16 @@
 # apm-slow-method 与 apm-plugin
 
-> 同步日期：2026-09-23｜运行时模块：`slow_method`
+> 同步日期：2026-11-26｜运行时模块：`slow_method`
 
 ## 三条观测路径
 
-### Looper Printer Hook
+### Looper Printer Hook 与阻塞期合并看门狗
 
-`SlowMethodModule` 通过反射读取并包装 `Looper.mLogging`，根据 dispatch start/end 文本计算主线程消息耗时。反射失败时记录 internal error，不阻止应用运行。
+`SlowMethodModule` 通过反射读取并保留既有 `Looper.mLogging`，再通过公开 `setMessageLogging` 安装包装器，以递增分发序号（`0` 表示空闲，不依赖可能为负的 `System.nanoTime()` 起点）和单调时钟计算主线程消息耗时。高频短消息仅写内存序号与时间戳，每个阈值窗口最多向 `apm-stack-sampler` 线程投递一次合并看门狗（空闲屏幕自动解除武装、零周期唤醒）；当单次消息阻塞达到 `thresholdMs` 且尚未 `Finished` 时，看门狗在阻塞现场抓取真实主线程调用栈（二次校验消息序号未切换，绝不把事后 `Looper.loop` 栈混入 `mainThreadStack`），并立即触发热点采样。若堆栈抓取与栈采样均关闭，则不创建后台采样线程。
 
 ### Stack sampling
 
-检测到长 dispatch 后，`StackSamplingProfiler` 在 measurement-priority HandlerThread 中按 10ms 间隔、5s 窗口采样主线程 stack，统计 top 10 热点方法。
+慢消息阻塞达到阈值（或极端线程调度延迟下在 `Finished` 兜底确认）后，`StackSamplingProfiler` 在 measurement-priority daemon `HandlerThread` 中按 10ms 间隔、5s 窗口采样主线程 stack，过滤系统框架及 `com.apm.slowmethod.*` 自身包装帧后统计 top 10 热点方法；采样停止仅取消采样自身任务，不误删同线程上的合并看门狗。
 
 ### ASM instrumentation
 

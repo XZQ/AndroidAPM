@@ -47,7 +47,7 @@ SDK 默认使用 `COMPATIBILITY`。生产接入可显式启用 `PRODUCTION_STRIC
 | Android | compileSdk 36 / minSdk 24 / targetSdk 34，Java 21 字节码 |
 | 消费方下限 | AAR 元数据 `minCompileSdk=36`；`com.apm:apm-plugin` 随附 AGP 9.5.2 → 接入方须 AGP 9.x、JDK 21 |
 | 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、169 个主源码文件、131 个 Gradle 测试/benchmark 源文件，另有 5 个 Python 测试文件 |
-| 测试 | 132 suites / 985 tests（根 Android 126/897、model 5/65、plugin 1/23），0 failures / 0 errors / 0 skips |
+| 测试 | 132 suites / 989 tests（根 Android 126/901、model 5/65、plugin 1/23），0 failures / 0 errors / 0 skips |
 | 门禁 | `python tools/verify_ci.py`：公开 ABI、四组依赖指纹、发布候选、隔离 consumer、强制重跑测试、文档 |
 
 详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，版本与公开面规则见 [API 兼容策略](docs/API_COMPATIBILITY.md)。

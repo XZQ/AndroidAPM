@@ -240,7 +240,11 @@ object Apm {
         var stagedBizContextSource: BizContextSnapshotSource? = null
         try {
         // Self-monitoring exists before storage so capacity rejection and eviction are observable from first write.
-        val selfMonitor = if (config.enableSelfMonitoring) SdkSelfMonitor() else null
+        val selfMonitor = if (config.enableSelfMonitoring) {
+            SdkSelfMonitor(config.selfMonitorIntervalMs)
+        } else {
+            null
+        }
         val bizContextSource = BizContextSnapshotSource(
             provider = config.bizContextProvider,
             mode = config.bizContextCaptureMode,
@@ -950,7 +954,9 @@ object Apm {
                 "apm.module.${module.name}.enabled",
                 true
             )
-            val userId = config.defaultContext[CONTEXT_USER_ID]
+            // 优先使用显式 user_id，匿名场景回退稳定 installationId 供百分比灰度稳定分桶
+            val userId = config.defaultContext[CONTEXT_USER_ID]?.takeIf { it.isNotEmpty() }
+                ?: config.resourceContext.installationId.takeIf { it.isNotEmpty() }
             val grayEnabled = config.grayController?.isEnabled(
                 feature = "module.${module.name}",
                 userId = userId,
@@ -1020,7 +1026,8 @@ object Apm {
         monitor: SdkSelfMonitor?,
         expectedContext: ApmContext
     ): ScheduledExecutorService? {
-        if (monitor == null || config.selfMonitorIntervalMs <= 0L) {
+        val intervalMs = monitor?.reportIntervalMs ?: 0L
+        if (monitor == null || intervalMs <= 0L) {
             return null
         }
         val previousDiagnosticDrops = AtomicLong(0L)
@@ -1077,8 +1084,8 @@ object Apm {
                         recordInternalError(ERROR_TAG_SELF_MONITOR_TICK, error)
                     }
                 },
-                config.selfMonitorIntervalMs,
-                config.selfMonitorIntervalMs,
+                intervalMs,
+                intervalMs,
                 TimeUnit.MILLISECONDS
             )
         }

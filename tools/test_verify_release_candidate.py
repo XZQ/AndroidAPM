@@ -60,7 +60,7 @@ def pom_xml(
         "<name>The Apache License, Version 2.0</name>"
         "<url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>"
         "</license></licenses>"
-        "<developers><developer><id>YSHEN53</id><name>YSHEN53</name>"
+        "<developers><developer><id>XZQ</id><name>XZQ</name>"
         "</developer></developers>"
         "<scm>"
         "<url>https://github.com/XZQ/AndroidAPM</url>"

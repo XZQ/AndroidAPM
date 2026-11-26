@@ -42,8 +42,38 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
     /** 是否正在采样。 */
     @Volatile
     private var sampling = false
+    /** 当前活跃的周期采样任务引用，便于独立取消而不误删同线程看门狗任务。 */
+    private var activeSamplingRunnable: Runnable? = null
+    /** 当前活跃的采样窗口截止任务引用。 */
+    private var activeWindowStopRunnable: Runnable? = null
+    /** 供模块内部测试与看门狗协作读取采样线程 Looper。 */
+    internal val samplingLooper: Looper
+        get() = samplingThread.looper
+    /** 供模块内部查询当前是否处于活跃采样窗口。 */
+    internal val isSampling: Boolean
+        get() = sampling
     /** 采样结果回调。 */
     var onSamplingComplete: ((topMethods: List<MethodSample>, sampleCount: Int) -> Unit)? = null
+
+    /**
+     * 在采样工作线程上延迟调度慢分发看门狗任务。
+     *
+     * @param delayMs 延迟毫秒数
+     * @param task 看门狗回调
+     * @return 若线程仍存活并成功入队则返回 true
+     */
+    internal fun postWatchdog(delayMs: Long, task: Runnable): Boolean {
+        return samplingHandler.postDelayed(task, delayMs)
+    }
+
+    /**
+     * 从采样工作线程移除指定的看门狗任务。
+     *
+     * @param task 待移除的看门狗回调
+     */
+    internal fun removeWatchdog(task: Runnable) {
+        samplingHandler.removeCallbacks(task)
+    }
 
     /**
      * 启动栈采样。
@@ -74,14 +104,17 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
                 samplingHandler.postDelayed(this, config.samplingIntervalMs)
             }
         }
-        samplingHandler.post(samplingRunnable)
-
-        // 设置窗口结束回调（仅在仍处于本次活跃采样时自动停止并汇报）
-        samplingHandler.postDelayed({
+        val windowStopRunnable = Runnable {
             if (sampling) {
                 stopSampling()
             }
-        }, config.samplingWindowMs)
+        }
+        activeSamplingRunnable = samplingRunnable
+        activeWindowStopRunnable = windowStopRunnable
+        samplingHandler.post(samplingRunnable)
+
+        // 设置窗口结束回调（仅在仍处于本次活跃采样时自动停止并汇报）
+        samplingHandler.postDelayed(windowStopRunnable, config.samplingWindowMs)
     }
 
     /**
@@ -91,7 +124,11 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
     @Synchronized
     fun stopSampling() {
         sampling = false
-        samplingHandler.removeCallbacksAndMessages(null)
+        // 仅移除采样自身任务，避免清除同 Handler 上正在运行的慢消息看门狗
+        activeSamplingRunnable?.let { samplingHandler.removeCallbacks(it) }
+        activeWindowStopRunnable?.let { samplingHandler.removeCallbacks(it) }
+        activeSamplingRunnable = null
+        activeWindowStopRunnable = null
 
         // 排序并取 Top N
         val topMethods = hotMethods.entries
@@ -126,7 +163,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
      * 过滤掉系统类和框架类，只保留业务方法。
      */
     private fun shouldSkip(signature: String): Boolean {
-        // 跳过 Android 系统类和 Java 标准库
+        // 跳过 Android 系统类、Java 标准库及 APM 慢方法模块自身包装帧
         return signature.startsWith("android.")
                 || signature.startsWith("androidx.")
                 || signature.startsWith("java.")
@@ -134,6 +171,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
                 || signature.startsWith("kotlin.")
                 || signature.startsWith("com.android.")
                 || signature.startsWith("sun.")
+                || signature.startsWith(APM_SLOW_METHOD_PACKAGE_PREFIX)
     }
 
     /**
@@ -141,6 +179,8 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
      */
     fun destroy() {
         sampling = false
+        activeSamplingRunnable = null
+        activeWindowStopRunnable = null
         samplingHandler.removeCallbacksAndMessages(null)
         samplingThread.quitSafely()
     }
@@ -156,5 +196,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
     companion object {
         /** 采样线程名。 */
         private const val THREAD_NAME = "apm-stack-sampler"
+        /** APM 慢方法模块包名前缀，避免把监控框架帧计入业务热点。 */
+        private const val APM_SLOW_METHOD_PACKAGE_PREFIX = "com.apm.slowmethod."
     }
 }
