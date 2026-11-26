@@ -203,7 +203,14 @@ class SignedRemoteConfigProvider internal constructor(
         expiryFuture = exec.schedule({ notifyIfEffectiveChanged() }, maxOf(delayMs, 0L), TimeUnit.MILLISECONDS)
     }
 
-    /** Accepts a new signed document only after verify, rollback, and durable-cache checks. */
+    /**
+     * Accepts a new signed document only after verify, rollback, and durable-cache checks.
+     *
+     * A validly signed higher-revision document is intentionally accepted and persisted even if its
+     * `expiresAtMs` has already elapsed at receipt time: advancing `highestRevision` prevents replay
+     * of older revisions, while [activePayloadValue] and [effectiveFingerprint] immediately treat the
+     * expired payload as inactive so stale LKG values cannot remain in effect.
+     */
     private fun acceptDocument(
         response: RemoteConfigHttpResponse,
         before: ProviderState

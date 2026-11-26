@@ -164,7 +164,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         if (!config.enablePhaseTracking || !config.enableContentProviderTracking) {
             return
         }
-        // 记录开始时间到 ThreadLocal 避免并发问题
+        // 记录开始时间到并发映射表
         providerStartTimes[providerName] = SystemClock.elapsedRealtime()
     }
 
@@ -503,6 +503,9 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         // 找出瓶颈阶段
         val bottleneck = phases.maxByOrNull { it.value } ?: return
         val totalDuration = (fields[FIELD_LAUNCH_DURATION_MS] as? Number)?.toLong() ?: return
+        if (totalDuration <= 0L) {
+            return
+        }
 
         // 瓶颈阶段占比超过 40% 才上报
         val ratio = bottleneck.value.toDouble() / totalDuration.toDouble()
@@ -637,10 +640,6 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         // --- 启动类型值 ---
         /** 启动类型值：冷启动。 */
         private const val LAUNCH_TYPE_COLD = "cold"
-        /** 启动类型值：热启动。 */
-        private const val LAUNCH_TYPE_HOT = RelaunchTracker.LAUNCH_TYPE_HOT
-        /** 启动类型值：温启动。 */
-        private const val LAUNCH_TYPE_WARM = RelaunchTracker.LAUNCH_TYPE_WARM
 
         // --- 阶段名 ---
         /** 阶段名：Application 初始化。 */
@@ -660,7 +659,7 @@ class LaunchModule(private val config: LaunchConfig = LaunchConfig()) : ApmModul
         /** 百分比转换因子。 */
         private const val PERCENT_FACTOR = 100.0
 
-        /** ContentProvider 开始时间记录（ThreadLocal 避免并发问题）。 */
+        /** ContentProvider 开始时间记录（ConcurrentHashMap 保证跨线程访问安全）。 */
         private val providerStartTimes = java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 }

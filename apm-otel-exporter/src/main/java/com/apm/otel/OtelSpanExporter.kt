@@ -18,15 +18,15 @@ import com.apm.model.ApmSeverity
  * - fields → Span attributes
  * - extras → Span attributes（前缀 extras.）
  *
- * 注意：此类依赖 OTel SDK（compileOnly），
- * 运行时需要宿主 App 提供 OTel SDK 实现。
+ * 说明：本模块不依赖任何 OpenTelemetry SDK，也不负责网络发送；
+ * 仅输出标准化 Map 结构供宿主自定义 OTel 适配层消费。
  */
 object OtelSpanExporter {
 
     /**
      * 将 APM 事件转换为 OTel 兼容的 Span 数据 Map。
      *
-     * 由于 OTel SDK 是 compileOnly 依赖，这里输出标准化的 Map 结构，
+     * 本模块零外部 SDK 依赖，直接输出标准化的 Map 结构，
      * 宿主 App 的 OTel 集成层可据此构建 SpanData。
      *
      * @param event APM 事件

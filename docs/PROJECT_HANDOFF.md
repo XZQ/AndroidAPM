@@ -1,6 +1,6 @@
 # AndroidAPM 项目交接快照
 
-> 同步日期：2026-11-22｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
+> 同步日期：2026-11-26｜分支：`develop`｜当前 tip 请执行 `git log --oneline -n 10`
 
 ## 结论
 
@@ -40,8 +40,8 @@
 | 监控模块 | 15 |
 | 扩展模块 | 2 |
 | 分发 Bundle | 1：`apm-bundle` |
-| 主源码 | 170：165 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 源文件 | 130（Gradle 的 `src/test` 与 `src/androidTest`） |
+| 主源码 | 169：164 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 源文件 | 131（Gradle 的 `src/test` 与 `src/androidTest`） |
 | Gradle daemon | JDK 21 |
 | Java toolchain | 21 |
 | Gradle / AGP / Kotlin | 9.6.0 / 9.5.2 / 2.2.21 |
@@ -100,13 +100,13 @@ Apm.emit
 - IO：stream wrapper；Native path 还依赖 xhook
 - Slow Method：宿主应用 Gradle ASM 插件
 
-不宣称无法由公共 API 支撑的能力：通用 Binder hidden hook、进程级 WebView 自动接管、通用线程 leak 判断和 GPU overdraw 计数。对应旧字段已弃用并默认关闭，真实能力使用显式 API；FrameMetrics 和注册线程池 backlog 已实现。
+不宣称无法由公共 API 支撑的能力：通用 Binder hidden hook、进程级 WebView 自动接管、通用线程 leak 判断和 GPU overdraw 计数；对应历史弃用字段已在 `0.2.0` 移除，真实能力统一使用显式 API；FrameMetrics 和注册线程池 backlog 已实现。
 
 接入自检应在代表性 Network/SQLite/IPC/WebView/Battery/IO 流程实际执行后读取 `ApmDiagnostics.hostIntegrationSnapshot()`；WebView 与线程池可先凭当前 registration 证明安装，其他 `NO_RUNTIME_EVIDENCE` 项需要结合“该流程本次是否发生”判断，不能单靠一次冷启动快照作为发布门禁。
 
 初始化方式也必须明确二选一：手动 `Apm.init` 的宿主从合并 manifest 移除 `ApmInitProvider`；自动模式保留 Provider 并配置 `com.apm.config_class`。Sample 使用手动模式，并为 IO wrapper、`ApmSQLiteDatabase`、WebView install、IPC trace、线程池注册及 Battery 回调提供可运行入口。
 
-完整能力宿主可只依赖 `com.apm:apm-bundle:0.1.0`；该制品通过 POM 传递暴露全部 22 个运行时模块，但不会自动初始化、注册模块或应用 `com.apm.slow-method`。体积敏感宿主仍应按需选择细粒度模块。
+完整能力宿主可只依赖 `com.apm:apm-bundle:0.2.0`；该制品通过 POM 传递暴露全部 22 个运行时模块，但不会自动初始化、注册模块或应用 `com.apm.slow-method`。体积敏感宿主仍应按需选择细粒度模块。
 
 ## 默认配置注意
 
@@ -130,7 +130,7 @@ Apm.emit
 - self-monitor/auto-throttle：开启
 - dispatcher module isolation：开启；75% 高水位 / 单模块 50% 总容量上限，仅约束 NORMAL/LOW
 - biz context：默认 `SYNCHRONOUS` 精确事件时刻快照，provider 必须 O(1)/无 IO/无等待锁；慢 provider 使用 `ASYNC_CACHED`，默认 1s 后台刷新并保留 LKG
-- FPS report interval：1000ms 单调时间窗口；以相邻回调实际 interval / elapsed time 计算并按 refresh rate 封顶，上报 `windowDurationMs`；旧 `windowSize` 仅兼容保留
+- FPS report interval：1000ms 单调时间窗口；以相邻回调实际 interval / elapsed time 计算并按 refresh rate 封顶，上报 `windowDurationMs`
 - 时间与快照：collector/持久化/file/HTTP-date 用 epoch；duration/timeout/cooldown/dedup/rate-limit/window 用 `ApmClock` 单调时钟；直接 `ApmEvent` 在异步 hand-off 前冻结三个 map
 - self-diagnostics：开启；200 条 / 4 MiB 内存、256 条 / 4 MiB 队列、每进程 3 × 512 KiB 文件；不自动上传
 - native crash：关闭

@@ -137,9 +137,9 @@ object DefaultSanitizationRules {
      * 身份证号脱敏规则。
      *
      * 匹配 18 位身份证号（1-9 开头）。
-     * 脱敏策略：保留前 4 位和后 4 位，中间用 ******** 替代。
+     * 脱敏策略：保留前 4 位和后 4 位，中间 10 位用 ********** 替代。
      *
-     * 示例：330102199001011234 → 3301************1234
+     * 示例：330102199001011234 → 3301**********1234
      */
     fun idCardRule(): SanitizationRule = SanitizationRule { input ->
         // 长度快拒：身份证模式固定 18 字符。
@@ -206,9 +206,12 @@ object DefaultSanitizationRules {
     /** URL 密码参数名模式。 */
     private const val URL_PASSWORD_PATTERN = """(?i)(?:password|passwd|pwd)=[^&\s#]+"""
 
-    /** Precompiled immutable regexes avoid reparsing attacker-influenced text on every event. */
+    /** Precompiled phone-number regex avoiding per-event pattern compilation. */
     private val PHONE_REGEX = Regex(PHONE_PATTERN)
+    /** Precompiled 18-digit ID-card regex avoiding per-event pattern compilation. */
     private val ID_CARD_REGEX = Regex(ID_CARD_PATTERN)
+    /** Precompiled URL token query-parameter regex. */
     private val URL_TOKEN_REGEX = Regex(URL_TOKEN_PATTERN)
+    /** Precompiled URL password query-parameter regex. */
     private val URL_PASSWORD_REGEX = Regex(URL_PASSWORD_PATTERN)
 }

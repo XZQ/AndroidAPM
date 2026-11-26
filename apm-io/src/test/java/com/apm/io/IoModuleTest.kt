@@ -78,14 +78,6 @@ class IoModuleTest {
         assertEquals(4_000, config.maxStackTraceLength)
     }
 
-    /** 通用 Java IO 自动 Hook 不受公共 API 支持，默认关闭。 */
-    @Test
-    fun `default auto hook is disabled`() {
-        val config = IoConfig()
-        @Suppress("DEPRECATION")
-        assertFalse(config.enableAutoHook)
-    }
-
     /** 默认小 buffer 阈值 4KB。 */
     @Test
     fun `default small buffer threshold is 4KB`() {
@@ -158,7 +150,6 @@ class IoModuleTest {
             singleIoThresholdMs = 1_000L,
             largeBufferSize = 1_024 * 1_024L,
             maxStackTraceLength = 2_000,
-            enableAutoHook = false,
             smallBufferThreshold = 8_192,
             duplicateReadThreshold = 10,
             enableCloseableLeak = false,
@@ -175,7 +166,6 @@ class IoModuleTest {
         assertEquals(1_000L, config.singleIoThresholdMs)
         assertEquals(1_024 * 1_024L, config.largeBufferSize)
         assertEquals(2_000, config.maxStackTraceLength)
-        assertFalse(config.enableAutoHook)
         assertEquals(8_192, config.smallBufferThreshold)
         assertEquals(10, config.duplicateReadThreshold)
         assertFalse(config.enableCloseableLeak)

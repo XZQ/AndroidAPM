@@ -6,8 +6,7 @@ import com.apm.model.ApmEventKind
 /**
  * APM 事件 → OpenTelemetry Metric 转换器。
  *
- * 将 METRIC 类型的 APM 事件转换为 OTel MetricData 兼容的 Map 结构。
- * 支持 Gauge（单值）和 Histogram（分布）两种数据类型。
+ * 将 METRIC 类型的 APM 事件转换为 OTel MetricData 兼容的 Map 结构（GAUGE 单值数据点）。
  *
  * 映射规则：
  * - module.name → Metric name（如 "apm.memory.snapshot"）
@@ -15,7 +14,7 @@ import com.apm.model.ApmEventKind
  * - severity → Metric severity label
  * - timestamp → Metric timestamp
  *
- * 注意：OTel SDK 为 compileOnly 依赖，宿主 App 需自行提供实现。
+ * 说明：本模块不依赖任何 OpenTelemetry SDK，也不负责网络发送；宿主可自行将 Map 适配到目标上报器。
  */
 object OtelMetricExporter {
 

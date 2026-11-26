@@ -245,6 +245,40 @@ class ApmBatchEnvelopeSerializerTest {
         }
     }
 
+    /** EncodedApmBatch uses byte-content equality and hashing rather than ByteArray identity. */
+    @Test
+    fun `encoded batch equality compares payload bytes by value`() {
+        val left = EncodedApmBatch("b2-abc", 2, byteArrayOf(1, 2, 3))
+        val right = EncodedApmBatch("b2-abc", 2, byteArrayOf(1, 2, 3))
+        val differentPayload = EncodedApmBatch("b2-abc", 2, byteArrayOf(1, 2, 4))
+
+        assertEquals(left, right)
+        assertEquals(left.hashCode(), right.hashCode())
+        assertNotEquals(left, differentPayload)
+    }
+
+    /** Schema-V3 native frames reject untrimmed identity strings matching the collector contract. */
+    @Test
+    fun `v3 native frame validation rejects untrimmed strings`() {
+        val baseFrame = ApmNativeFrameIdentity(
+            abi = "arm64-v8a",
+            moduleBuildId = "build-123",
+            moduleName = "libapm-crash.so",
+            moduleRelativePc = 0x1000L
+        )
+        for (invalidFrame in listOf(
+            baseFrame.copy(abi = " arm64-v8a"),
+            baseFrame.copy(moduleBuildId = "build-123 "),
+            baseFrame.copy(moduleName = "\tlibapm-crash.so")
+        )) {
+            assertThrows(IllegalArgumentException::class.java) {
+                ProtobufSerializer.validateOccurrence(
+                    occurrence().copy(nativeFrames = listOf(invalidFrame))
+                )
+            }
+        }
+    }
+
     /** Empty input yields an empty split result rather than an ACK unit. */
     @Test
     fun `budget splitting accepts empty input`() {

@@ -95,9 +95,9 @@ def add_summary_table(document: Document) -> None:
     """Add the current source inventory and platform baseline."""
     rows = [
         ("构建单元", "27", "25 个根子项目 + apm-plugin + build-logic"),
-        ("主源码", "170", "165 Kotlin + 4 C + 1 proto"),
-        ("测试文件", "130", "Gradle 单元测试和 AndroidTest 源文件，另有 5 个 Python 测试文件"),
-        ("当前完整测试", "132 suites / 987 tests", "根 Android 126 / 901 + model 5 / 63；included plugin 另有 1 suite / 23 tests，全部零失败"),
+        ("主源码", "169", "164 Kotlin + 4 C + 1 proto"),
+        ("测试文件", "131", "Gradle 单元测试和 AndroidTest 源文件，另有 5 个 Python 测试文件"),
+        ("当前完整测试", "132 suites / 985 tests", "根 Android 126 / 897 + model 5 / 65；included plugin 另有 1 suite / 23 tests，全部零失败"),
         ("公开 ABI 基线", "24 个发布制品", "23 个非空公开面；apm-bundle 无实现类并保持空基线"),
         ("Android", "compile 36 / min 24", "targetSdk 34；AAR 元数据 minCompileSdk=36 即接入方下限"),
         ("构建栈", "Java 21 toolchain / Gradle 9.6.0", "Gradle daemon JDK 21 / AGP 9.5.2（内置 Kotlin）/ Kotlin 2.2.21"),
@@ -138,7 +138,7 @@ def add_capability_table(document: Document) -> None:
         ("事件管线", "eventId → Dispatcher → SQLite claim lease → Uploader", "owner 确认成功后删除，语义为至少一次"),
         ("安全输入边界", "Strict JSON/Ed25519、durable UTF-8、canonical ACK、PII fixed corpus", "固定种子回归覆盖截断/位翻转/深层与重复 key/字段名变体；不冒充持续 fuzz 或渗透测试"),
         ("扩展", "Trace、OTel exporter", "Trace 为进程内 span；OTel exporter 仅做事件映射"),
-        ("不支持的全局 Hook", "Binder hidden Hook、WebView 全局接管、通用线程泄漏、GPU overdraw", "兼容字段已 deprecated/false；不伪装成自动能力"),
+        ("不支持的全局 Hook", "Binder hidden Hook、WebView 全局接管、通用线程泄漏、GPU overdraw", "旧兼容字段已在 0.2.0 移除；不伪装成自动能力"),
     ]
     table = document.add_table(rows=1, cols=3)
     table.style = "Table Grid"

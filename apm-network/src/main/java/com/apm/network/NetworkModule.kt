@@ -71,8 +71,6 @@ class NetworkModule internal constructor(
     private val totalDurationMs = AtomicLong(0)
     /** 最大单次耗时（毫秒）。 */
     private val maxDurationMs = AtomicLong(0)
-    /** 最近请求耗时队列，用于触发聚合。 */
-    private val aggregateWindowCount = AtomicLong(0)
 
     override fun onInitialize(context: ApmContext) {
         apmContext = context
@@ -183,7 +181,7 @@ class NetworkModule internal constructor(
         recordIntegrationObservation()
 
         // 更新聚合统计
-        totalRequests.incrementAndGet()
+        val requestNumber = totalRequests.incrementAndGet()
         totalDurationMs.addAndGet(durationMs)
 
         // CAS 更新最大耗时
@@ -226,11 +224,8 @@ class NetworkModule internal constructor(
             fields = fields
         ))
 
-        // 累计到聚合窗口
-        val windowCount = aggregateWindowCount.incrementAndGet()
-        if (windowCount >= config.aggregateWindowSize &&
-            aggregateWindowCount.compareAndSet(windowCount, 0)
-        ) {
+        // 按精确请求序号触发聚合窗口，避免并发请求下的 CAS 漏发与非正窗口误触发
+        if (config.aggregateWindowSize > 0 && requestNumber % config.aggregateWindowSize == 0L) {
             emitAggregate()
         }
     }

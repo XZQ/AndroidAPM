@@ -49,13 +49,10 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         apmContext = context
     }
 
+    @Synchronized
     override fun onStart() {
-        if (!config.enableThreadMonitor) {
+        if (monitoring || !config.enableThreadMonitor) {
             return
-        }
-        @Suppress("DEPRECATION")
-        if (config.enableThreadLeakDetect) {
-            apmContext?.logger?.w("enableThreadLeakDetect is deprecated and ignored; register executors explicitly")
         }
         monitoring = true
         // 间隔钳制：<=0 会使 scheduleWithFixedDelay 直接抛异常，模块无法启动。
@@ -89,6 +86,7 @@ class ThreadMonitorModule(private val config: ThreadMonitorConfig = ThreadMonito
         apmContext?.logger?.d("ThreadMonitor module started")
     }
 
+    @Synchronized
     override fun onStop() {
         monitoring = false
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.THREAD_POOL, false)

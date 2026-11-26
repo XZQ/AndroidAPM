@@ -5,11 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.os.BatteryManager
-import android.os.Handler
-import android.os.Looper
 import com.apm.core.Apm
 import com.apm.core.ApmClock
 import com.apm.core.ApmContext
+import com.apm.core.ApmExecutors
 import com.apm.core.ApmModule
 import com.apm.core.diagnostics.HostIntegrationPoint
 import com.apm.model.ApmEventKind
@@ -17,6 +16,8 @@ import com.apm.model.ApmSeverity
 import com.apm.model.ApmPriority
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * 电量监控模块。
@@ -56,40 +57,38 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
     /** Optional process CPU sampler. */
     private var cpuJiffiesSampler: CpuJiffiesSampler? = null
 
-    /** 主线程 Handler。 */
-    private val mainHandler = Handler(Looper.getMainLooper())
+    /** 后台周期检测执行器，避免在主线程读取 /proc/self/stat。 */
+    private var checkScheduler: ScheduledExecutorService? = null
 
-    /** 定时检测任务。 */
-    private val checkTask = object : Runnable {
-        override fun run() {
-            if (!started) {
-                return
-            }
-            // 主线程 Handler 上的未捕获异常会直接崩溃宿主：/proc 采样或上报链路的
-            // 可恢复异常必须隔离，且不得中断后续周期检测。
-            try {
-                checkBatteryDrain()
-                checkWakeLocks()
-                checkGpsSessions()
-                cpuJiffiesSampler?.sample()
-            } catch (error: RuntimeException) {
-                Apm.recordInternalError(ERROR_TAG_CHECK_LOOP, error)
-            }
-            if (started) {
-                mainHandler.postDelayed(this, config.checkIntervalMs)
-            }
+    /** 执行一轮周期检测，隔离可恢复异常以防调度线程静默取消。 */
+    private fun runPeriodicCheck() {
+        if (!started) {
+            return
+        }
+        try {
+            checkWakeLocks()
+            checkGpsSessions()
+            cpuJiffiesSampler?.sample()
+        } catch (error: RuntimeException) {
+            Apm.recordInternalError(ERROR_TAG_CHECK_LOOP, error)
         }
     }
 
-    /** 电量变化广播接收器。 */
-    private val batteryReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
-                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                if (scale > 0) {
-                    val percent = level * 100 / scale
-                    onBatteryLevelChanged(percent)
+    /** 电量变化广播接收器（惰性创建，使模块可在纯 JVM 测试中直接实例化）。 */
+    private val batteryReceiver by lazy {
+        object : BroadcastReceiver() {
+            /** 接收系统粘性电量广播并换算百分比。 */
+            override fun onReceive(context: Context, intent: Intent) {
+                if (!started) {
+                    return
+                }
+                if (intent.action == Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
+                    if (level >= 0 && scale > 0) {
+                        val percent = level * PERCENT_MULTIPLIER / scale
+                        onBatteryLevelChanged(percent)
+                    }
                 }
             }
         }
@@ -100,16 +99,15 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
     }
 
     /** 注册电量广播和定时检测。 */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableBatteryMonitor) {
+        if (started || !config.enableBatteryMonitor) {
             return
         }
         started = true
         // 注册电量变化广播
         apmContext?.application?.registerReceiver(batteryReceiver,
             IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-        // 启动定时检测
-        mainHandler.postDelayed(checkTask, config.checkIntervalMs)
         if (config.enableCpuMonitor) {
             cpuJiffiesSampler = CpuJiffiesSampler(config).apply {
                 onCpuHigh = { cpuPercent, durationSec ->
@@ -129,6 +127,11 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
                 start()
             }
         }
+        // 在后台单线程执行器上周期采样，杜绝主线程 /proc I/O
+        val intervalMs = config.checkIntervalMs.coerceAtLeast(MIN_CHECK_INTERVAL_MS)
+        checkScheduler = ApmExecutors.newSingleThreadScheduledExecutor(CHECK_THREAD_NAME).apply {
+            scheduleWithFixedDelay(::runPeriodicCheck, intervalMs, intervalMs, TimeUnit.MILLISECONDS)
+        }
         apmContext?.setHostIntegrationModuleActive(
             HostIntegrationPoint.BATTERY,
             config.enableWakeLockHook || config.enableGpsMonitor || config.enableAlarmMonitor
@@ -137,10 +140,15 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
     }
 
     /** 注销广播和定时检测。 */
+    @Synchronized
     override fun onStop() {
+        if (!started) {
+            return
+        }
         started = false
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.BATTERY, false)
-        mainHandler.removeCallbacks(checkTask)
+        checkScheduler?.shutdownNow()
+        checkScheduler = null
         cpuJiffiesSampler?.stop()
         cpuJiffiesSampler = null
         activeWakeLocks.clear()
@@ -257,11 +265,17 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
 
     /**
      * 电量变化回调。
-     * 跟踪电量下降速度。
+     * 跟踪电量下降速度，并在充电回升时自动抬高放电基线。
      */
-    private fun onBatteryLevelChanged(percent: Int) {
-        if (lastBatteryLevel < 0) {
-            // 首次记录
+    internal fun onBatteryLevelChanged(
+        percent: Int,
+        onDrain: ((drop: Int, durationMs: Long, currentLevel: Int) -> Unit)? = null
+    ) {
+        if (percent < 0) {
+            return
+        }
+        if (lastBatteryLevel < 0 || percent > lastBatteryLevel) {
+            // 首次记录或充电回升时刷新放电基线，确保拔电后的下降幅度从峰值起算
             lastBatteryLevel = percent
             lastBatteryTime = ApmClock.monotonicTimeMillis()
             return
@@ -270,17 +284,21 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         val drop = lastBatteryLevel - percent
         if (drop >= config.batteryDrainPercent) {
             val duration = ApmClock.elapsedMillisSince(lastBatteryTime)
-            Apm.emit(
-                module = MODULE_NAME,
-                name = EVENT_BATTERY_DRAIN,
-                kind = ApmEventKind.ALERT,
-                severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
-                fields = mapOf(
-                    FIELD_DROP_PERCENT to drop,
-                    FIELD_DURATION_MS to duration,
-                    FIELD_CURRENT_LEVEL to percent
+            if (onDrain != null) {
+                onDrain(drop, duration, percent)
+            } else {
+                Apm.emit(
+                    module = MODULE_NAME,
+                    name = EVENT_BATTERY_DRAIN,
+                    kind = ApmEventKind.ALERT,
+                    severity = ApmSeverity.WARN, priority = ApmPriority.LOW,
+                    fields = mapOf(
+                        FIELD_DROP_PERCENT to drop,
+                        FIELD_DURATION_MS to duration,
+                        FIELD_CURRENT_LEVEL to percent
+                    )
                 )
-            )
+            }
             // 重置基准
             lastBatteryLevel = percent
             lastBatteryTime = ApmClock.monotonicTimeMillis()
@@ -293,7 +311,7 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
             return
         }
         val now = ApmClock.monotonicTimeMillis()
-        for ((tag, acquireTime) in activeWakeLocks.toMap()) {
+        for ((tag, acquireTime) in activeWakeLocks) {
             val duration = now - acquireTime
             if (duration >= config.wakeLockThresholdMs) {
                 Apm.emit(
@@ -358,12 +376,13 @@ class BatteryModule(private val config: BatteryConfig = BatteryConfig()) : ApmMo
         }
     }
 
-    /** 检查电量消耗速度。 */
-    private fun checkBatteryDrain() {
-        // 依赖广播更新，此处无需额外操作
-    }
-
     companion object {
+        /** 电量百分比换算乘数。 */
+        private const val PERCENT_MULTIPLIER = 100
+        /** 后台周期检查线程名。 */
+        private const val CHECK_THREAD_NAME = "apm-battery-check"
+        /** 最小周期检查间隔（毫秒），防止非正配置触发调度异常。 */
+        private const val MIN_CHECK_INTERVAL_MS = 1_000L
         /** 模块名。 */
         private const val MODULE_NAME = "battery"
         /** WakeLock 持有告警事件。 */

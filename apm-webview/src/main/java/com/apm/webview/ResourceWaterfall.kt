@@ -300,21 +300,23 @@ class ResourceWaterfall internal constructor(
      * @return 资源类型字符串
      */
     private fun inferResourceType(url: String): String {
-        val path = url.lowercase()
+        val lowerUrl = url.lowercase()
+        // 剥离查询串与锚点后再匹配后缀，使 logo.png?v=1 或 bundle.js#hash 也能正确归类
+        val cleanPath = lowerUrl.substringBefore('?').substringBefore('#')
         return when {
             // JS 脚本文件
-            path.endsWith(JS_EXTENSION) || path.contains(JS_QUERY_PARAM) ->
+            cleanPath.endsWith(JS_EXTENSION) || lowerUrl.contains(JS_QUERY_PARAM) ->
                 RESOURCE_TYPE_SCRIPT
             // CSS 样式文件
-            path.endsWith(CSS_EXTENSION) || path.contains(CSS_QUERY_PARAM) ->
+            cleanPath.endsWith(CSS_EXTENSION) || lowerUrl.contains(CSS_QUERY_PARAM) ->
                 RESOURCE_TYPE_STYLESHEET
             // 图片文件
-            path.endsWith(PNG_EXTENSION) || path.endsWith(JPG_EXTENSION) ||
-                path.endsWith(JPEG_EXTENSION) || path.endsWith(GIF_EXTENSION) ||
-                path.endsWith(WEBP_EXTENSION) || path.endsWith(SVG_EXTENSION) ->
+            cleanPath.endsWith(PNG_EXTENSION) || cleanPath.endsWith(JPG_EXTENSION) ||
+                cleanPath.endsWith(JPEG_EXTENSION) || cleanPath.endsWith(GIF_EXTENSION) ||
+                cleanPath.endsWith(WEBP_EXTENSION) || cleanPath.endsWith(SVG_EXTENSION) ->
                 RESOURCE_TYPE_IMAGE
             // XHR/Fetch 请求（常见 API 路径）
-            path.contains(API_PATH_SEGMENT) || path.contains(XHR_QUERY_PARAM) ->
+            lowerUrl.contains(API_PATH_SEGMENT) || lowerUrl.contains(XHR_QUERY_PARAM) ->
                 RESOURCE_TYPE_XHR
             // 其他类型
             else -> RESOURCE_TYPE_OTHER

@@ -551,9 +551,8 @@ class ProcessEventCoordinator internal constructor(
      * @return 不含扩展名的文件名
      */
     private fun nextFileStem(): String {
-        val sessionId = ProcessSessionId.get().replace(NON_ALPHA_REGEX, REPLACEMENT_UNDERSCORE)
         val sequence = FILE_SEQUENCE.incrementAndGet()
-        return "$IPC_FILE_PREFIX${sessionId}_$sequence"
+        return "$IPC_FILE_PREFIX${SANITIZED_SESSION_ID}_$sequence"
     }
 
     /**
@@ -915,6 +914,10 @@ class ProcessEventCoordinator internal constructor(
         private val NON_ALPHA_REGEX = Regex("[^a-zA-Z0-9_.-]")
         /** 替换字符。 */
         private const val REPLACEMENT_UNDERSCORE = "_"
+        /** 进程生命期内恒定的安全会话前缀，只清洗一次避免每次发布文件重复运行正则。 */
+        private val SANITIZED_SESSION_ID: String by lazy {
+            ProcessSessionId.get().replace(NON_ALPHA_REGEX, REPLACEMENT_UNDERSCORE)
+        }
         /** Maximum time allowed for pending IPC writes. */
         private const val SHUTDOWN_TIMEOUT_MS = 1_000L
         /** Global file sequence used to avoid filename collisions within one process. */

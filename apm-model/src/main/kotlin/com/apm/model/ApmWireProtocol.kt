@@ -8,15 +8,11 @@ object ApmWireProtocol {
     /** Occurrence-bound explicit envelope version used by strict production delivery. */
     const val ENVELOPE_SCHEMA_VERSION_V3: Int = 3
 
-    /** Source-compatible V2 alias; new integrations should select a concrete schema constant. */
-    @Deprecated("Select ENVELOPE_SCHEMA_VERSION_V2 or ENVELOPE_SCHEMA_VERSION_V3 explicitly")
-    const val ENVELOPE_SCHEMA_VERSION: Int = ENVELOPE_SCHEMA_VERSION_V2
-
     /** Stable SDK implementation name carried by every versioned batch. */
     const val SDK_NAME: String = "android-apm"
 
     /** SDK artifact version carried by every versioned batch. */
-    const val SDK_VERSION: String = "0.1.0"
+    const val SDK_VERSION: String = "0.2.0"
 
     /** Request/response header carrying the selected explicit envelope schema. */
     const val HEADER_SCHEMA_VERSION: String = "X-Apm-Schema-Version"

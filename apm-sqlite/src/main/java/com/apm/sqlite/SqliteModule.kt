@@ -21,10 +21,10 @@ import com.apm.model.ApmPriority
  *
  * 使用方式（外部回调）：
  * ```kotlin
- * Apm.init(this, ApmConfig()) {
- *     register(SqliteModule())
- * }
- * // 在 SQLiteOpenHelper 或 ORM 层调用
+ * val sqliteModule = SqliteModule()
+ * Apm.init(application, ApmConfig())
+ * Apm.register(sqliteModule)
+ * // 使用 ApmSQLiteDatabase 包装器，或在 SQLiteOpenHelper / ORM 层调用
  * sqliteModule.onSqlExecuted(sql, durationMs, affectedRows)
  * ```
  */

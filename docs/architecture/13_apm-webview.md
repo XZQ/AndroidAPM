@@ -6,8 +6,8 @@
 
 Android 没有进程级 WebView 注册表。`WebviewModule` 对宿主明确指定的实例提供可逆公共 API：
 
-- `install(webView, hostClient, hostChrome)` 安装完整 delegate wrapper
-- `uninstall(webView)` 恢复原对象；API 26+ 不覆盖宿主后续主动替换的 client。客户端 setter 强制 WebView 创建线程，卸载会捕获安装线程 Looper，跨线程卸载（如 stop/撤回在工作线程）时把恢复 post 回安装线程，避免 `CalledFromWrongThreadException` 让视图带着 wrapper 失去安装记录
+- `install(webView, hostClient, hostChrome)` 安装完整 delegate wrapper（setter 失败时自动回滚注册表记录）
+- `uninstall(webView)` 恢复原对象；API 26+ 不覆盖宿主后续主动替换的 client。客户端 setter 强制 WebView 创建线程，卸载会捕获安装线程 Looper，跨线程卸载（如 stop/撤回在工作线程）时以 `WeakReference` 把恢复 post 回安装线程，避免 `CalledFromWrongThreadException` 或慢队列长期强引用宿主视图
 - `wrapWebViewClient` / `wrapWebChromeClient` 只创建 wrapper
 - `evaluateJavascript` 保留宿主 callback 并测量执行耗时
 
@@ -19,11 +19,11 @@ Android 没有进程级 WebView 注册表。`WebviewModule` 对宿主明确指�
 - `onJsBridgeCall(url, bridgeName, direction, durationMs, success)`
 - `onJsConsoleError(url, message, sourceUrl, line)`
 
-`enableAutoRegister` 为 deprecated compatibility 字段，默认 `false`。不会使用反射扫描或全局接管。
+模块不会使用反射扫描或全局接管任意 WebView 实例。
 
 ## ResourceWaterfall
 
-`getResourceWaterfall()` 返回资源记录器：支持 page isolation、重复 URL、并发资源、慢资源事件、关键路径和 waterfall 汇总。模块持有的 recorder 与 JS Bridge/Console 一致尊重总开关——仅当 `enableWebviewMonitor` 与 `enableResourceWaterfall` 同时开启才创建，禁用总开关时返回 `null`，不留下仍会发事件的活跃 recorder（独立使用请走 `ResourceWaterfall` 公开构造器）。wrapper 在 `shouldInterceptRequest` 记录开始；公共 API 无法获得普通网络资源的精确完成回调，因此页面完成作为保守上界。`maxTrackedResources=200` 是全部页面共享的准入上限，计时与记录在同一短锁内创建；重复 URL 按 FIFO 完成，页面结束清除其全部记录，停止永久关闭旧 recorder。
+`getResourceWaterfall()` 返回资源记录器：支持 page isolation、重复 URL、并发资源、慢资源事件、关键路径和 waterfall 汇总（资源后缀识别会先剥离 `?query` 与 `#fragment`）。模块持有的 recorder 与 JS Bridge/Console 一致尊重总开关——仅当 `enableWebviewMonitor` 与 `enableResourceWaterfall` 同时开启才创建，禁用总开关时返回 `null`，不留下仍会发事件的活跃 recorder（独立使用请走 `ResourceWaterfall` 公开构造器）。wrapper 在 `shouldInterceptRequest` 记录开始；公共 API 无法获得普通网络资源的精确完成回调，因此页面完成作为保守上界。`maxTrackedResources=200` 是全部页面共享的准入上限，计时与记录在同一短锁内创建；重复 URL 按 FIFO 完成，页面结束清除其全部记录，停止永久关闭旧 recorder。
 
 事件：`slow_page_load`, `slow_js_execution`, `white_screen`, `slow_js_bridge`, `js_console_error`, `slow_resource`, `resource_waterfall`。
 
@@ -39,7 +39,6 @@ Android 没有进程级 WebView 注册表。`WebviewModule` 对宿主明确指�
 | resource waterfall | 开，slow 3000ms |
 | JS console | 开 |
 | max resources | 200 |
-| auto register | false / deprecated |
 
 ## 线程与隐私
 

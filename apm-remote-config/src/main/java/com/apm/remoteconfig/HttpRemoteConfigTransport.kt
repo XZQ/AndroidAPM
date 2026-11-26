@@ -76,7 +76,11 @@ internal class HttpRemoteConfigTransport(
             }) {
                 "Invalid remote config header name"
             }
-            require(value.all { character -> character == '\t' || character.code >= HEADER_VALUE_MIN }) {
+            require(
+                value.all { character ->
+                    character == '\t' || character.code in HEADER_VALUE_MIN..VISIBLE_ASCII_MAX
+                }
+            ) {
                 "Invalid remote config header value"
             }
             require(name.lowercase(Locale.US) !in RESERVED_HEADER_NAMES) {

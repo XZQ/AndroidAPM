@@ -59,7 +59,7 @@ V3 的 `app_exit` 使用 Android 系统记录中的历史进程、退出时间�
 | Header | 值 |
 |---|---|
 | `X-Apm-Schema-Version` | `3` |
-| `X-Apm-Sdk-Version` | 客户端制品版本，当前 `0.1.0` |
+| `X-Apm-Sdk-Version` | 客户端制品版本，当前 `0.2.0` |
 | `X-Apm-Batch-Id` | 与 body 相同的 `b3-` batch ID |
 | `X-Apm-Event-Count` | 本物理请求中的完整事件数 |
 

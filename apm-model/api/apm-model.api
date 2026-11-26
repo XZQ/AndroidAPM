@@ -190,7 +190,6 @@ public final class com/apm/model/ApmTypedValue$Companion {
 public final class com/apm/model/ApmWireProtocol {
 	public static final field CONTENT_TYPE_ENVELOPE_V2 Ljava/lang/String;
 	public static final field CONTENT_TYPE_ENVELOPE_V3 Ljava/lang/String;
-	public static final field ENVELOPE_SCHEMA_VERSION I
 	public static final field ENVELOPE_SCHEMA_VERSION_V2 I
 	public static final field ENVELOPE_SCHEMA_VERSION_V3 I
 	public static final field HEADER_BATCH_ID Ljava/lang/String;

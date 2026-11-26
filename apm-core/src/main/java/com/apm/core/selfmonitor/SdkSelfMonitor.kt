@@ -396,14 +396,12 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     }
 
     /**
-     * 获取累计发射事件数（非重置）。
-     * 用于外部查询当前总发射量。
+     * 获取当前统计周期内的发射事件数（读取时不重置；每次 [generateReport] 后归零）。
      */
     fun getTotalEmitCount(): Long = emitCount.get()
 
     /**
-     * 获取累计丢弃事件数（非重置）。
-     * 用于外部查询当前总丢弃量。
+     * 获取当前统计周期内的丢弃事件数（读取时不重置；每次 [generateReport] 后归零）。
      */
     fun getTotalDropCount(): Long = dropCount.get()
 
@@ -421,8 +419,7 @@ class SdkSelfMonitor(private val reportIntervalMs: Long = DEFAULT_REPORT_INTERVA
     fun getUnattributedDropPriorityCount(): Long = unattributedDropPriorityCount.get()
 
     /**
-     * 获取累计内部错误数（非重置）。
-     * 用于外部查询监控模块降级处理的异常总量。
+     * 获取当前统计周期内的内部错误数（读取时不重置；每次 [generateReport] 后归零）。
      */
     fun getTotalInternalErrorCount(): Long = internalErrorCount.get()
 

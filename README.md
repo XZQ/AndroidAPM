@@ -1,7 +1,7 @@
 # Android APM Framework
 
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
-[![SDK](https://img.shields.io/badge/SDK-0.1.0-informational.svg)](docs/Android_APM_项目文档.md)
+[![SDK](https://img.shields.io/badge/SDK-0.2.0-informational.svg)](docs/Android_APM_项目文档.md)
 [![minSdk](https://img.shields.io/badge/minSdk-24-3DDC84.svg)](#当前基线)
 [![compileSdk](https://img.shields.io/badge/compileSdk-36-3DDC84.svg)](#当前基线)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.2.21-7F52FF.svg)](#当前基线)
@@ -38,16 +38,16 @@ SDK 默认使用 `COMPATIBILITY`。生产接入可显式启用 `PRODUCTION_STRIC
 
 ## 当前基线
 
-基线日期：2026-11-21。
+基线日期：2026-11-26。
 
 | 项 | 值 |
 |---|---|
-| SDK 版本 | `0.1.0` |
+| SDK 版本 | `0.2.0` |
 | 构建链 | Gradle 9.6.0 / AGP 9.5.2 / Kotlin 2.2.21（AGP 内置 Kotlin）/ Java 21 toolchain |
 | Android | compileSdk 36 / minSdk 24 / targetSdk 34，Java 21 字节码 |
 | 消费方下限 | AAR 元数据 `minCompileSdk=36`；`com.apm:apm-plugin` 随附 AGP 9.5.2 → 接入方须 AGP 9.x、JDK 21 |
-| 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、170 个主源码文件、130 个 Gradle 测试/benchmark 源文件，另有 5 个 Python 测试文件 |
-| 测试 | 132 suites / 987 tests（根 Android 126/901、model 5/63、plugin 1/23），0 failures / 0 errors / 0 skips |
+| 规模 | 27 个构建单元（25 个 subproject + 2 个 included build）、169 个主源码文件、131 个 Gradle 测试/benchmark 源文件，另有 5 个 Python 测试文件 |
+| 测试 | 132 suites / 985 tests（根 Android 126/897、model 5/65、plugin 1/23），0 failures / 0 errors / 0 skips |
 | 门禁 | `python tools/verify_ci.py`：公开 ABI、四组依赖指纹、发布候选、隔离 consumer、强制重跑测试、文档 |
 
 详细状态见 [项目文档](docs/Android_APM_项目文档.md)，换机接手见 [交接快照](docs/PROJECT_HANDOFF.md)，模块设计见 [架构文档](docs/architecture/README.md)，版本与公开面规则见 [API 兼容策略](docs/API_COMPATIBILITY.md)。
@@ -129,7 +129,7 @@ SDK 默认使用 `COMPATIBILITY`。生产接入可显式启用 `PRODUCTION_STRIC
 | [`apm-otel-exporter`](docs/architecture/19_apm-otel-exporter.md) | 把事件映射为 OTel-compatible Map；不依赖或发送到 OTel SDK |
 | [`apm-plugin`](docs/architecture/09_apm-slow-method.md) | AGP instrumentation + ASM，仅插桩宿主 project class |
 | `build-logic` | 统一 Android library 的 compileSdk/minSdk/Java 配置 |
-| `apm-sample-app` | 15 个监控模块和宿主显式接线的演示。默认输出 `logcat://sample`，可显式启用 Strict V3。 |
+| `apm-sample-app` | 15 个监控模块、`apm-trace`/`apm-otel-exporter` 和宿主显式接线的演示。默认输出 `logcat://sample`，可显式启用 Strict V3。 |
 | [`apm-benchmark`](docs/architecture/22_apm-benchmark.md) | 非发布双层门禁：AndroidX codec/SQLite/Dispatcher 固定预算，以及启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 的设备 campaign |
 
 ## 快速接入
@@ -140,7 +140,7 @@ SDK 默认使用 `COMPATIBILITY`。生产接入可显式启用 `PRODUCTION_STRIC
 
 ```kotlin
 dependencies {
-    implementation("com.apm:apm-bundle:0.1.0")
+    implementation("com.apm:apm-bundle:0.2.0")
 }
 ```
 
@@ -150,9 +150,9 @@ dependencies {
 
 ```kotlin
 dependencies {
-    implementation("com.apm:apm-memory:0.1.0")
-    implementation("com.apm:apm-network:0.1.0")
-    implementation("com.apm:apm-remote-config:0.1.0")
+    implementation("com.apm:apm-memory:0.2.0")
+    implementation("com.apm:apm-network:0.2.0")
+    implementation("com.apm:apm-remote-config:0.2.0")
 }
 ```
 
@@ -311,10 +311,9 @@ Apm.init(
         endpoint = "https://collector.example.com/v1/events",
         dynamicConfigProvider = remoteConfig,
         httpHeaders = mapOf(
-            "X-APM-Schema-Version" to "1",
             "X-APM-App-Id" to packageName,
             "X-APM-Environment" to "production",
-            "X-APM-SDK-Version" to "0.1.0"
+            "X-APM-App-Version" to BuildConfig.VERSION_NAME
         ),
         httpHeaderProvider = authHeaders,
         enableDynamicHttpEndpoint = true
@@ -364,7 +363,7 @@ val monitoredDb = ApmSQLiteDatabase(delegateDatabase, sqliteModule)
 
 对 `ApmSQLiteDatabase.rawQuery` 且达到阈值的查询，会在原始数据库上对完整 SQL 与绑定参数执行 `EXPLAIN QUERY PLAN` 并输出 `query_plan_issue`；手动 `onSqlExecuted` 没有数据库句柄，只做耗时/线程/影响行数判断。
 
-**IPC、WebView 与线程池**：Android 没有受支持的进程级 Binder/WebView 全局 Hook，SDK 保留旧配置字段但已弃用且默认关闭，生产接入使用公共 API：
+**IPC、WebView 与线程池**：Android 没有受支持的进程级 Binder/WebView 全局 Hook，生产接入统一使用显式公共 API：
 
 ```kotlin
 val ipc = IpcModule()
@@ -382,9 +381,9 @@ val threads = ThreadMonitorModule()
 threads.registerThreadPool("image-loader", imageExecutor)
 ```
 
-`WebviewModule.uninstall` 会恢复原 delegate。Render 在 Activity 可见期使用 API 24+ `FrameMetrics`；GPU overdraw 没有稳定公共计数 API，因此 `detectOverdraw` 仅为弃用兼容字段并默认 `false`。
+`WebviewModule.uninstall` 会恢复原 delegate。Render 在 Activity 可见期使用 API 24+ `FrameMetrics`；公共 Android API 不提供稳定 GPU overdraw 计数器，因此不宣称自动采集 overdraw。
 
-IO 的 Java 层同样使用显式 `wrapInputStream` / `wrapOutputStream`，旧 `enableAutoHook` 已弃用并默认 `false`。`throughputWindow` 每累计指定操作数输出一次 `io_throughput`；Java wrapper 用 ThreadLocal 标记抑制同线程同步 Native 回调，既不双计常规文件流，也不漏掉内存/自定义流。若自定义流把底层 syscall 转交另一线程，ThreadLocal 无法跨线程关联，此时应只启用 wrapper 或 Native 路径之一。GC 分配率与回收率来自后台线程上的相邻 ART 累计字节计数窗口；任一计数缺失或重置的窗口会跳过对应派生维度，并保留可计算的 GC/Heap 检测。
+IO 的 Java 层同样使用显式 `wrapInputStream` / `wrapOutputStream`，不劫持全局任意 Java 流。`throughputWindow` 每累计指定操作数输出一次 `io_throughput`；Java wrapper 用 ThreadLocal 标记抑制同线程同步 Native 回调，既不双计常规文件流，也不漏掉内存/自定义流。若自定义流把底层 syscall 转交另一线程，ThreadLocal 无法跨线程关联，此时应只启用 wrapper 或 Native 路径之一。GC 分配率与回收率来自后台线程上的相邻 ART 累计字节计数窗口；任一计数缺失或重置的窗口会跳过对应派生维度，并保留可计算的 GC/Heap 检测。
 
 ### 8. 慢方法 ASM 插桩
 
@@ -421,7 +420,7 @@ apmSlowMethod {
 | `uploadLeaseDurationMs` | `120000` | durable batch owner 租约，超时后可被其他 Worker 重领 |
 | Native Crash / Hprof dump | `false` | 高风险信号与大文件默认关闭 |
 
-完整 38 项（含 dispatcher 隔离比例、IPC 各级字节预算、鉴权与动态 endpoint 开关）见 [项目文档](docs/Android_APM_项目文档.md) 的「配置默认值」章节。
+完整配置项（含 dispatcher 隔离比例、IPC 各级字节预算、鉴权与动态 endpoint 开关）见 [项目文档](docs/Android_APM_项目文档.md) 的「配置默认值」章节。
 
 ## 定位对比
 

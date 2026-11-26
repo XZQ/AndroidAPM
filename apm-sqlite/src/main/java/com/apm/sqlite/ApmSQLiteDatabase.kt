@@ -42,6 +42,7 @@ class ApmSQLiteDatabase(
      * @return 查询游标
      */
     fun rawQuery(sql: String, selectionArgs: Array<String>? = null): Cursor {
+        val argsSnapshot = selectionArgs?.clone()
         val cursor = delegate.rawQuery(sql, selectionArgs)
         return FirstAccessReportingCursor(cursor) { durationMs ->
             reportDuration(
@@ -49,7 +50,7 @@ class ApmSQLiteDatabase(
                 durationMs = durationMs,
                 affectedRows = 0,
                 queryPlanSql = sql,
-                queryPlanArgs = selectionArgs
+                queryPlanArgs = argsSnapshot
             )
         }
     }
@@ -94,8 +95,14 @@ class ApmSQLiteDatabase(
      * @return 新行 id，失败返回 -1
      */
     fun insert(table: String, nullColumnHack: String?, values: ContentValues): Long {
-        return timed("INSERT INTO $table", affectedRows = SINGLE_ROW) {
-            delegate.insert(table, nullColumnHack, values)
+        val startMs = ApmClock.monotonicTimeMillis()
+        var rowId = -1L
+        try {
+            rowId = delegate.insert(table, nullColumnHack, values)
+            return rowId
+        } finally {
+            // SQLiteDatabase.insert 失败返回 -1L，仅实际写入成功时计为 1 行。
+            report("INSERT INTO $table", startMs, if (rowId >= 0L) SINGLE_ROW else 0)
         }
     }
 

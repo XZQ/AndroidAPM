@@ -14,7 +14,24 @@ data class EncodedApmBatch(
     val batchId: String,
     val eventCount: Int,
     val payload: ByteArray
-)
+) {
+    /** Compares batch metadata and payload bytes by value rather than array reference. */
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is EncodedApmBatch) return false
+        return batchId == other.batchId &&
+            eventCount == other.eventCount &&
+            payload.contentEquals(other.payload)
+    }
+
+    /** Computes a value-based hash consistent with [equals]. */
+    override fun hashCode(): Int {
+        var result = batchId.hashCode()
+        result = 31 * result + eventCount
+        result = 31 * result + payload.contentHashCode()
+        return result
+    }
+}
 
 /** Serializes the collector-facing versioned protobuf batch envelope. */
 object ApmBatchEnvelopeSerializer {
@@ -62,7 +79,8 @@ object ApmBatchEnvelopeSerializer {
         for (event in events) {
             encodedEvents += serializeEventForSchema(event, schemaVersion)
         }
-        return serializePreEncoded(events, encodedEvents, resource, sentAtMs, schemaVersion)
+        val encodedResource = serializeResource(resource)
+        return serializePreEncoded(events, encodedEvents, encodedResource, sentAtMs, schemaVersion)
     }
 
     /**
@@ -138,13 +156,18 @@ object ApmBatchEnvelopeSerializer {
             contributions[index] = eventContributionBytes(encoded.size)
         }
 
+        val encodedResource = serializeResource(resource)
         // 单事件探针：固定组件大小 = 探针 envelope 大小 - 首事件贡献
         val probe = serializePreEncoded(
-            events.subList(0, 1), encodedEvents.subList(0, 1), resource, sentAtMs, schemaVersion
+            events.subList(0, 1), encodedEvents.subList(0, 1), encodedResource, sentAtMs, schemaVersion
         )
         val fixedBaseBytes = probe.payload.size - contributions[0]
         if (probe.payload.size > maxBatchBytes) {
             return null
+        }
+        if (events.size == 1) {
+            // 单事件批次直接复用已完整编码与哈希的探针结果，避免重复序列化和二次 SHA-256。
+            return listOf(probe)
         }
 
         val encodedBatches = ArrayList<EncodedApmBatch>()
@@ -162,7 +185,7 @@ object ApmBatchEnvelopeSerializer {
             val committed = serializePreEncoded(
                 events.subList(batchStart, index),
                 encodedEvents.subList(batchStart, index),
-                resource,
+                encodedResource,
                 sentAtMs,
                 schemaVersion
             )
@@ -182,7 +205,7 @@ object ApmBatchEnvelopeSerializer {
             encodedBatches += serializePreEncoded(
                 events.subList(batchStart, events.size),
                 encodedEvents.subList(batchStart, events.size),
-                resource,
+                encodedResource,
                 sentAtMs,
                 schemaVersion
             )
@@ -200,7 +223,7 @@ object ApmBatchEnvelopeSerializer {
     private fun serializePreEncoded(
         events: List<ApmEvent>,
         encodedEvents: List<ByteArray>,
-        resource: ApmResourceContext,
+        encodedResource: ByteArray,
         sentAtMs: Long,
         schemaVersion: Int
     ): EncodedApmBatch {
@@ -208,7 +231,7 @@ object ApmBatchEnvelopeSerializer {
         require(events.size == encodedEvents.size) { "Encoded event count mismatch" }
         val batchId = stableBatchId(events, schemaVersion)
         // 容量按已编码字节数精确预估，仅加固定头部余量
-        var encodedTotal = 0
+        var encodedTotal = encodedResource.size
         for (encoded in encodedEvents) {
             encodedTotal += encoded.size
         }
@@ -219,7 +242,7 @@ object ApmBatchEnvelopeSerializer {
         writer.writeString(FIELD_SDK_VERSION, ApmWireProtocol.SDK_VERSION)
         writer.writeString(FIELD_BATCH_ID, batchId)
         writer.writeInt64(FIELD_SENT_AT_MS, sentAtMs)
-        writer.writeMessage(FIELD_RESOURCE, serializeResource(resource))
+        writer.writeMessage(FIELD_RESOURCE, encodedResource)
         for (encoded in encodedEvents) {
             // Repeated embedded messages preserve dispatcher/upload ordering.
             writer.writeMessage(FIELD_EVENTS, encoded)
@@ -275,10 +298,12 @@ object ApmBatchEnvelopeSerializer {
     private fun stableBatchId(events: List<ApmEvent>, schemaVersion: Int): String {
         val digest = MessageDigest.getInstance(SHA_256)
         digest.update(schemaVersion.toByte())
+        val lengthPrefix = ByteArray(INT_LENGTH_BYTES)
         for (event in events) {
             val identity = event.eventId.toByteArray(Charsets.UTF_8)
             // Length delimiting prevents ambiguous concatenations such as ["ab", "c"] and ["a", "bc"].
-            digest.update(intToBytes(identity.size))
+            writeBigEndianInt(lengthPrefix, identity.size)
+            digest.update(lengthPrefix)
             digest.update(identity)
         }
         // 手写小写 hex 避免 16 次 String.format（每次各建一个 Formatter）；
@@ -298,13 +323,16 @@ object ApmBatchEnvelopeSerializer {
         return prefix + hex
     }
 
-    /** Encodes a positive string length in fixed big-endian form for batch hashing. */
-    private fun intToBytes(value: Int): ByteArray = byteArrayOf(
-        (value ushr BITS_24).toByte(),
-        (value ushr BITS_16).toByte(),
-        (value ushr BITS_8).toByte(),
-        value.toByte()
-    )
+    /** Writes a positive string length in fixed big-endian form into a reusable 4-byte scratch buffer. */
+    private fun writeBigEndianInt(target: ByteArray, value: Int) {
+        target[0] = (value ushr BITS_24).toByte()
+        target[1] = (value ushr BITS_16).toByte()
+        target[2] = (value ushr BITS_8).toByte()
+        target[3] = value.toByte()
+    }
+
+    /** Byte width of one 32-bit length prefix in batch identity hashing. */
+    private const val INT_LENGTH_BYTES = 4
 
     /** Envelope field: schema version. */
     private const val FIELD_SCHEMA_VERSION = 1

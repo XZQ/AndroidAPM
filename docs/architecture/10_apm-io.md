@@ -30,7 +30,6 @@ Native target 设置 16 KiB page-size linker alignment；JNI 静态方法绑定�
 | 配置 | 默认 |
 |---|---:|
 | monitor | 开 |
-| generic Java auto hook | 关 / deprecated；使用显式 wrapper |
 | main-thread/single IO | 50ms / 500ms |
 | large buffer | 512 KiB |
 | small buffer | 4096 bytes |
@@ -49,8 +48,7 @@ Java wrapper 在底层 read/write/close 已完成后执行的全部监控 bookke
 
 ## 边界
 
-- Java wrapper 只覆盖实际包装的流。
-- `enableAutoHook` 是弃用兼容字段且默认关闭，不会替换任意 JDK/Android 流实例。
+- Java wrapper 只覆盖实际包装的流，不会替换任意 JDK/Android 流实例。
 - ThreadLocal 去重只关联同线程同步 syscall；若自定义流把底层 syscall 转交给另一线程，宿主应只启用 wrapper 或 Native 路径之一，避免跨线程双计。
 - Native path 需要 ABI 库和可解析的 xhook，不是独立完整 hook engine；失败时只保留宿主已显式安装的 wrapper，不会自动代理任意流。
 - FD 扫描与 PhantomReference 是启发式，可能受 GC 时机/OEM `/proc` 权限影响。

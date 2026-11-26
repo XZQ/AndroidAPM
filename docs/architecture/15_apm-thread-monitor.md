@@ -25,8 +25,6 @@
 | stack max | 4000 chars |
 | `enableThreadPoolMonitor` | true；只扫描显式注册池 |
 | `queueBacklogThreshold` | 100 |
-| `enableThreadLeakDetect` | false / deprecated |
-| `threadLeakThresholdMs` | 300s / deprecated compatibility |
 
 ## 线程与资源
 
@@ -37,7 +35,7 @@
 - BLOCKED 不等于已经证明的死锁；代码没有构建 wait-for graph/cycle。
 - 同名线程只是泄漏候选，不证明资源泄漏。
 - 不 Hook 任意 Executor；宿主显式注册，unregister/onStop 释放强引用。
-- 线程存活时长不能证明 leak，因此通用 leak 字段弃用并默认关闭。
+- 单凭线程存活时长不能证明 leak，因此不提供基于存活时间的通用线程泄漏开关。
 
 ## 测试
 

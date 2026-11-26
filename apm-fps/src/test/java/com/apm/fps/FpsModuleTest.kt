@@ -12,7 +12,6 @@ import org.junit.Test
  * Module 集成测试应在 Android Instrumentation 环境中执行。
  * 此文件验证 Config 层默认值和自定义值覆盖。
  */
-@Suppress("DEPRECATION")
 class FpsModuleTest {
 
     /** 默认配置开启 FPS 监控。 */
@@ -36,13 +35,6 @@ class FpsModuleTest {
         assertEquals(300L, config.frozenThresholdMs)
     }
 
-    /** 默认统计窗口 60 帧。 */
-    @Test
-    fun `default window size is 60 frames`() {
-        val config = FpsConfig()
-        assertEquals(60, config.windowSize)
-    }
-
     /** 默认上报窗口为一秒，不随屏幕刷新率变化。 */
     @Test
     fun `default report interval is one second`() {
@@ -62,13 +54,6 @@ class FpsModuleTest {
     fun `default scene detect is enabled`() {
         val config = FpsConfig()
         assertTrue(config.enableSceneDetect)
-    }
-
-    /** 默认堆栈最大长度 4000。 */
-    @Test
-    fun `default max stack trace length is 4000`() {
-        val config = FpsConfig()
-        assertEquals(4_000, config.maxStackTraceLength)
     }
 
     /** 默认开启 FrameMetrics。 */
@@ -106,7 +91,6 @@ class FpsModuleTest {
             enableFpsMonitor = false,
             jankThresholdMs = 32L,
             frozenThresholdMs = 500L,
-            windowSize = 120,
             reportIntervalMs = 5_000L,
             fpsWarnThreshold = 45,
             enableSceneDetect = false,
@@ -119,7 +103,6 @@ class FpsModuleTest {
         assertFalse(config.enableFpsMonitor)
         assertEquals(32L, config.jankThresholdMs)
         assertEquals(500L, config.frozenThresholdMs)
-        assertEquals(120, config.windowSize)
         assertEquals(5_000L, config.reportIntervalMs)
         assertEquals(45, config.fpsWarnThreshold)
         assertFalse(config.enableSceneDetect)

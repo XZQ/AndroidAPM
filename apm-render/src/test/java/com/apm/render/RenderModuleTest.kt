@@ -19,13 +19,6 @@ class RenderModuleTest {
         assertTrue(config.enableRenderMonitor)
     }
 
-    /** 默认 View 绘制阈值 16ms。 */
-    @Test
-    fun `default viewDrawThresholdMs is 16ms`() {
-        val config = RenderConfig()
-        assertEquals(EXPECTED_DRAW_THRESHOLD_MS, config.viewDrawThresholdMs)
-    }
-
     /** 默认 View 层级深度阈值 10。 */
     @Test
     fun `default viewDepthThreshold is 10`() {
@@ -40,24 +33,10 @@ class RenderModuleTest {
         assertEquals(EXPECTED_COUNT_THRESHOLD, config.viewCountThreshold)
     }
 
-    /** 公共 API 无法读取 GPU overdraw，因此兼容字段默认关闭。 */
-    @Test
-    fun `default detectOverdraw is false`() {
-        val config = RenderConfig()
-        assertFalse(config.detectOverdraw)
-    }
-
     /** 默认慢帧阈值为 32ms。 */
     @Test
     fun `default slow frame threshold is 32ms`() {
         assertEquals(32L, RenderConfig().slowFrameThresholdMs)
-    }
-
-    /** 默认堆栈最大长度 4000。 */
-    @Test
-    fun `default maxStackTraceLength is 4000`() {
-        val config = RenderConfig()
-        assertEquals(EXPECTED_STACK_LENGTH, config.maxStackTraceLength)
     }
 
     /** 自定义配置覆盖正确。 */
@@ -65,20 +44,14 @@ class RenderModuleTest {
     fun `custom config overrides all defaults`() {
         val config = RenderConfig(
             enableRenderMonitor = false,
-            viewDrawThresholdMs = CUSTOM_DRAW_THRESHOLD_MS,
             viewDepthThreshold = CUSTOM_DEPTH_THRESHOLD,
             viewCountThreshold = CUSTOM_COUNT_THRESHOLD,
-            detectOverdraw = false,
-            maxStackTraceLength = CUSTOM_STACK_LENGTH,
             slowFrameThresholdMs = 48L
         )
         // 验证所有自定义值已正确覆盖
         assertFalse(config.enableRenderMonitor)
-        assertEquals(CUSTOM_DRAW_THRESHOLD_MS, config.viewDrawThresholdMs)
         assertEquals(CUSTOM_DEPTH_THRESHOLD, config.viewDepthThreshold)
         assertEquals(CUSTOM_COUNT_THRESHOLD, config.viewCountThreshold)
-        assertFalse(config.detectOverdraw)
-        assertEquals(CUSTOM_STACK_LENGTH, config.maxStackTraceLength)
         assertEquals(48L, config.slowFrameThresholdMs)
     }
 
@@ -133,22 +106,14 @@ class RenderModuleTest {
     }
 
     companion object {
-        /** 期望的默认绘制阈值：16ms。 */
-        private const val EXPECTED_DRAW_THRESHOLD_MS = 16L
         /** 期望的默认深度阈值：10。 */
         private const val EXPECTED_DEPTH_THRESHOLD = 10
         /** 期望的默认数量阈值：300。 */
         private const val EXPECTED_COUNT_THRESHOLD = 300
-        /** 期望的默认堆栈长度：4000。 */
-        private const val EXPECTED_STACK_LENGTH = 4000
-        /** 自定义绘制阈值：32ms。 */
-        private const val CUSTOM_DRAW_THRESHOLD_MS = 32L
         /** 自定义深度阈值：20。 */
         private const val CUSTOM_DEPTH_THRESHOLD = 20
         /** 自定义数量阈值：500。 */
         private const val CUSTOM_COUNT_THRESHOLD = 500
-        /** 自定义堆栈长度：8000。 */
-        private const val CUSTOM_STACK_LENGTH = 8000
         /** 默认 View 数量：0。 */
         private const val DEFAULT_VIEW_COUNT = 0
         /** 默认深度：0。 */

@@ -377,10 +377,11 @@ class FpsMonitor(private val config: FpsConfig = FpsConfig()) {
     private fun unregisterFrameMetrics(window: Window) {
         try {
             frameMetricsListener?.let { window.removeOnFrameMetricsAvailableListener(it) }
-            frameMetricsListener = null
         } catch (e: Exception) {
             // 注销失败不影响后续监控，但记入自监控
             Apm.recordInternalError(ERROR_TAG_FRAME_METRICS_UNREGISTER, e)
+        } finally {
+            frameMetricsListener = null
         }
     }
 

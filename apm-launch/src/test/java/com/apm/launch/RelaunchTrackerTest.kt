@@ -44,6 +44,23 @@ class RelaunchTrackerTest {
         assertEquals(8_000L, measurement?.backgroundDurationMs)
     }
 
+    /** 后台停留时长超过恢复超时窗口时仍应正常记录温启动（超时窗口仅约束恢复过程耗时）。 */
+    @Test
+    fun `warm relaunch after long background stay is still reported`() {
+        val tracker = RelaunchTracker(
+            warmStartThresholdMs = 5_000L,
+            launchTimeoutMs = 30_000L
+        )
+
+        tracker.onAllActivitiesStopped(nowMs = 1_000L)
+        tracker.onActivityStarted(nowMs = 61_000L)
+        val measurement = tracker.onActivityResumed(nowMs = 61_280L)
+
+        assertEquals(RelaunchTracker.LAUNCH_TYPE_WARM, measurement?.launchType)
+        assertEquals(280L, measurement?.launchDurationMs)
+        assertEquals(60_000L, measurement?.backgroundDurationMs)
+    }
+
     /** 超过超时窗口的恢复不应上报。 */
     @Test
     fun `relaunch over timeout is ignored`() {

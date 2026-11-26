@@ -1,12 +1,12 @@
 # AndroidAPM 公共 API 兼容策略
 
-> 同步日期：2026-11-22｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-26｜当前 SDK 版本：0.2.0
 
 ## 目标与范围
 
 所有发布型 Kotlin 制品都提交了公开 JVM ABI 基线，包括 22 个运行时实现模块、空实现的 `apm-bundle` 分发制品和 included build `apm-plugin`。`apm-sample-app` 与非发布的 `apm-benchmark` 不属于兼容承诺。`build-logic` 是仓库构建约定，也不作为 SDK 制品发布。
 
-项目使用 Kotlin 官方维护的 [binary-compatibility-validator](https://github.com/Kotlin/binary-compatibility-validator) 0.18.2。它会从 Android Library 的 Release 编译产物和 JVM JAR 生成 `模块/api/模块.api`，并在 `apiCheck` 中比较当前 ABI 与已提交基线。项目当前 Kotlin 2.2.21 自带的实验性 ABI 工具只在纯 JVM 模块生成了有效基线，Android Library 输出为空，因此当前不能替代该门禁；升级 Kotlin 后应重新验证 Android 输入，再依据 [Kotlin 内置 ABI 校验文档](https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html)评估迁移。
+项目使用 Kotlin 官方维护的 [binary-compatibility-validator](https://github.com/Kotlin/binary-compatibility-validator) 0.18.2。它会从 Android Library 的 Release 编译产物（AGP 9 内置 Kotlin 不再应用旧 `kotlin-android` 插件 ID，由根 `build.gradle.kts` 显式将 `bundleLibRuntimeToJarRelease` 的 `classes.jar` 接入 `apiBuild` / `apiCheck` / `apiDump`）和纯 JVM JAR 生成 `模块/api/模块.api`，并在 `apiCheck` 中比较当前 ABI 与已提交基线。项目当前 Kotlin 2.2.21 自带的实验性 ABI 工具只在纯 JVM 模块生成了有效基线，Android Library 输出为空，因此当前不能替代该门禁；升级 Kotlin 后应重新验证 Android 输入，再依据 [Kotlin 内置 ABI 校验文档](https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html)评估迁移。
 
 基线完整性脚本还会 fail closed 地确认：
 
@@ -85,25 +85,23 @@ BigDecimal 在 toPlainString 前用 precision/scale/signum 的 Long 算术计算
 
 2026-09-12 历史退出身份：新增 `CrashModule(CrashConfig, Boolean)` overload 供宿主关闭平台摘要写入，`CrashConfig` 的既有 constructor/copy/component 保持不变。core 仅新增两个跨制品 synthetic 方法 `ApmContext.captureExitOccurrence/emitHistorical` 和末尾追加的 `HISTORICAL_OCCURRENCE_UNAVAILABLE` drop reason，手工更新对应 ABI 基线。严格 V3 不再将未知历史 app_exit 标为当前 release，改为明确拒绝并计数；这是历史归属语义修复，不能以补造身份维持旧错误事件数。wire/codec/SQLite schema 不变。
 
-## 2026-11-14 弃用移除时间表
+## 2026-11-26（0.2.0）弃用 API 清理记录
 
-本节盘点公开面全部 17 个 `@Deprecated` 声明并给出处置时间表，是弃用清理的唯一事实源；各模块注释中的弃用 message 保持一致但不再单独维护清单。
+按 `0.x.0` minor 版本规则与 2026-11-14 弃用时间表，`0.2.0` 已集中移除此前全部 17 项运行时零消费或未接线的 `@Deprecated` 公开声明，并通过 `apiDump` 同步刷新受影响的模块 ABI 基线；当前全仓公开面不再遗留 `@Deprecated` 兼容空壳。
 
-**0.2.0 移除（2026-11-14 新标记）**：`apm-memory` 的 `ReferenceChainAnalyzer`、`ReferenceChainResult`、`RefNode`、`GcRootType`。该分析器是运行时零接线的简化 Hprof 引用链实现（全仓库 main 无任何调用方，自身注释已声明生产应使用 Shark/LeakCanary）；按「计划移除先标记 deprecated 并至少保留一个 minor 版本周期」规则，随 0.2.0 删除并同步更新基线。生产引用链分析应使用 LeakCanary/Shark 或专用 Hprof 解析库。
+**已移除的未接线类/类型（4 项）**：`apm-memory` 的 `ReferenceChainAnalyzer`、`ReferenceChainResult`、`RefNode`、`GcRootType`。生产 Hprof 引用链分析请使用 LeakCanary/Shark 或专用离线 Hprof 解析库。
 
-**0.2.0 评估移除（既有 13 项弃用字段，模块运行时已不消费）**：
+**已移除的配置属性与常量（13 项）及迁移对照**：
 
-| 模块 | 弃用声明 | 迁移目标 |
+| 模块 | 已移除声明 | 迁移目标 |
 |---|---|---|
-| apm-battery / apm-fps / apm-gc-monitor / apm-render | `maxStackTraceLength`（4 项） | 各模块不采集堆栈，字段无作用 |
+| apm-battery / apm-fps / apm-gc-monitor / apm-render | `maxStackTraceLength`（4 项） | 各模块不采集堆栈，直接移除该命名参数 |
 | apm-fps | `windowSize` | `reportIntervalMs` |
 | apm-render | `viewDrawThresholdMs` | `slowFrameThresholdMs` |
-| apm-render | `detectOverdraw` | 无公共 API 可替代，保持 false |
-| apm-io | `enableAutoHook` | `wrapInputStream` / `wrapOutputStream` |
-| apm-ipc | `enableBinderHook` | `traceBinderCall` / `onBinderCallComplete` |
-| apm-webview | `enableAutoRegister` | `install` / `uninstall` |
-| apm-thread-monitor | `enableThreadLeakDetect` | `registerThreadPool` |
-| apm-thread-monitor | `threadLeakThresholdMs` | 通用线程泄漏检测不受支持 |
-| apm-model | `ENVELOPE_SCHEMA_VERSION` | 显式选择 `ENVELOPE_SCHEMA_VERSION_V2` / `V3` |
-
-0.2.0 逐项评估：仍被消费方使用的可再保留一个周期，无使用证据的删除；删除属 minor breaking，须附迁移说明、变更理由并人工审查后同步基线。0.1.x 期间全部保持源兼容、运行时忽略与现有默认值不变。本轮新增的 internal `NativeCrashMonitor.checkRecentTombstone(ApmLogger?)` overload 不进入基线（internal 可见性），公开无参签名保持不变。
+| apm-render | `detectOverdraw` | 无公共 GPU overdraw API，直接移除该命名参数 |
+| apm-io | `enableAutoHook` | `IoModule.wrapInputStream` / `wrapOutputStream` |
+| apm-ipc | `enableBinderHook` | `IpcModule.traceBinderCall` / `onBinderCallComplete` |
+| apm-webview | `enableAutoRegister` | `WebviewModule.install` / `uninstall` |
+| apm-thread-monitor | `enableThreadLeakDetect` | `ThreadMonitorModule.registerThreadPool` |
+| apm-thread-monitor | `threadLeakThresholdMs` | 通用线程泄漏检测不受支持，直接移除该命名参数 |
+| apm-model | `ApmWireProtocol.ENVELOPE_SCHEMA_VERSION` | 显式选择 `ENVELOPE_SCHEMA_VERSION_V2` / `ENVELOPE_SCHEMA_VERSION_V3` |

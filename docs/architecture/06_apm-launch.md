@@ -1,6 +1,6 @@
 # apm-launch 模块
 
-> 同步日期：2026-10-13｜模块名：`launch`
+> 同步日期：2026-11-26｜模块名：`launch`
 
 ## 目的与入口
 
@@ -21,7 +21,7 @@
 - background duration < 5s：hot start
 - background duration ≥ 5s：warm start
 
-上报耗时是前台恢复链路耗时，同时带 `backgroundDurationMs`；不会把后台停留时长当作启动耗时。
+上报耗时是前台恢复链路耗时（`start -> resume`），同时带 `backgroundDurationMs`；`launchTimeoutMs` 仅约束前台恢复链路耗时，不会把长后台停留误判为超时丢弃，也不会把后台停留时长当作启动耗时。
 
 事件：`hot_start`, `warm_start`。
 

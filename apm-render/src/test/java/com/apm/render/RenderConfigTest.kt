@@ -15,13 +15,6 @@ class RenderConfigTest {
         assertTrue(config.enableRenderMonitor)
     }
 
-    /** 默认 View 绘制阈值 16ms。 */
-    @Test
-    fun `default viewDrawThresholdMs is 16`() {
-        val config = RenderConfig()
-        assertEquals(16L, config.viewDrawThresholdMs)
-    }
-
     /** 默认 View 层级深度阈值 10。 */
     @Test
     fun `default viewDepthThreshold is 10`() {

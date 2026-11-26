@@ -73,6 +73,41 @@ class HttpRemoteConfigTransportTest {
         }
     }
 
+    /** Blank HTTPS hosts and DEL (0x7F) header characters fail fast before network IO. */
+    @Test
+    fun `client config and transport reject blank host and del control character`() {
+        assertThrows(IllegalArgumentException::class.java) {
+            RemoteConfigClientConfig(
+                endpoint = "https:///v1/config",
+                appId = TEST_APP_ID,
+                environment = TEST_ENVIRONMENT,
+                installationId = TEST_INSTALLATION_ID
+            )
+        }
+        assertThrows(IllegalArgumentException::class.java) {
+            RemoteConfigClientConfig(
+                endpoint = "https://collector.example/v1/config",
+                appId = "bad\u007fapp",
+                environment = TEST_ENVIRONMENT,
+                installationId = TEST_INSTALLATION_ID
+            )
+        }
+        val badHeaderTransport = HttpRemoteConfigTransport(
+            config = RemoteConfigClientConfig(
+                endpoint = "http://127.0.0.1:9/v1/config",
+                appId = TEST_APP_ID,
+                environment = TEST_ENVIRONMENT,
+                installationId = TEST_INSTALLATION_ID
+            ),
+            headerProvider = HttpHeaderProvider { mapOf("Authorization" to "Bearer bad\u007ftoken") },
+            clock = object : RemoteConfigClock {
+                override fun wallTimeMs(): Long = TEST_WALL_TIME_MS
+                override fun elapsedRealtimeMs(): Long = 0L
+            }
+        )
+        assertThrows(IllegalArgumentException::class.java) { badHeaderTransport.fetch(null) }
+    }
+
     /** Creates a loopback transport with deterministic identity and dynamic auth. */
     private fun transport(port: Int, maxResponseBytes: Int): HttpRemoteConfigTransport {
         val config = RemoteConfigClientConfig(

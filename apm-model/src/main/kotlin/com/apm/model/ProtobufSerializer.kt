@@ -188,11 +188,13 @@ object ProtobufSerializer {
         }
         for (frame in occurrence.nativeFrames) {
             require(
-                frame.abi.isNotBlank() && frame.moduleBuildId.isNotBlank() &&
-                    frame.moduleName.isNotBlank() && frame.abi.length <= MAX_IDENTITY_CHARS &&
+                frame.abi.isNotBlank() && frame.abi == frame.abi.trim() &&
+                    frame.moduleBuildId.isNotBlank() && frame.moduleBuildId == frame.moduleBuildId.trim() &&
+                    frame.moduleName.isNotBlank() && frame.moduleName == frame.moduleName.trim() &&
+                    frame.abi.length <= MAX_IDENTITY_CHARS &&
                     frame.moduleBuildId.length <= MAX_IDENTITY_CHARS &&
                     frame.moduleName.length <= MAX_IDENTITY_CHARS
-            ) { "Schema V3 native frame identity is incomplete or oversized" }
+            ) { "Schema V3 native frame identity is incomplete, untrimmed, or oversized" }
             require(frame.moduleRelativePc >= 0L && (frame.loadBias == null || frame.loadBias >= 0L)) {
                 "Schema V3 native addresses must be non-negative and module-relative"
             }
@@ -214,9 +216,9 @@ object ProtobufSerializer {
         for (event in events) {
             val eventBytes = serialize(event)
             // 写入 4 字节 big-endian 长度前缀
-            buffer.write((eventBytes.size shr 24) and BYTE_MASK)
-            buffer.write((eventBytes.size shr 16) and BYTE_MASK)
-            buffer.write((eventBytes.size shr 8) and BYTE_MASK)
+            buffer.write((eventBytes.size ushr BITS_24) and BYTE_MASK)
+            buffer.write((eventBytes.size ushr BITS_16) and BYTE_MASK)
+            buffer.write((eventBytes.size ushr BITS_8) and BYTE_MASK)
             buffer.write(eventBytes.size and BYTE_MASK)
             // 写入事件数据
             buffer.write(eventBytes)
@@ -305,14 +307,12 @@ object ProtobufSerializer {
     /** Native-frame field: optional load bias. */
     private const val NATIVE_FRAME_LOAD_BIAS = 5
 
-    /** Protobuf map-entry key field. */
-    private const val MAP_ENTRY_KEY = 1
-    /** Protobuf map-entry value field. */
-    private const val MAP_ENTRY_VALUE = 2
-    /** Typed-value discriminator field. */
-    private const val TYPED_VALUE_TYPE = 1
-    /** Typed-value canonical text field. */
-    private const val TYPED_VALUE_TEXT = 2
+    /** Big-endian shift for byte 3 of the batch length prefix. */
+    private const val BITS_24 = 24
+    /** Big-endian shift for byte 2 of the batch length prefix. */
+    private const val BITS_16 = 16
+    /** Big-endian shift for byte 1 of the batch length prefix. */
+    private const val BITS_8 = 8
 
     /** 字节掩码。 */
     private const val BYTE_MASK = 0xFF

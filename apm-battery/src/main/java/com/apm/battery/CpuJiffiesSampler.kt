@@ -32,8 +32,8 @@ class CpuJiffiesSampler(
     private var lastProcessJiffies: Long = 0L
     /** 上次采样时间（毫秒）。 */
     private var lastSampleTime: Long = 0L
-    /** 持续高 CPU 的起始时间。 */
-    private var highCpuSince: Long = 0L
+    /** 持续高 CPU 的起始时间；[NO_HIGH_CPU_SINCE] 表示当前未处于高 CPU 区间。 */
+    private var highCpuSince: Long = NO_HIGH_CPU_SINCE
     /** 是否正在采样。 */
     @Volatile
     private var sampling = false
@@ -47,7 +47,7 @@ class CpuJiffiesSampler(
         sampling = true
         lastProcessJiffies = readProcessJiffies()
         lastSampleTime = clock()
-        highCpuSince = 0L
+        highCpuSince = NO_HIGH_CPU_SINCE
     }
 
     /**
@@ -87,25 +87,26 @@ class CpuJiffiesSampler(
         lastSampleTime = currentTime
         // 检测高 CPU
         if (cpuPercent >= config.cpuThresholdPercent) {
-            if (highCpuSince == 0L) {
-                highCpuSince = currentTime
+            if (highCpuSince == NO_HIGH_CPU_SINCE) {
+                // 本次采样窗口整体高于阈值，持续起点回溯到窗口起始时刻
+                highCpuSince = currentTime - intervalMs
             }
             // 持续高 CPU 超过阈值
-            val sustainedSec = (currentTime - highCpuSince) / 1000L
+            val sustainedSec = (currentTime - highCpuSince) / MILLIS_PER_SECOND_LONG
             if (sustainedSec >= config.cpuSustainedSeconds) {
                 onCpuHigh?.invoke(cpuPercent, sustainedSec)
-                // 重置，避免重复上报
+                // 重置起点到当前时刻，下一轮需再次满足完整持续时长才重复上报
                 highCpuSince = currentTime
             }
         } else {
             // CPU 恢复正常，重置计时
-            highCpuSince = 0L
+            highCpuSince = NO_HIGH_CPU_SINCE
         }
     }
 
     /**
      * 读取进程 jiffies。
-     * 从 /proc/self/stat 第 14-15 列获取 utime + stime。
+     * 从 /proc/self/stat 获取 utime + stime。
      */
     private fun readProcessJiffies(): Long {
         // 测试注入的读取器优先
@@ -118,14 +119,7 @@ class CpuJiffiesSampler(
             val reader = BufferedReader(FileReader(file), BUFFER_SIZE)
             reader.use {
                 val line = it.readLine() ?: return 0L
-                val parts = line.split(" ")
-                if (parts.size < FIELD_STIME_INDEX + 1) {
-                    return 0L
-                }
-                // utime = index 13, stime = index 14
-                val utime = parts[FIELD_UTIME_INDEX].toLongOrNull() ?: 0L
-                val stime = parts[FIELD_STIME_INDEX].toLongOrNull() ?: 0L
-                return utime + stime
+                return parseProcStatJiffies(line)
             }
         } catch (e: Exception) {
             // /proc/self/stat 读取失败降级为 0，记入自监控便于发现持续性失效
@@ -138,18 +132,43 @@ class CpuJiffiesSampler(
         /** 自监控 tag：/proc/self/stat 读取失败。 */
         private const val ERROR_TAG_PROC_STAT_READ = "battery_proc_stat_read"
 
+        /** 未处于高 CPU 持续区间时的哨兵值（避免与单调时钟 0ms 混淆）。 */
+        private const val NO_HIGH_CPU_SINCE = -1L
+
         /** /proc/self/stat 路径。 */
         private const val PROC_SELF_STAT = "/proc/self/stat"
-        /** utime 在 stat 中的索引（0-based）。 */
-        private const val FIELD_UTIME_INDEX = 13
-        /** stime 在 stat 中的索引（0-based）。 */
-        private const val FIELD_STIME_INDEX = 14
+        /** comm 右括号之后字段列表中 utime 的索引（对应 stat 第 14 列，0-based 为 11）。 */
+        private const val POST_COMM_UTIME_INDEX = 11
+        /** comm 右括号之后字段列表中 stime 的索引（对应 stat 第 15 列，0-based 为 12）。 */
+        private const val POST_COMM_STIME_INDEX = 12
         /** 读取 buffer 大小。 */
         private const val BUFFER_SIZE = 1024
-        /** 每秒毫秒数。 */
+        /** 每秒毫秒数（浮点换算）。 */
         private const val MILLIS_PER_SECOND = 1000f
+        /** 每秒毫秒数（整数持续秒换算）。 */
+        private const val MILLIS_PER_SECOND_LONG = 1000L
         /** 时钟频率读取失败时的回退值（Linux 常见默认 100 Hz）。 */
         private const val DEFAULT_CLOCK_TICK_HZ = 100L
+
+        /**
+         * 从 `/proc/[pid]/stat` 单行文本解析 `utime + stime`。
+         *
+         * 第二列 `(comm)` 允许包含空格和括号（如 `(AsyncTask #1)`），因此必须定位最后一个 `)`
+         * 之后再按空格切分，避免进程名含空格导致后续列整体偏移。
+         */
+        internal fun parseProcStatJiffies(statLine: String): Long {
+            val commEnd = statLine.lastIndexOf(')')
+            if (commEnd < 0 || commEnd + 2 >= statLine.length) {
+                return 0L
+            }
+            val fieldsAfterComm = statLine.substring(commEnd + 2).trim().split(' ')
+            if (fieldsAfterComm.size <= POST_COMM_STIME_INDEX) {
+                return 0L
+            }
+            val utime = fieldsAfterComm[POST_COMM_UTIME_INDEX].toLongOrNull() ?: 0L
+            val stime = fieldsAfterComm[POST_COMM_STIME_INDEX].toLongOrNull() ?: 0L
+            return utime + stime
+        }
 
         /**
          * 读取内核时钟频率（jiffies/秒）。

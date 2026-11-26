@@ -9,8 +9,16 @@ internal object DiagnosticSanitizer {
 
     /** Sanitizes and bounds one diagnostic message. */
     fun sanitizeMessage(value: String): String {
+        // Pre-bound untrusted exception/component text before regex passes to avoid scanning
+        // multi-megabyte strings or worst-case regex allocations on caller threads.
+        val preTruncated = value.length > MAX_SANITIZE_SCAN_CHARS
+        val boundedInput = if (preTruncated) {
+            value.substring(0, MAX_SANITIZE_SCAN_CHARS)
+        } else {
+            value
+        }
         // Authorization headers are handled before generic key/value credentials so bearer payloads cannot leak.
-        val withoutHeaders = SENSITIVE_HEADER_PATTERN.replace(value) { match ->
+        val withoutHeaders = SENSITIVE_HEADER_PATTERN.replace(boundedInput) { match ->
             "${match.groupValues[1]}$REDACTED_VALUE"
         }
         val withoutBearer = BEARER_PATTERN.replace(withoutHeaders, "Bearer $REDACTED_VALUE")
@@ -20,7 +28,12 @@ internal object DiagnosticSanitizer {
         val redacted = CREDENTIAL_PATTERN.replace(withoutEncoded) { match ->
             "${match.groupValues[1]}${match.groupValues[2]}${match.groupValues[3]}$REDACTED_VALUE${match.groupValues[5]}"
         }
-        return truncate(redacted, MAX_MESSAGE_CHARS)
+        val truncated = truncate(redacted, MAX_MESSAGE_CHARS)
+        return if (preTruncated && !truncated.endsWith(TRUNCATED_SUFFIX)) {
+            truncate(truncated + TRUNCATED_SUFFIX, MAX_MESSAGE_CHARS)
+        } else {
+            truncated
+        }
     }
 
     /**
@@ -95,6 +108,8 @@ internal object DiagnosticSanitizer {
     private val BEARER_PATTERN = Regex("(?i)Bearer\\s+[A-Za-z0-9._~+/=-]+")
     /** Maximum stored message characters. */
     private const val MAX_MESSAGE_CHARS = 4_096
+    /** Maximum input characters scanned by message redaction regexes before pre-truncation. */
+    private const val MAX_SANITIZE_SCAN_CHARS = 16_384
     /** Maximum stored exception stack characters. */
     private const val MAX_EXCEPTION_CHARS = 16_384
     /** Maximum stored exception stack frames. */

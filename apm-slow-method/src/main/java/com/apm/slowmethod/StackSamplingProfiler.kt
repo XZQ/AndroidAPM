@@ -37,9 +37,8 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
     private val samplingHandler = Handler(samplingThread.looper)
     /** 方法热点计数器：方法签名 → 出现次数。 */
     private val hotMethods = ConcurrentHashMap<String, AtomicInteger>()
-    /** 总采样次数。 */
-    @Volatile
-    private var sampleCount = 0
+    /** 总采样次数（跨主线程与采样线程原子访问）。 */
+    private val sampleCount = AtomicInteger(0)
     /** 是否正在采样。 */
     @Volatile
     private var sampling = false
@@ -50,6 +49,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
      * 启动栈采样。
      * 在独立线程上定期抓取主线程堆栈，持续 samplingWindowMs 毫秒。
      */
+    @Synchronized
     fun startSampling() {
         if (sampling) {
             return
@@ -58,7 +58,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
             return
         }
         sampling = true
-        sampleCount = 0
+        sampleCount.set(0)
         hotMethods.clear()
 
         // 定期采样任务
@@ -69,16 +69,18 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
                 }
                 // 抓取主线程堆栈
                 captureMainThreadStack()
-                sampleCount++
+                sampleCount.incrementAndGet()
                 // 继续下一次采样
                 samplingHandler.postDelayed(this, config.samplingIntervalMs)
             }
         }
         samplingHandler.post(samplingRunnable)
 
-        // 设置窗口结束回调
+        // 设置窗口结束回调（仅在仍处于本次活跃采样时自动停止并汇报）
         samplingHandler.postDelayed({
-            stopSampling()
+            if (sampling) {
+                stopSampling()
+            }
         }, config.samplingWindowMs)
     }
 
@@ -86,6 +88,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
      * 停止栈采样并输出结果。
      * 按出现次数排序，取 Top N 热点方法。
      */
+    @Synchronized
     fun stopSampling() {
         sampling = false
         samplingHandler.removeCallbacksAndMessages(null)
@@ -97,7 +100,7 @@ class StackSamplingProfiler(private val config: SlowMethodConfig) {
             .map { MethodSample(it.key, it.value.get()) }
 
         // 回调结果
-        onSamplingComplete?.invoke(topMethods, sampleCount)
+        onSamplingComplete?.invoke(topMethods, sampleCount.get())
     }
 
     /**

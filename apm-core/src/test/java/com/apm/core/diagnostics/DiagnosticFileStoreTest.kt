@@ -88,7 +88,7 @@ class DiagnosticFileStoreTest {
             assertNotNull(zip.getEntry("manifest.json"))
             assertNotNull(zip.getEntry("diagnostics.jsonl"))
             val manifest = zip.getInputStream(zip.getEntry("manifest.json")).bufferedReader().use { it.readText() }
-            assertTrue(manifest.contains("\"sdkVersion\":\"0.1.0\""))
+            assertTrue(manifest.contains("\"sdkVersion\":\"0.2.0\""))
             assertTrue(manifest.contains("\"processNames\":[\"com.example\"]"))
             assertTrue(manifest.contains("\"sessionIds\":[\"session\"]"))
             assertTrue(manifest.contains("\"truncated\":false"))

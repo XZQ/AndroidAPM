@@ -53,25 +53,11 @@ class ThreadMonitorModuleTest {
         assertTrue(config.enableThreadPoolMonitor)
     }
 
-    /** 不存在可靠通用线程泄漏判断，因此兼容字段默认关闭。 */
-    @Test
-    fun `default enable thread leak detect is false`() {
-        val config = ThreadMonitorConfig()
-        assertFalse(config.enableThreadLeakDetect)
-    }
-
     /** 默认队列积压阈值 100。 */
     @Test
     fun `default queue backlog threshold is 100`() {
         val config = ThreadMonitorConfig()
         assertEquals(100, config.queueBacklogThreshold)
-    }
-
-    /** 默认线程泄漏阈值 5 分钟。 */
-    @Test
-    fun `default thread leak threshold is 5 minutes`() {
-        val config = ThreadMonitorConfig()
-        assertEquals(300_000L, config.threadLeakThresholdMs)
     }
 
     /** 自定义配置覆盖正确。 */

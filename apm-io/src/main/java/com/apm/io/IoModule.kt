@@ -22,10 +22,10 @@ import java.io.OutputStream
  *
  * 使用方式（外部调用）：
  * ```kotlin
- * Apm.init(this, ApmConfig()) {
- *     register(IoModule())
- * }
- * // 在业务代码中记录 IO 操作
+ * val ioModule = IoModule()
+ * Apm.init(application, ApmConfig())
+ * Apm.register(ioModule)
+ * // 在业务代码中包装流或记录 IO 操作
  * ioModule.onIoOperation(path, opType, durationMs, bytes)
  * ```
  */
@@ -47,16 +47,20 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
         apmContext = context
     }
 
+    @Synchronized
     override fun onStart() {
+        if (started) {
+            return
+        }
         started = config.enableIoMonitor
         if (started) {
-            @Suppress("DEPRECATION")
-            if (config.enableAutoHook) {
-                apmContext?.logger?.w(
-                    "enableAutoHook is deprecated and ignored; use explicit stream wrappers"
-                )
+            nativeIoHook?.destroy()
+            nativeIoHook = NativeIoHook(config).also { hook ->
+                hook.onNativeObservation = {
+                    apmContext?.recordHostIntegrationObservation(HostIntegrationPoint.IO)
+                }
+                hook.init()
             }
-            nativeIoHook = NativeIoHook(config).also { it.init() }
         }
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IO, started)
         apmContext?.setHostIntegrationActiveRegistrations(
@@ -66,9 +70,11 @@ class IoModule(private val config: IoConfig = IoConfig()) : ApmModule {
         apmContext?.logger?.d("IO module started, mainThreadThreshold=${config.mainThreadIoThresholdMs}ms")
     }
 
+    @Synchronized
     override fun onStop() {
         started = false
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IO, false)
+        nativeIoHook?.onNativeObservation = null
         nativeIoHook?.destroy()
         nativeIoHook = null
     }

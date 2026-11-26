@@ -51,8 +51,9 @@ class SlowMethodModule(private val config: SlowMethodConfig = SlowMethodConfig()
      * Hook 主线程 Looper 的 Printer。
      * 通过反射设置 mLogging 字段。
      */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableSlowMethod) {
+        if (monitoring || !config.enableSlowMethod) {
             return
         }
         monitoring = true
@@ -60,7 +61,8 @@ class SlowMethodModule(private val config: SlowMethodConfig = SlowMethodConfig()
         // itself uses the supported public API.
         originPrinter = runCatching {
             loggingField.get(Looper.getMainLooper()) as? Printer
-        }.getOrNull()
+        }.getOrNull()?.takeUnless { it === looperPrinter }
+        samplingProfiler?.destroy()
         samplingProfiler = StackSamplingProfiler(config).also { profiler ->
             profiler.onSamplingComplete = { topMethods, sampleCount ->
                 onSamplingResult(topMethods, sampleCount)
@@ -73,12 +75,17 @@ class SlowMethodModule(private val config: SlowMethodConfig = SlowMethodConfig()
     }
 
     /** 恢复原始 Printer，释放采样器。 */
+    @Synchronized
     override fun onStop() {
+        if (!monitoring) {
+            return
+        }
         monitoring = false
         // 禁用 ASM Tracer
         ApmSlowMethodTracer.disable()
         // 恢复原始 Printer
         Looper.getMainLooper().setMessageLogging(originPrinter)
+        originPrinter = null
         samplingProfiler?.destroy()
         samplingProfiler = null
     }

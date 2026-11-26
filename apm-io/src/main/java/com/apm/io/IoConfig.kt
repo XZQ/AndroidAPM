@@ -15,12 +15,6 @@ data class IoConfig(
     val largeBufferSize: Long = DEFAULT_LARGE_BUFFER_SIZE,
     /** 最大堆栈截取长度。 */
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
-    /** Compatibility-only generic Java IO hook; use the explicit stream wrappers. */
-    @Deprecated(
-        message = "Generic Java IO hooking is not supported; use IoModule.wrapInputStream/wrapOutputStream",
-        replaceWith = ReplaceWith("false")
-    )
-    val enableAutoHook: Boolean = false,
     /** 小 buffer 检测阈值（字节），低于此值的读写操作视为小 buffer。 */
     val smallBufferThreshold: Int = DEFAULT_SMALL_BUFFER_THRESHOLD,
     /** 重复读检测阈值：同一文件被读次数超过此值触发告警。 */

@@ -15,7 +15,7 @@ refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 
 ## 输出
 
-单调时间窗口形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。默认在真实回调跨过 1000ms 时间边界时形成窗口；静态页面可更久才产生下一次报告，不能据此推算缺失绘制请求；旧 `windowSize` 只为源码兼容保留，不再控制上报节奏。
+单调时间窗口形成 `FrameStats`，发出 `fps_stats`：FPS、总帧、掉帧、jank/frozen、refresh rate、scene 和可用的 FrameMetrics breakdown。默认在真实回调跨过 1000ms 时间边界时形成窗口；静态页面可更久才产生下一次报告，不能据此推算缺失绘制请求。
 
 掉帧 severity 默认按 dropped frame count 分级：moderate 4、severe 10；frozen threshold 300ms。
 
@@ -27,7 +27,6 @@ refresh rate 从 Activity display 获取，异常时回退 60 Hz。
 | jank threshold | 16ms |
 | frozen threshold | 300ms |
 | report interval | 1000ms |
-| `windowSize` | 60 / deprecated compatibility only |
 | FPS warning | 30 |
 | scene detect | 开 |
 | FrameMetrics | 开 |

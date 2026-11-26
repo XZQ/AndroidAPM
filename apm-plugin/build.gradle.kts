@@ -9,7 +9,7 @@ plugins {
 }
 
 group = "com.apm"
-version = "0.1.0"
+version = "0.2.0"
 
 val projectUrl = "https://github.com/XZQ/AndroidAPM"
 val projectScmConnection = "scm:git:git://github.com/XZQ/AndroidAPM.git"

@@ -52,13 +52,10 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
     }
 
     /** 注册 Activity 生命周期回调。 */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableRenderMonitor) {
+        if (monitoring || !config.enableRenderMonitor) {
             return
-        }
-        @Suppress("DEPRECATION")
-        if (config.detectOverdraw) {
-            apmContext?.logger?.w("detectOverdraw is deprecated and ignored; Android exposes no public GPU counter")
         }
         monitoring = true
         frameMetricsReadErrorRecorded = false
@@ -67,7 +64,11 @@ class RenderModule(private val config: RenderConfig = RenderConfig()) : ApmModul
     }
 
     /** 注销回调。 */
+    @Synchronized
     override fun onStop() {
+        if (!monitoring) {
+            return
+        }
         monitoring = false
         val activities = synchronized(frameListeners) { frameListeners.keys.toList() }
         for (activity in activities) {

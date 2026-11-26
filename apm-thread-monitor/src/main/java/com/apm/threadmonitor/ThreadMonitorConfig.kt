@@ -2,7 +2,7 @@ package com.apm.threadmonitor
 
 /**
  * 线程监控模块配置。
- * 包含线程数量监控、线程泄漏检测、线程池监控配置。
+ * 包含线程数量监控、同名线程检测、死锁与线程池队列积压监控配置。
  */
 data class ThreadMonitorConfig(
     /** 是否开启线程监控。 */
@@ -17,20 +17,8 @@ data class ThreadMonitorConfig(
     val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** 是否启用线程池监控。 */
     val enableThreadPoolMonitor: Boolean = true,
-    /**
-     * Compatibility-only generic thread leak switch. Thread liveness alone
-     * cannot establish a leak; use explicit pool registration and backlog data.
-     */
-    @Deprecated(
-        message = "Generic thread leak detection is not reliable; register ThreadPoolExecutor instances explicitly",
-        replaceWith = ReplaceWith("false")
-    )
-    val enableThreadLeakDetect: Boolean = false,
     /** 线程池队列积压告警阈值。 */
-    val queueBacklogThreshold: Int = DEFAULT_QUEUE_BACKLOG_THRESHOLD,
-    /** Compatibility-only threshold retained for source compatibility. */
-    @Deprecated(message = "Generic thread leak detection is not supported")
-    val threadLeakThresholdMs: Long = DEFAULT_THREAD_LEAK_THRESHOLD_MS
+    val queueBacklogThreshold: Int = DEFAULT_QUEUE_BACKLOG_THRESHOLD
 ) {
     companion object {
         /** 默认线程数量阈值：100。 */
@@ -47,8 +35,5 @@ data class ThreadMonitorConfig(
 
         /** 默认队列积压阈值：100。 */
         private const val DEFAULT_QUEUE_BACKLOG_THRESHOLD = 100
-
-        /** 默认线程泄漏阈值：5 分钟。 */
-        private const val DEFAULT_THREAD_LEAK_THRESHOLD_MS = 300_000L
     }
 }

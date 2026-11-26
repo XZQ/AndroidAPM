@@ -108,6 +108,20 @@ class ResourceWaterfallTest {
         assertEquals(0, retainedCollectionEntries(waterfall))
     }
 
+    /** Query parameters and fragments do not hide image, stylesheet, or script extensions. */
+    @Test
+    fun `resource type inference strips query and fragment suffixes`() {
+        val waterfall = ResourceWaterfall(WebviewConfig(maxTrackedResources = 8))
+        waterfall.onResourceStart(PAGE_URL, TestResourceRequest("https://example.test/logo.png?v=2#hero"))
+        waterfall.onResourceStart(PAGE_URL, TestResourceRequest("https://example.test/theme.css#above-fold"))
+        waterfall.onResourceStart(PAGE_URL, TestResourceRequest("https://example.test/app.js#module"))
+
+        val types = records(waterfall).associate { it.url to it.resourceType }
+        assertEquals("image", types["https://example.test/logo.png?v=2#hero"])
+        assertEquals("stylesheet", types["https://example.test/theme.css#above-fold"])
+        assertEquals("script", types["https://example.test/app.js#module"])
+    }
+
     /** Reads the private retained records to verify memory bounds without adding a production API. */
     @Suppress("UNCHECKED_CAST")
     private fun records(waterfall: ResourceWaterfall): List<ResourceRecord> {

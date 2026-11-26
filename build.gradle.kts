@@ -1,4 +1,6 @@
 import com.android.build.api.dsl.LibraryExtension
+import kotlinx.validation.KotlinApiBuildTask
+import kotlinx.validation.KotlinApiCompareTask
 import org.gradle.api.component.SoftwareComponent
 import org.gradle.api.plugins.JavaPluginExtension
 import org.gradle.api.publish.PublishingExtension
@@ -15,7 +17,7 @@ plugins {
 }
 
 group = "com.apm"
-version = "0.1.0"
+version = "0.2.0"
 
 val releaseRepositoryPath = providers.gradleProperty("apmReleaseRepository")
     .orElse(
@@ -174,6 +176,51 @@ subprojects {
                     }
                 }
             }
+        }
+
+        // AGP 9 内置 Kotlin 不再应用旧 `kotlin-android` 插件 ID，而 BCV 0.18.2 仅监听 `kotlin-android`；
+        // 显式将已发布 Android Library 的 Release classes.jar 接入 apiBuild/apiCheck/apiDump，
+        // 防止 22 个 Android 模块与 apm-bundle 在 ABI 门禁中被静默跳过。
+        dependencies.add(
+            "bcv-rt-jvm-cp",
+            "org.jetbrains.kotlin:kotlin-metadata-jvm:${libs.versions.kotlin.get()}",
+        )
+        val apiBuild = tasks.register<KotlinApiBuildTask>("apiBuild") {
+            dependsOn("bundleLibRuntimeToJarRelease")
+            inputJar.set(
+                layout.buildDirectory.file(
+                    "intermediates/runtime_library_classes_jar/release/bundleLibRuntimeToJarRelease/classes.jar",
+                ),
+            )
+            outputApiFile.set(layout.buildDirectory.file("api/${project.name}.api"))
+            runtimeClasspath.from(configurations.named("bcv-rt-jvm-cp-resolver"))
+        }
+        val apiCheck = tasks.register<KotlinApiCompareTask>("apiCheck") {
+            group = "verification"
+            description = "Checks signatures of public API against the golden value in API folder for ${project.name}"
+            projectApiFile.set(layout.projectDirectory.file("api/${project.name}.api"))
+            generatedApiFile.set(apiBuild.flatMap { it.outputApiFile })
+        }
+        tasks.register("apiDump") {
+            group = "other"
+            description = "Syncs API from build dir to api/ dir for ${project.name}"
+            val generated = apiBuild.flatMap { it.outputApiFile }
+            val target = layout.projectDirectory.file("api/${project.name}.api")
+            inputs.files(generated)
+            outputs.file(target)
+            doLast {
+                val sourceFile = generated.get().asFile
+                val targetFile = target.asFile
+                targetFile.parentFile.mkdirs()
+                if (sourceFile.exists()) {
+                    sourceFile.copyTo(targetFile, overwrite = true)
+                } else {
+                    targetFile.writeText("")
+                }
+            }
+        }
+        tasks.named("check") {
+            dependsOn(apiCheck)
         }
     }
 

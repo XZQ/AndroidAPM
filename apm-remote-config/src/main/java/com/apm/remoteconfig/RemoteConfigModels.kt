@@ -28,11 +28,12 @@ data class RemoteConfigClientConfig(
     init {
         val parsedEndpoint = runCatching { URL(endpoint) }
             .getOrElse { error -> throw IllegalArgumentException("Invalid remote config endpoint", error) }
-        val secureEndpoint = parsedEndpoint.protocol == HTTPS_SCHEME
+        val secureEndpoint = parsedEndpoint.protocol == HTTPS_SCHEME &&
+            !parsedEndpoint.host.isNullOrBlank()
         val loopbackTestEndpoint = parsedEndpoint.protocol == HTTP_SCHEME &&
             parsedEndpoint.host == LOOPBACK_HOST
         require((secureEndpoint || loopbackTestEndpoint) && parsedEndpoint.userInfo == null) {
-            "Remote config endpoint must use HTTPS outside loopback tests"
+            "Remote config endpoint must use HTTPS with a non-blank host outside loopback tests"
         }
         require(endpoint.length <= MAX_ENDPOINT_CHARACTERS) { "Remote config endpoint is too long" }
         require(isSafeIdentity(appId, MAX_APP_ID_BYTES)) { "Invalid appId" }
@@ -48,10 +49,10 @@ data class RemoteConfigClientConfig(
         }
     }
 
-    /** Returns whether an identity is non-blank, bounded UTF-8, and control-character free. */
+    /** Returns whether an identity is non-blank, bounded UTF-8, and valid for HTTP header transport. */
     private fun isSafeIdentity(value: String, maxBytes: Int): Boolean {
         return value.isNotBlank() && value.toByteArray(Charsets.UTF_8).size <= maxBytes &&
-            value.all { character -> character.code >= HEADER_VALUE_MIN }
+            value.all { character -> character.code in HEADER_VALUE_MIN..HEADER_VALUE_MAX }
     }
 
     companion object {
@@ -82,17 +83,25 @@ data class RemoteConfigClientConfig(
         /** Maximum allowed JSON response budget. */
         private const val MAX_RESPONSE_BYTES = 2 * 1_024 * 1_024
 
-        /** Allowed endpoint scheme/host values. */
+        /** HTTPS endpoint scheme. */
         private const val HTTPS_SCHEME = "https"
+        /** HTTP endpoint scheme permitted only for loopback tests. */
         private const val HTTP_SCHEME = "http"
+        /** Loopback host permitted for local socket tests. */
         private const val LOOPBACK_HOST = "127.0.0.1"
 
-        /** Protocol/header identity bounds aligned with AndroidAPM-Server. */
+        /** Maximum endpoint length accepted by the client. */
         private const val MAX_ENDPOINT_CHARACTERS = 2_048
+        /** Maximum UTF-8 byte length for appId. */
         private const val MAX_APP_ID_BYTES = 256
+        /** Maximum UTF-8 byte length for environment. */
         private const val MAX_ENVIRONMENT_BYTES = 128
+        /** Maximum UTF-8 byte length for installationId. */
         private const val MAX_INSTALLATION_ID_BYTES = 256
+        /** Lowest printable ASCII code accepted in HTTP identity headers. */
         private const val HEADER_VALUE_MIN = 0x20
+        /** Highest printable ASCII code accepted in HTTP identity headers (excludes DEL 0x7F). */
+        private const val HEADER_VALUE_MAX = 0x7E
     }
 }
 

@@ -1,14 +1,14 @@
 # AndroidAPM 发布与供应链门禁
 
-> 同步日期：2026-11-22｜当前 SDK 版本：0.1.0
+> 同步日期：2026-11-26｜当前 SDK 版本：0.2.0
 
 ## 发布范围
 
 一次完整分发包含 25 个 Maven 坐标：
 
 - 23 个根发布制品：22 个运行时模块和 `apm-bundle`；
-- `com.apm:apm-plugin:0.1.0`；
-- `com.apm.slow-method:com.apm.slow-method.gradle.plugin:0.1.0` 插件 marker。
+- `com.apm:apm-plugin:0.2.0`；
+- `com.apm.slow-method:com.apm.slow-method.gradle.plugin:0.2.0` 插件 marker。
 
 `apm-sample-app`、`apm-benchmark` 和 `build-logic` 不得进入发布仓库。Bundle POM 必须精确传递 22 个运行时制品；插件 marker 必须只依赖同版本 `com.apm:apm-plugin`。
 

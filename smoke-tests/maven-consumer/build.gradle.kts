@@ -1,7 +1,7 @@
 plugins {
     // 插件版本统一取自主仓库的 version catalog，避免与主构建漂移
     alias(libs.plugins.android.library)
-    id("com.apm.slow-method") version "0.1.0"
+    id("com.apm.slow-method") version "0.2.0"
 }
 
 java {
@@ -34,5 +34,5 @@ kotlin {
 
 dependencies {
     // One published bundle must expose representative APIs from all transitive SDK modules.
-    implementation("com.apm:apm-bundle:0.1.0")
+    implementation("com.apm:apm-bundle:0.2.0")
 }

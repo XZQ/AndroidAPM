@@ -35,21 +35,36 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
     /** 当前前台 Activity 类名，用于场景标注。 */
     private var currentScene: String = ""
 
+    /** 是否已注册生命周期回调。 */
+    @Volatile
+    private var started = false
+
+    /** 当前活跃的前台 Activity 弱引用，避免旧 Activity pause 停止新 Activity 的监控。 */
+    private var resumedActivityRef: java.lang.ref.WeakReference<Activity>? = null
+
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
 
     /** 注册 Activity 生命周期回调，用于场景感知。 */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableFpsMonitor) {
+        if (started || !config.enableFpsMonitor) {
             return
         }
+        started = true
         apmContext?.application?.registerActivityLifecycleCallbacks(this)
         apmContext?.logger?.d("FPS module started, frameMetrics=${config.enableFrameMetrics}")
     }
 
     /** 注销回调并停止监控。 */
+    @Synchronized
     override fun onStop() {
+        if (!started) {
+            return
+        }
+        started = false
+        resumedActivityRef = null
         fpsMonitor?.stop()
         apmContext?.application?.unregisterActivityLifecycleCallbacks(this)
     }
@@ -59,6 +74,10 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
      * 记录当前场景名，获取设备刷新率，绑定 FrameMetrics。
      */
     override fun onActivityResumed(activity: Activity) {
+        if (!started) {
+            return
+        }
+        resumedActivityRef = java.lang.ref.WeakReference(activity)
         currentScene = activity.javaClass.simpleName
         val monitor = getOrCreateMonitor()
         // 获取设备刷新率并设置到 FpsMonitor
@@ -70,10 +89,14 @@ class FpsModule(private val config: FpsConfig = FpsConfig()) : ApmModule, Applic
 
     /**
      * Activity 暂停时停止 FPS 监控。
-     * 避免后台采集浪费资源。
+     * 仅在当前暂停的正是最新恢复的 Activity 时停止，防止页面切换交叠期间误停新页面的采集。
      */
     override fun onActivityPaused(activity: Activity) {
-        fpsMonitor?.stop()
+        val currentResumed = resumedActivityRef?.get()
+        if (currentResumed == null || currentResumed === activity) {
+            resumedActivityRef = null
+            fpsMonitor?.stop()
+        }
     }
 
     // 空实现的回调

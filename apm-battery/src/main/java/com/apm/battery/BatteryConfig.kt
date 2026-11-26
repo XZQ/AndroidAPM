@@ -15,9 +15,6 @@ data class BatteryConfig(
     val checkIntervalMs: Long = DEFAULT_CHECK_INTERVAL_MS,
     /** 电量下降百分比告警阈值。 */
     val batteryDrainPercent: Int = DEFAULT_BATTERY_DRAIN_PERCENT,
-    /** Compatibility-only field; battery callbacks do not capture stack traces. */
-    @Deprecated(message = "Battery monitoring does not capture stack traces")
-    val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** 是否启用 WakeLock Hook（代理 PowerManager）。 */
     val enableWakeLockHook: Boolean = true,
     /** 是否启用后台闹钟监控。 */
@@ -42,8 +39,6 @@ data class BatteryConfig(
         private const val DEFAULT_CHECK_INTERVAL_MS = 60_000L
         /** 默认电量下降告警：5%。 */
         private const val DEFAULT_BATTERY_DRAIN_PERCENT = 5
-        /** 默认堆栈最大长度。 */
-        private const val DEFAULT_MAX_STACK_LENGTH = 4000
         /** 默认 CPU 告警阈值：80%。 */
         private const val DEFAULT_CPU_THRESHOLD = 0.8f
         /** 默认 CPU 持续时长：30 秒。 */

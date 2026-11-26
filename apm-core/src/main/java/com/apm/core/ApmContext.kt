@@ -46,6 +46,7 @@ class ApmContext internal constructor(
     fun emit(event: ApmEvent) {
         val occurrenceBoundEvent = bindOccurrence(event)
         if (processCoordinator != null && !isUploaderProcess) {
+            selfMonitor?.recordEmit()
             processCoordinator.writeEvent(occurrenceBoundEvent)
         } else {
             dispatcher.dispatch(occurrenceBoundEvent)
@@ -101,6 +102,7 @@ class ApmContext internal constructor(
             }
         }
         if (processCoordinator != null && !isUploaderProcess) {
+            selfMonitor?.recordEmit()
             processCoordinator.writeEvent(event)
         } else dispatcher.dispatch(event)
         return true
@@ -123,7 +125,8 @@ class ApmContext internal constructor(
         eventFactory: () -> ApmEvent
     ) {
         if (processCoordinator != null && !isUploaderProcess) {
-            // IPC 写文件需要完整事件，立即构建
+            // IPC 写文件需要完整事件，立即构建并记入子进程发射计数
+            selfMonitor?.recordEmit()
             processCoordinator.writeEvent(bindOccurrence(eventFactory()))
         } else {
             dispatcher.dispatchLazy(priority, sourceModule, estimatedBytes) {
@@ -139,7 +142,14 @@ class ApmContext internal constructor(
      * @return true when the event reached the durable local hand-off point
      */
     fun emitCriticalSync(event: ApmEvent): Boolean {
-        val occurrenceBoundEvent = bindOccurrence(event)
+        val promotedPriority = criticalHandoffPriority(event.priority)
+        val promotedEvent = if (event.priority == promotedPriority) {
+            event
+        } else {
+            val copy = event.copy(priority = promotedPriority)
+            event.occurrence?.let(copy::withOccurrenceContext) ?: copy
+        }
+        val occurrenceBoundEvent = bindOccurrence(promotedEvent)
         return if (processCoordinator != null && !isUploaderProcess) {
             selfMonitor?.recordEmit()
             val result = processCoordinator.writeEventSyncWithResult(occurrenceBoundEvent)

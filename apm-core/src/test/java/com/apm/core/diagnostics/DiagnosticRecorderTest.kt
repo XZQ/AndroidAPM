@@ -201,6 +201,15 @@ class DiagnosticRecorderTest {
         assertEquals(listOf("retained"), store.entries.map(DiagnosticEntry::message))
     }
 
+    /** Oversized credential messages must be pre-bounded before regex scanning and retain truncation marker. */
+    @Test
+    fun `oversized credential message is pre-bounded and marked truncated`() {
+        val sanitized = DiagnosticSanitizer.sanitizeMessage("Bearer " + "a".repeat(32_768))
+
+        assertTrue(sanitized.startsWith("Bearer [REDACTED]"))
+        assertTrue(sanitized.endsWith("...[truncated]"))
+    }
+
     /** Builds and tracks one recorder with deterministic test identity. */
     private fun recorder(
         memoryLimit: Int = 20,

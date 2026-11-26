@@ -29,10 +29,10 @@ import java.util.concurrent.TimeUnit
  *
  * 使用方式（外部回调）：
  * ```kotlin
- * Apm.init(this, ApmConfig()) {
- *     register(WebviewModule())
- * }
- * // 在 WebViewClient 回调中
+ * val webviewModule = WebviewModule()
+ * Apm.init(application, ApmConfig())
+ * Apm.register(webviewModule)
+ * // 显式绑定单个 WebView，或在 WebViewClient 回调中调用
  * webviewModule.onPageStarted(url)
  * webviewModule.onPageFinished(url)
  * webviewModule.onJsEvalComplete(url, js, durationMs)
@@ -91,10 +91,6 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
             previous
         }
         previousScheduler?.shutdownNow()
-        @Suppress("DEPRECATION")
-        if (config.enableAutoRegister) {
-            apmContext?.logger?.w("enableAutoRegister is deprecated and ignored; call install for each WebView")
-        }
         // 资源瀑布图与 JS Bridge/Console 一致尊重总开关：仅当模块启用且配置启用时创建。
         // 禁用总开关时不得留下仍会发事件的活跃 recorder；独立使用请走 ResourceWaterfall 公开构造器。
         resourceWaterfall?.stop()
@@ -167,8 +163,14 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
                 looper = installLooper
             )
         }
-        webView.webViewClient = monitoringClient
-        webView.webChromeClient = monitoringChrome
+        try {
+            webView.webViewClient = monitoringClient
+            webView.webChromeClient = monitoringChrome
+        } catch (error: RuntimeException) {
+            // 安装异常（如非 UI 线程调用）时回滚注册记录，防止遗留失真状态。
+            synchronized(installations) { installations.remove(webView) }
+            throw error
+        }
         if (started) {
             apmContext?.setHostIntegrationActiveRegistrations(
                 HostIntegrationPoint.WEBVIEW,
@@ -185,18 +187,19 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
      */
     fun uninstall(webView: WebView): Boolean {
         val installation = synchronized(installations) { installations.remove(webView) } ?: return false
+        val webViewRef = java.lang.ref.WeakReference(webView)
         // WebView 客户端 setter 强制创建线程；恢复（含 API 26+ 的当前客户端判定）必须整体
-        // 在安装线程执行。跨线程卸载时 post 回安装线程，避免 CalledFromWrongThreadException
-        // 让视图带着监控 wrapper 失去安装记录。
+        // 在安装线程执行。跨线程卸载时用弱引用 post 回安装线程，避免慢队列长期强引用宿主视图。
         val restore = Runnable {
+            val targetView = webViewRef.get() ?: return@Runnable
             try {
                 // API 26+ can avoid overwriting a client the host replaced after
                 // installation. API 24-25 lacks public getters, so restore directly.
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webViewClient === installation.monitoringClient) {
-                    webView.webViewClient = installation.hostClient
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || targetView.webViewClient === installation.monitoringClient) {
+                    targetView.webViewClient = installation.hostClient
                 }
-                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || webView.webChromeClient === installation.monitoringChrome) {
-                    webView.webChromeClient = installation.hostChrome
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || targetView.webChromeClient === installation.monitoringChrome) {
+                    targetView.webChromeClient = installation.hostChrome
                 }
             } catch (error: Exception) {
                 Apm.recordInternalError(ERROR_TAG_UNINSTALL, error)
@@ -325,7 +328,11 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         webView.evaluateJavascript(script) { result ->
             val durationMs = (ApmClock.monotonicTimeNanos() - startedAtNanos)
                 .coerceAtLeast(0L) / NANOS_PER_MILLISECOND
-            onJsEvalComplete(webView.url.orEmpty(), script, durationMs)
+            try {
+                onJsEvalComplete(webView.url.orEmpty(), script, durationMs)
+            } catch (error: Exception) {
+                Apm.recordInternalError(ERROR_TAG_JS_EVAL, error)
+            }
             callback?.onReceiveValue(result)
         }
     }
@@ -632,5 +639,7 @@ class WebviewModule(private val config: WebviewConfig = WebviewConfig()) : ApmMo
         private const val NANOS_PER_MILLISECOND = 1_000_000L
         /** 自监控 tag：停止阶段单个 WebView 卸载失败（不中断其余视图清理）。 */
         private const val ERROR_TAG_UNINSTALL = "webview_uninstall"
+        /** 自监控 tag：evaluateJavascript 监控上报异常（不得阻断宿主结果回调）。 */
+        private const val ERROR_TAG_JS_EVAL = "webview_js_eval"
     }
 }

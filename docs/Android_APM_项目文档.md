@@ -1,6 +1,6 @@
 # Android APM 项目文档
 
-> 文档同步：2026-11-22｜27 个构建单元｜170 个主源码文件（165 Kotlin + 4 C + 1 proto）｜130 个测试/benchmark 文件
+> 文档同步：2026-11-26｜27 个构建单元｜169 个主源码文件（164 Kotlin + 4 C + 1 proto）｜131 个测试/benchmark 文件
 
 ## 一、项目结论
 
@@ -58,8 +58,8 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | root Gradle subproject | 25 |
 | included build | 2：`apm-plugin`、`build-logic` |
 | 总构建单元 | 27 |
-| 主源码 | 170：165 Kotlin + 4 C + 1 proto |
-| 测试/benchmark 源文件 | 130（Gradle 的 `src/test` 与 `src/androidTest`，另有 5 个 Python 测试文件） |
+| 主源码 | 169：164 Kotlin + 4 C + 1 proto |
+| 测试/benchmark 源文件 | 131（Gradle 的 `src/test` 与 `src/androidTest`，另有 5 个 Python 测试文件） |
 | Kotlin | 2.2.21 |
 | AGP | 9.5.2 |
 | Gradle | 9.6.0 |
@@ -111,7 +111,7 @@ Crash/ANR 关键事件通过 `Apm.emitCriticalSync` 绕过共享队列、采样�
 | `apm-otel-exporter` | 输出 OTel-compatible Span/Metric/Log Map；不负责 SDK/网络发送 |
 | `apm-plugin` | AGP instrumentation + ASM slow-method 插桩 |
 | `build-logic` | Android library convention plugin |
-| `apm-sample-app` | 演示 15 个监控模块与宿主显式接线。默认输出 `logcat://sample`，可配置 Strict V3 发送到测试 Collector。 |
+| `apm-sample-app` | 演示 15 个监控模块、`apm-trace`/`apm-otel-exporter` 与宿主显式接线。默认输出 `logcat://sample`，可配置 Strict V3 发送到测试 Collector。 |
 | `apm-benchmark` | 非发布双层性能门：AndroidX codec/SQLite 固定预算 + sample-App 启动/主线程/CPU/PSS/功耗/磁盘/热/24h/72h 离线重启 campaign |
 
 ## 五、统一事件模型
@@ -267,13 +267,8 @@ SDK 自诊断与普通 APM 事件是两个故障域：`ApmLogger` 继续输出 L
 | `enableDynamicHttpEndpoint` | false | 远程 endpoint 覆盖默认关闭；开启后仍只接受 HTTPS |
 | `httpHeaders` | 空 | 静态协议身份，不应包含长期密钥 |
 | `httpHeaderProvider` | 空 | 每请求短期 Token/动态 Header |
-| `IpcConfig.enableBinderHook` | false / deprecated | 无公共全局 Hook；使用显式 tracing |
-| `WebviewConfig.enableAutoRegister` | false / deprecated | 无全局 WebView 注册；按实例 install |
-| `ThreadMonitorConfig.enableThreadLeakDetect` | false / deprecated | 通用 leak 判断不可靠；显式注册线程池 |
-| `RenderConfig.detectOverdraw` | false / deprecated | 公共 API 无 GPU overdraw 计数 |
-| `IoConfig.enableAutoHook` | false / deprecated | 无公共全局 Java IO Hook；使用显式 stream wrapper |
 
-各监控模块中历史遗留但没有对应运行时数据来源的 `maxStackTraceLength`（Battery/FPS/GC/Render）、Render 单 View `viewDrawThresholdMs` 和 Thread 通用 leak threshold 均保留为弃用兼容字段，不再描述为已生效能力。
+此前保留为弃用兼容占位的 17 项声明（含 `IpcConfig.enableBinderHook`、`WebviewConfig.enableAutoRegister`、`ThreadMonitorConfig.enableThreadLeakDetect` / `threadLeakThresholdMs`、`RenderConfig.detectOverdraw` / `viewDrawThresholdMs`、`IoConfig.enableAutoHook`、`FpsConfig.windowSize`、Battery/FPS/GC/Render 的无源 `maxStackTraceLength`、`ApmWireProtocol.ENVELOPE_SCHEMA_VERSION` 及 `ReferenceChainAnalyzer` 相关类型）已在 `0.2.0` 按 [API 兼容策略](API_COMPATIBILITY.md) 移除，不再保留无运行时作用的公开配置字段。
 
 ## 十一、构建与发布
 
@@ -287,7 +282,7 @@ Android Studio 同步会解析依赖的 Javadoc 和示例源码，这些文件�
 
 ## 十二、测试策略
 
-130 个测试/benchmark 文件覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity 与 V2 semantic-smuggling 拒绝、critical priority promotion、Crash 委托/fatal 边界、ANR 同步 hand-off 与原因分类（含 BINDER 先于 CPU 顺序回归）、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
+131 个测试/benchmark 文件（985 个 JUnit 用例 + 1 个 UiAutomator 场景驱动器，另加 5 个 Python 测试文件共 56 项检查）覆盖 strict profile/consent/活动与冷启动撤回、V2/V3 typed/resource/batch identity/byte split/exact ACK、V3 occurrence/native identity（含 trim 校验）与 V2 semantic-smuggling 拒绝、critical priority promotion 与子进程发射自监控计数、Crash 委托/fatal 边界、ANR 同步 hand-off 与原因分类（含 BINDER 先于 CPU 顺序回归）、IPC store 故障保留与重试、SQLite 关闭重开恢复、配置默认值、事件 identity/typed codec v1-v4/legacy Protobuf、dispatcher 单事件故障隔离/fatal 边界/条数与字节准入/多 victim 优先级淘汰/混合优先级 FIFO 语义/单模块高水位隔离与关闭开关/固定阶段延迟直方图、IPC pending/event/file/directory 字节预算与单一周期 writer、drop reason/priority/UNATTRIBUTED 归因、业务上下文和直接事件异步快照、单调 duration/expiry/dedup/rate-limit 与 epoch collector 时间、签名配置 canonical JSON/Ed25519/HTTP/ETag/LKG/过期/rollback/equivocation、动态 kill switch/采样/限流/endpoint/短期 Header、PII、聚合/指纹、durable outbox migration/lease/concurrency/固定种子状态机、uploader worker/scheduler 线程命名、daemon 与后台优先级、GC 分配/回收窗口、IO 吞吐窗口、SQLite QueryPlan gate/现代 SCAN 解析、SDK 诊断脱敏/JSONL/滚动/导出失败数据化/并发降级、宿主接入 registry 五态/并发/会话重置/late callback、Provider 自动初始化/no-op/错误隔离、Memory Reporter/OOM/Hprof 截断输入/ViewModel 引用/真实采样、Network 请求分类/聚合/phase 截断/HttpURLConnection 异常语义、JNI 静态绑定契约、ASM 正常/异常出口、Binder/线程池/WebView、FPS 实际 interval 定义与 FrameMetrics primitive rolling accumulator 核心计算、三个 AndroidX Microbenchmark 类、发布候选缺失/篡改/ZIP traversal/签名策略，以及 microbenchmark/device-soak/device-lab host gate 的通过、解析、聚合、时长、重启、功耗、超限、emulator、lane/profile 完整性、OEM/reset 多样性和 provenance 一致性分支。
 
 测试通过不能代替以下验证：
 

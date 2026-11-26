@@ -8,7 +8,7 @@
 
 ```kotlin
 dependencies {
-    implementation("com.apm:apm-bundle:0.1.0")
+    implementation("com.apm:apm-bundle:0.2.0")
 }
 ```
 
@@ -53,7 +53,7 @@ Bundle 通过 `api(project(...))` 暴露 22 个运行时制品：
 
 发布候选验证必须同时证明：
 
-1. 独立文件仓库生成 `com.apm:apm-bundle:0.1.0`；
+1. 独立文件仓库生成 `com.apm:apm-bundle:0.2.0`；
 2. Bundle POM 对 22 个 `com.apm` 运行时制品声明 compile-scope 依赖；
 3. `com.apm:apm-plugin` 与 `com.apm.slow-method` marker 同时发布且版本一致；
 4. 隔离 Maven consumer 只从候选仓库解析 Bundle 和插件，仍能编译多个传递模块的代表性 API并执行 ASM transformation；

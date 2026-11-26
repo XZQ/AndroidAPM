@@ -12,7 +12,7 @@ module.traceBinderCall(interfaceName, methodName) { service.call() }
 module.onBinderCallComplete(interfaceName, methodName, durationMs)
 ```
 
-公共 Android API 没有通用 Binder proxy/native hook 安装路径。`enableBinderHook` 已 deprecated 且默认 `false`；显式 wrapper 保留返回值与异常语义。
+公共 Android API 没有通用 Binder proxy/native hook 安装路径；显式 wrapper 保留返回值与异常语义。
 
 ## 检测
 
@@ -31,7 +31,6 @@ module.onBinderCallComplete(interfaceName, methodName, durationMs)
 | binder threshold | 500ms |
 | main-thread threshold | 100ms |
 | aggregation | 开，window 50 |
-| `enableBinderHook` | false / deprecated |
 
 ## 线程与资源
 

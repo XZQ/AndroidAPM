@@ -4,12 +4,7 @@ import org.junit.Assert.*
 import org.junit.Test
 
 /**
- * BatteryModule 配置和参数测试。
- *
- * 注：BatteryModule 构造函数内属性初始化使用 Handler(Looper.getMainLooper())
- * 和 BroadcastReceiver（依赖 Context），纯 JUnit 环境无法实例化 Module。
- * Module 集成测试应在 Android Instrumentation 环境中执行。
- * 此文件验证 Config 层默认值和自定义值覆盖。
+ * BatteryModule 配置与放电水位基线测试。
  */
 class BatteryModuleTest {
 
@@ -46,13 +41,6 @@ class BatteryModuleTest {
     fun `default battery drain percent is 5`() {
         val config = BatteryConfig()
         assertEquals(5, config.batteryDrainPercent)
-    }
-
-    /** 默认堆栈最大长度 4000。 */
-    @Test
-    fun `default max stack trace length is 4000`() {
-        val config = BatteryConfig()
-        assertEquals(4_000, config.maxStackTraceLength)
     }
 
     /** 默认开启 WakeLock Hook。 */
@@ -150,5 +138,21 @@ class BatteryModuleTest {
         val config = BatteryConfig()
         // 电量下降百分比应为正整数
         assertTrue(config.batteryDrainPercent > 0)
+    }
+
+    /** 充电回升会刷新放电基线，且无效负百分比不会误触电量暴跌告警。 */
+    @Test
+    fun `charging resets drain baseline and negative battery level is ignored`() {
+        val module = BatteryModule(BatteryConfig(batteryDrainPercent = 5, enableCpuMonitor = false))
+        val observedDrops = ArrayList<Pair<Int, Int>>()
+
+        // 负值输入不得建立基线或产生伪告警
+        module.onBatteryLevelChanged(-1) { drop, _, level -> observedDrops += drop to level }
+        // 初始 80% -> 充电升至 95% -> 拔电降至 89%（距峰值下降 6% >= 5%）
+        module.onBatteryLevelChanged(80) { drop, _, level -> observedDrops += drop to level }
+        module.onBatteryLevelChanged(95) { drop, _, level -> observedDrops += drop to level }
+        module.onBatteryLevelChanged(89) { drop, _, level -> observedDrops += drop to level }
+
+        assertEquals(listOf(6 to 89), observedDrops)
     }
 }

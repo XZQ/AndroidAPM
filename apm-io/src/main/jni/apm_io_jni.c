@@ -775,6 +775,8 @@ JNIEXPORT jint JNI_OnLoad(JavaVM *vm, void *reserved) {
     );
     if (s_on_native_io_event_method == NULL) {
         LOG_E("Failed to find onNativeIoEvent method");
+        (*env)->DeleteGlobalRef(env, s_native_io_hook_class);
+        s_native_io_hook_class = NULL;
         return JNI_ERR;
     }
 

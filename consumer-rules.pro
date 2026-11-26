@@ -4,9 +4,17 @@
     public static void methodExit(java.lang.String);
 }
 
-# JNI entry points in crash, memory dump, and IO modules must keep native method names.
+# JNI entry points in crash, ANR, memory dump, and IO modules must keep native method names.
 -keepclasseswithmembers class com.apm.** {
     native <methods>;
+}
+
+# Static Kotlin callbacks resolved from JNI_OnLoad via GetStaticMethodID.
+-keep class com.apm.crash.NativeCrashMonitor {
+    public static void logNativeCrashSignal(int, java.lang.String, java.lang.String, java.lang.String);
+}
+-keep class com.apm.io.NativeIoHook {
+    public static void onNativeIoEvent(java.lang.String, java.lang.String, long, long, boolean);
 }
 
 # Optional integrations are compileOnly and provided by host apps when enabled.

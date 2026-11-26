@@ -35,8 +35,10 @@ internal class DiagnosticRecorder(
     private val sequence = AtomicLong(0L)
     /** Bounded persistence queue. */
     private val queue = ArrayBlockingQueue<SizedEntry>(config.writerQueueCapacity)
-    /** Short lock protecting queue admission and byte accounting. */
-    private val queueLock = Any()
+    /** Short lock protecting queue admission, byte accounting, and idle-writer wakeups. */
+    private val queueLock = ReentrantLock()
+    /** Signalled when an entry enters [queue] or [running] transitions to false. */
+    private val queueAvailable = queueLock.newCondition()
     /** Encoded bytes currently waiting in [queue]. */
     private val queueBytes = AtomicLong(0L)
     /** In-memory newest-record ring. */
@@ -231,6 +233,8 @@ internal class DiagnosticRecorder(
         }
         flush(SHUTDOWN_TIMEOUT_MS)
         running.set(false)
+        // Wake idle condition waiters cleanly and interrupt any active file-retry cooldown sleep.
+        queueLock.withLock { queueAvailable.signalAll() }
         writerThread.interrupt()
         try {
             writerThread.join(SHUTDOWN_TIMEOUT_MS)
@@ -263,7 +267,7 @@ internal class DiagnosticRecorder(
             return
         }
         if (entry.entry.level == DiagnosticLevel.ERROR) {
-            val evicted = synchronized(queueLock) {
+            val evicted = queueLock.withLock {
                 val candidate = queue.firstOrNull { queued -> queued.entry.level != DiagnosticLevel.ERROR }
                 if (candidate != null && queue.remove(candidate)) {
                     queueBytes.addAndGet(-candidate.encodedBytes)
@@ -286,7 +290,7 @@ internal class DiagnosticRecorder(
 
     /** Offers a sized record only when both count and byte bounds admit it. */
     private fun offerQueued(entry: SizedEntry): Boolean {
-        synchronized(queueLock) {
+        queueLock.withLock {
             if (entry.encodedBytes > config.writerQueueByteLimit ||
                 queueBytes.get() + entry.encodedBytes > config.writerQueueByteLimit
             ) {
@@ -297,6 +301,8 @@ internal class DiagnosticRecorder(
             }
             queueBytes.addAndGet(entry.encodedBytes)
             pendingWrites.incrementAndGet()
+            // Wake the background writer immediately without periodic idle polling.
+            queueAvailable.signal()
             return true
         }
     }
@@ -314,21 +320,29 @@ internal class DiagnosticRecorder(
         }
     }
 
-    /** Polls queue state and byte accounting atomically, then waits briefly when idle. */
+    /** Polls queue state and byte accounting atomically, awaiting condition wakeup when idle. */
     private fun pollQueued(): SizedEntry? {
-        synchronized(queueLock) {
-            val entry = queue.poll()
-            if (entry != null) {
-                queueBytes.addAndGet(-entry.encodedBytes)
-                return entry
+        queueLock.withLock {
+            while (true) {
+                val entry = queue.poll()
+                if (entry != null) {
+                    queueBytes.addAndGet(-entry.encodedBytes)
+                    return entry
+                }
+                if (!running.get()) {
+                    return null
+                }
+                try {
+                    // Park with zero periodic wakeups until offerQueued() or shutdown() signals.
+                    queueAvailable.await()
+                } catch (_: InterruptedException) {
+                    // Shutdown interruption wakes the idle writer; recheck queue/running on next iteration.
+                    if (!running.get() && queue.isEmpty()) {
+                        return null
+                    }
+                }
             }
         }
-        try {
-            Thread.sleep(WRITER_POLL_TIMEOUT_MS)
-        } catch (_: InterruptedException) {
-            // Shutdown interruption wakes the idle writer.
-        }
-        return null
     }
 
     /** Waits before dequeueing so cooldown never silently consumes accepted records. */
@@ -339,7 +353,7 @@ internal class DiagnosticRecorder(
                 return
             }
             try {
-                retryWait(remainingMs.coerceAtMost(WRITER_POLL_TIMEOUT_MS))
+                retryWait(remainingMs.coerceAtMost(RETRY_WAIT_SLICE_MS))
             } catch (_: InterruptedException) {
                 // Shutdown interruption wakes the cooldown wait without consuming queued evidence.
                 return
@@ -410,8 +424,8 @@ internal class DiagnosticRecorder(
     private companion object {
         /** Diagnostics writer thread name without the shared prefix. */
         private const val WRITER_THREAD_NAME = "diagnostics-writer"
-        /** Writer queue poll timeout. */
-        private const val WRITER_POLL_TIMEOUT_MS = 100L
+        /** Maximum wait slice during file-sink retry cooldown. */
+        private const val RETRY_WAIT_SLICE_MS = 100L
         /** File-sink retry cooldown after an exception. */
         private const val FILE_RETRY_COOLDOWN_MS = 60_000L
         /** Flush bound for explicit support operations. */

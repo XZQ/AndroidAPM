@@ -21,12 +21,11 @@ import com.apm.model.ApmPriority
  *
  * 使用方式（外部回调）：
  * ```kotlin
- * Apm.init(this, ApmConfig()) {
- *     register(IpcModule())
- * }
- * // 在 ServiceManager / AIDL 调用前后
- * ipcModule.onBinderCallStart(interfaceName, methodName)
- * ipcModule.onBinderCallEnd(interfaceName, methodName, durationMs)
+ * val ipcModule = IpcModule()
+ * Apm.init(application, ApmConfig())
+ * Apm.register(ipcModule)
+ * // 在 AIDL / Binder 调用处使用 traceBinderCall 或手动记录
+ * ipcModule.onBinderCallComplete(interfaceName, methodName, durationMs)
  * ```
  */
 class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
@@ -54,10 +53,6 @@ class IpcModule(private val config: IpcConfig = IpcConfig()) : ApmModule {
     override fun onStart() {
         started = config.enableIpcMonitor
         apmContext?.setHostIntegrationModuleActive(HostIntegrationPoint.IPC, started)
-        @Suppress("DEPRECATION")
-        if (config.enableBinderHook) {
-            apmContext?.logger?.w("enableBinderHook is deprecated and ignored; use traceBinderCall")
-        }
         apmContext?.logger?.d("IPC module started, binderThreshold=${config.binderThresholdMs}ms")
     }
 

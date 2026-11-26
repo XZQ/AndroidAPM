@@ -131,10 +131,11 @@ class OtelEventBridge(private val config: OtelConfig) {
      * @return decorated signal data
      */
     private fun withResource(signal: Map<String, Any?>): Map<String, Any?> {
-        return signal + mapOf(
-            "resource" to resourceData(),
-            "collectorEndpoint" to config.endpoint
-        )
+        return buildMap(signal.size + 2) {
+            putAll(signal)
+            put("resource", resourceData())
+            put("collectorEndpoint", config.endpoint)
+        }
     }
 
     /**

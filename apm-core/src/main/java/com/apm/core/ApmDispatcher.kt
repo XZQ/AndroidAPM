@@ -554,17 +554,25 @@ internal class ApmDispatcher(
      * @return true when local persistence succeeded
      */
     fun dispatchCriticalSync(event: ApmEvent): Boolean {
+        val promotedPriority = criticalHandoffPriority(event.priority)
         selfMonitor?.recordEmit()
         if (shutdown) {
-            selfMonitor?.recordDrop(event.priority, SdkDropReason.DISPATCHER_SHUTDOWN)
+            selfMonitor?.recordDrop(promotedPriority, SdkDropReason.DISPATCHER_SHUTDOWN)
             return false
         }
         return try {
-            val sanitizedEvent = piiSanitizer?.sanitize(event) ?: event
+            val baseSnapshot = snapshotEvent(event)
+            val frozenEvent = if (baseSnapshot.priority == promotedPriority) {
+                baseSnapshot
+            } else {
+                val copy = baseSnapshot.copy(priority = promotedPriority)
+                baseSnapshot.occurrence?.let(copy::withOccurrenceContext) ?: copy
+            }
+            val sanitizedEvent = piiSanitizer?.sanitize(frozenEvent) ?: frozenEvent
             val appendResult = EventDeliveryBarrier.handoff({ deliveryClosed }) {
                 store.appendWithResult(sanitizedEvent)
             } ?: run {
-                recordClosedDelivery(event)
+                recordClosedDelivery(frozenEvent)
                 return false
             }
             recordStorageResult(appendResult)
@@ -575,7 +583,7 @@ internal class ApmDispatcher(
             true
         } catch (error: Exception) {
             logger.e("Failed to persist critical event ${event.module}/${event.name}", error)
-            selfMonitor?.recordDrop(event.priority, SdkDropReason.STORAGE_FAILURE)
+            selfMonitor?.recordDrop(promotedPriority, SdkDropReason.STORAGE_FAILURE)
             Apm.recordInternalError(ERROR_PROCESS_EVENT, error)
             false
         }

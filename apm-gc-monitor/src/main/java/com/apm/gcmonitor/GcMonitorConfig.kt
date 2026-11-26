@@ -15,9 +15,6 @@ data class GcMonitorConfig(
     val gcTimeRatioThreshold: Float = DEFAULT_GC_TIME_RATIO_THRESHOLD,
     /** Heap 使用率飙升阈值（0.0~1.0）。 */
     val heapGrowthThreshold: Float = DEFAULT_HEAP_GROWTH_THRESHOLD,
-    /** Compatibility-only field; GC runtime counters do not include a stack trace. */
-    @Deprecated(message = "GC counter sampling does not capture stack traces")
-    val maxStackTraceLength: Int = DEFAULT_MAX_STACK_LENGTH,
     /** 是否启用对象分配速率检测。 */
     val enableAllocationRate: Boolean = true,
     /** 分配速率告警阈值（KB/秒）。 */
@@ -36,8 +33,6 @@ data class GcMonitorConfig(
         private const val DEFAULT_GC_TIME_RATIO_THRESHOLD = 0.10f
         /** 默认 Heap 增长阈值：20%。 */
         private const val DEFAULT_HEAP_GROWTH_THRESHOLD = 0.20f
-        /** 默认堆栈最大长度。 */
-        private const val DEFAULT_MAX_STACK_LENGTH = 4000
         /** 默认分配速率阈值：1MB/s。 */
         private const val DEFAULT_ALLOCATION_RATE_THRESHOLD = 1024f
         /** 默认 GC 低回收率阈值：10%。 */

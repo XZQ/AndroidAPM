@@ -44,13 +44,6 @@ class IpcModuleTest {
         assertEquals(4000, config.maxStackTraceLength)
     }
 
-    /** 不存在安全通用 Hook，因此兼容字段默认关闭。 */
-    @Test
-    fun `default enable binder hook is false`() {
-        val config = IpcConfig()
-        assertFalse(config.enableBinderHook)
-    }
-
     /** 默认开启聚合。 */
     @Test
     fun `default enable binder aggregation is true`() {

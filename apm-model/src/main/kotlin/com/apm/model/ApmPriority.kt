@@ -5,7 +5,10 @@ package com.apm.model
  * 用于上传队列排序和降级策略：优先级越高的事件越先上传，
  * 队列满时低优先级事件优先丢弃。
  */
-enum class ApmPriority(val value: Int) {
+enum class ApmPriority(
+    /** 数值优先级权重，越大优先级越高。 */
+    val value: Int
+) {
     /** 低优先级：电池、GC、线程、渲染、WebView 等辅助监控。 */
     LOW(0),
     /** 普通优先级：FPS、慢方法、IO、网络、IPC、SQLite 等常规监控。 */

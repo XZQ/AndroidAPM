@@ -14,7 +14,7 @@ Apm.register(module)
 val db = ApmSQLiteDatabase(helper.writableDatabase, module, "app.db")
 ```
 
-wrapper 覆盖常用 `rawQuery/query/insert/update/delete/execSQL` 并自动计时。写操作（insert/update/delete/execSQL）统一在 finally 上报，委托抛错的失败慢操作同样有耗时诊断；查询经首个结果访问边界计时。未覆盖操作可访问 `delegate`；也可手动调用 `onSqlExecuted(sql, durationMs, affectedRows, databaseName)`。
+wrapper 覆盖常用 `rawQuery/query/insert/update/delete/execSQL` 并自动计时。写操作（insert/update/delete/execSQL）统一在 finally 上报，委托抛错的失败慢操作同样有耗时诊断（`insert` 返回 `-1L` 或抛错时按 0 行上报）；查询经首个结果访问边界计时，并对 `rawQuery` 绑定参数做防御性拷贝以供后续 `EXPLAIN QUERY PLAN` 使用。未覆盖操作可访问 `delegate`；也可手动调用 `onSqlExecuted(sql, durationMs, affectedRows, databaseName)`。
 
 ## 检测
 

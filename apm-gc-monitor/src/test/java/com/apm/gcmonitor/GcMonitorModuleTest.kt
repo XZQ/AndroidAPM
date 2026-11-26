@@ -48,13 +48,6 @@ class GcMonitorModuleTest {
         assertEquals(0.20f, config.heapGrowthThreshold, 0.001f)
     }
 
-    /** 默认堆栈最大长度 4000。 */
-    @Test
-    fun `default max stack trace length is 4000`() {
-        val config = GcMonitorConfig()
-        assertEquals(4_000, config.maxStackTraceLength)
-    }
-
     /** 默认开启对象分配速率检测。 */
     @Test
     fun `default allocation rate is enabled`() {
@@ -92,7 +85,6 @@ class GcMonitorModuleTest {
             gcCountSpikeThreshold = 10,
             gcTimeRatioThreshold = 0.20f,
             heapGrowthThreshold = 0.30f,
-            maxStackTraceLength = 2_000,
             enableAllocationRate = false,
             allocationRateThresholdKbPerSec = 2_048f,
             enableGcReclaimAnalysis = false,
@@ -104,7 +96,6 @@ class GcMonitorModuleTest {
         assertEquals(10, config.gcCountSpikeThreshold)
         assertEquals(0.20f, config.gcTimeRatioThreshold, 0.001f)
         assertEquals(0.30f, config.heapGrowthThreshold, 0.001f)
-        assertEquals(2_000, config.maxStackTraceLength)
         assertFalse(config.enableAllocationRate)
         assertEquals(2_048f, config.allocationRateThresholdKbPerSec, 0.001f)
         assertFalse(config.enableGcReclaimAnalysis)

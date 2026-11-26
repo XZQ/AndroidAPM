@@ -13,10 +13,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <unistd.h>
-#include <pthread.h>
-#include <sys/wait.h>
 #include <stdio.h>
-#include <dlfcn.h>
 #include <errno.h>
 #include <sys/prctl.h>
 
@@ -26,9 +23,6 @@
 
 /** 日志 Tag。 */
 #define TAG "ApmCrash"
-
-/** 最大回溯帧数。 */
-#define MAX_BACKTRACE_FRAMES 64
 
 /** 线程名最大长度。 */
 #define MAX_THREAD_NAME_LEN 64
@@ -163,8 +157,6 @@ static void capture_backtrace(char *buf, size_t buf_len) {
     size_t offset = 0;
     buf[0] = '\0';
 
-    void *frames[MAX_BACKTRACE_FRAMES];
-
     /*
      * 由于 _Unwind_Backtrace 在某些平台信号上下文中不一定可用，
      * 这里使用简化的方式记录 PC 寄存器信息。
@@ -232,9 +224,9 @@ static void native_crash_signal_handler(int sig, siginfo_t *info, void *ucontext
     const char *sig_name = get_signal_name(sig);
     LOGE("Received fatal signal %d (%s)", sig, sig_name);
 
-    /* 捕获故障地址 */
+    /* 捕获故障地址（防御内核/手工触发信号时 info 为空的边界） */
     char fault_addr_str[MAX_FAULT_ADDR_LEN];
-    format_fault_addr(info->si_addr, fault_addr_str, sizeof(fault_addr_str));
+    format_fault_addr(info != NULL ? info->si_addr : NULL, fault_addr_str, sizeof(fault_addr_str));
 
     /* 捕获线程名 */
     char thread_name[MAX_THREAD_NAME_LEN];
@@ -281,6 +273,9 @@ static void native_crash_signal_handler(int sig, siginfo_t *info, void *ucontext
         (*env)->CallStaticVoidMethod(env, s_crash_monitor_class,
             s_log_native_crash_method,
             sig, j_thread_name, j_backtrace, j_fault_addr);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
 
         /* 清理 JNI 局部引用 */
         if (j_thread_name != NULL) (*env)->DeleteLocalRef(env, j_thread_name);
@@ -382,22 +377,16 @@ Java_com_apm_crash_NativeCrashMonitor_nativeInstallSignalHandlers(
 
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
-    /* 使用 siginfo 版本的处理器，可获取故障地址等信息 */
+    /* 使用 siginfo 版本的处理器，并保留 SA_ONSTACK 以支持栈溢出时在备用信号栈执行 */
     sa.sa_sigaction = native_crash_signal_handler;
-    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART | SA_ONSTACK;
 
     int i;
     for (i = 0; i < NUM_HANDLED_SIGNALS; i++) {
         int sig = kHandledSignals[i];
 
-        /* 保存原始处理器，用于恢复和重发信号 */
-        if (sigaction(sig, NULL, &s_old_handlers[i]) != 0) {
-            LOGE("Failed to save original handler for signal %d", sig);
-            continue;
-        }
-
-        /* 安装自定义处理器 */
-        if (sigaction(sig, &sa, NULL) != 0) {
+        /* 单次原子替换并保存原始处理器，消除查询与安装之间的竞态窗口 */
+        if (sigaction(sig, &sa, &s_old_handlers[i]) != 0) {
             LOGE("Failed to install handler for signal %d (%s)", sig, strerror(errno));
             /* 回滚已安装的处理器 */
             int j;

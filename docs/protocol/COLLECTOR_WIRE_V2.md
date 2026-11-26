@@ -20,7 +20,7 @@ V2 继续用于 batch-declared 兼容接入。正式 HTTP 接入使用 `ApmRunti
 | Header | 值 |
 |---|---|
 | `X-Apm-Schema-Version` | `2` |
-| `X-Apm-Sdk-Version` | 客户端制品版本，当前 `0.1.0` |
+| `X-Apm-Sdk-Version` | 客户端制品版本，当前 `0.2.0` |
 | `X-Apm-Batch-Id` | 与 body 相同的稳定 batch ID |
 | `X-Apm-Event-Count` | 本物理请求中的完整事件数 |
 

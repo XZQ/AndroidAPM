@@ -1,28 +1,26 @@
 public final class com/apm/io/IoConfig {
 	public static final field Companion Lcom/apm/io/IoConfig$Companion;
 	public fun <init> ()V
-	public fun <init> (ZJJJIZIIZZIZIZZ)V
-	public synthetic fun <init> (ZJJJIZIIZZIZIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (ZJJJIIIZZIZIZZ)V
+	public synthetic fun <init> (ZJJJIIIZZIZIZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Z
-	public final fun component10 ()Z
-	public final fun component11 ()I
-	public final fun component12 ()Z
-	public final fun component13 ()I
+	public final fun component10 ()I
+	public final fun component11 ()Z
+	public final fun component12 ()I
+	public final fun component13 ()Z
 	public final fun component14 ()Z
-	public final fun component15 ()Z
 	public final fun component2 ()J
 	public final fun component3 ()J
 	public final fun component4 ()J
 	public final fun component5 ()I
-	public final fun component6 ()Z
+	public final fun component6 ()I
 	public final fun component7 ()I
-	public final fun component8 ()I
+	public final fun component8 ()Z
 	public final fun component9 ()Z
-	public final fun copy (ZJJJIZIIZZIZIZZ)Lcom/apm/io/IoConfig;
-	public static synthetic fun copy$default (Lcom/apm/io/IoConfig;ZJJJIZIIZZIZIZZILjava/lang/Object;)Lcom/apm/io/IoConfig;
+	public final fun copy (ZJJJIIIZZIZIZZ)Lcom/apm/io/IoConfig;
+	public static synthetic fun copy$default (Lcom/apm/io/IoConfig;ZJJJIIIZZIZIZZILjava/lang/Object;)Lcom/apm/io/IoConfig;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDuplicateReadThreshold ()I
-	public final fun getEnableAutoHook ()Z
 	public final fun getEnableCloseableLeak ()Z
 	public final fun getEnableFdLeakDetection ()Z
 	public final fun getEnableIoMonitor ()Z

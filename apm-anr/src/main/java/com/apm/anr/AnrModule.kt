@@ -93,14 +93,18 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     @Volatile
     private var sigquitPoller: SigquitFlagPoller? = null
 
+    /** 当前实例是否已成功向 native 层注册 SIGQUIT 引用计数。 */
+    private var sigquitRegistered = false
+
     // --- 堆栈采样 ---
     override fun onInitialize(context: ApmContext) {
         apmContext = context
     }
 
     /** 启动 ANR 监控。优先 SIGQUIT，降级 Watchdog。 */
+    @Synchronized
     override fun onStart() {
-        if (!config.enableAnrMonitor) {
+        if (!config.enableAnrMonitor || detectionSession != null) {
             return
         }
         val session = AnrDetectionSession()
@@ -117,6 +121,7 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         } else {
             false
         }
+        sigquitRegistered = sigquitReady
 
         // 组装 SIGQUIT 标志轮询器：测试替身优先，其次 native 源（注册成功时）
         val flagSource = sigquitFlagSourceOverride
@@ -130,14 +135,16 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
     }
 
     /** 停止监控。 */
+    @Synchronized
     override fun onStop() {
         detectionSession?.close()
         detectionSession = null
         sigquitPoller = null
         watchdogThread?.interrupt()
         watchdogThread = null
-        // 注销 SIGQUIT 处理器
-        if (config.enableSigquitDetection) {
+        // 仅在本实例曾成功注册 SIGQUIT 时递减 native 引用计数，避免误释放其他实例的处理器。
+        if (sigquitRegistered) {
+            sigquitRegistered = false
             unregisterSigquitHandler()
         }
         sigquitAnalysisExecutor?.shutdownNow()
@@ -473,7 +480,7 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
      */
     private fun computeStackFingerprint(stack: String): String {
         return stack.lines()
-            .take(FINGERPRINT_LINES)
+            .take(STACK_FINGERPRINT_LINES)
             .joinToString(LINE_SEPARATOR)
     }
 
@@ -567,8 +574,6 @@ class AnrModule(private val config: AnrConfig = AnrConfig()) : ApmModule {
         private const val LINE_SEPARATOR = "\n"
         /** 采样分隔符。 */
         private const val SEPARATOR_SAMPLE = "\n---\n"
-        /** 堆栈指纹行数。 */
-        private const val FINGERPRINT_LINES = 5
         /** 堆栈采样指纹行数。 */
         private const val STACK_FINGERPRINT_LINES = 5
 
@@ -603,8 +608,8 @@ private const val MIN_SAMPLES_FOR_CLASSIFICATION = 2
 
 /** 锁等待堆栈指示关键词。 */
 private val LOCK_INDICATORS = arrayOf(
-    "object.wait", "object.wait(",
-    "locksupport.park", "locksupport.park(",
+    "object.wait",
+    "locksupport.park",
     "reentrantlock", "abstractqueuedsynchronizer",
     "wait(", "monitor.enter"
 )

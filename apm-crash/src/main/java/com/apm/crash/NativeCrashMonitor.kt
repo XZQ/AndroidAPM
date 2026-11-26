@@ -252,8 +252,7 @@ object NativeCrashMonitor {
             val trimmed = line.trim()
             // 解析信号行
             if (trimmed.startsWith("signal ")) {
-                val regex = Regex("signal (\\d+) \\((\\w+)\\).*fault addr (\\S+)")
-                val match = regex.find(trimmed)
+                val match = TOMBSTONE_SIGNAL_REGEX.find(trimmed)
                 if (match != null) {
                     signal = match.groupValues[1].toIntOrNull() ?: 0
                     signalName = match.groupValues[2]
@@ -262,7 +261,7 @@ object NativeCrashMonitor {
             }
             // 解析线程名
             if (trimmed.contains("name:") && trimmed.contains(">>>")) {
-                val nameMatch = Regex("name:\\s*(\\S+)").find(trimmed)
+                val nameMatch = TOMBSTONE_THREAD_NAME_REGEX.find(trimmed)
                 if (nameMatch != null) {
                     threadName = nameMatch.groupValues[1]
                 }
@@ -300,6 +299,12 @@ object NativeCrashMonitor {
             )
         }
     }
+
+    /** 预编译 tombstone 信号行提取正则，避免逐行重复编译。 */
+    private val TOMBSTONE_SIGNAL_REGEX = Regex("signal (\\d+) \\((\\w+)\\).*fault addr (\\S+)")
+
+    /** 预编译 tombstone 线程名提取正则，避免逐行重复编译。 */
+    private val TOMBSTONE_THREAD_NAME_REGEX = Regex("name:\\s*(\\S+)")
 
     /** 将信号编号转为可读名称。 */
     private fun signalName(signal: Int): String = when (signal) {

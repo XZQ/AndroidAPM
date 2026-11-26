@@ -14,13 +14,20 @@ import java.util.ArrayDeque
  *
  * 线程安全：所有公开方法使用 @Synchronized 保证串行访问。
  */
-class FileEventStore(context: Context, private val maxLines: Int = DEFAULT_MAX_LINES) : EventStore {
+class FileEventStore(
+    context: Context,
+    /** 配置的最大缓冲行数。 */
+    private val maxLines: Int = DEFAULT_MAX_LINES
+) : EventStore {
+
+    /** 有效正数容量上限，防御非正数入参。 */
+    private val effectiveMaxLines = maxLines.coerceAtLeast(1)
 
     /** 事件存储文件路径。 */
     private val eventFile = File(context.filesDir, FILE_PATH)
 
     /** 内存环形缓冲区，保存最近的事件。 */
-    private val recentLines = ArrayDeque<String>(maxLines)
+    private val recentLines = ArrayDeque<String>(effectiveMaxLines)
 
     /** 文件裁剪节奏控制器。 */
     private val rewriteScheduler = FileRewriteScheduler(REWRITE_INTERVAL)
@@ -46,10 +53,10 @@ class FileEventStore(context: Context, private val maxLines: Int = DEFAULT_MAX_L
             if (!eventFile.exists()) {
                 eventFile.createNewFile()
             }
-            // 从文件尾部加载最近 maxLines 行到内存
+            // 从文件尾部加载最近 effectiveMaxLines 行到内存
             eventFile.takeIf(File::exists)
                 ?.readLines()
-                ?.takeLast(maxLines)
+                ?.takeLast(effectiveMaxLines)
                 ?.forEach(recentLines::addLast)
             initialized = true
         }
@@ -71,7 +78,7 @@ class FileEventStore(context: Context, private val maxLines: Int = DEFAULT_MAX_L
         eventFile.appendText(line + LINE_BREAK)
         recentLines.addLast(line)
         // 环形缓冲区：超出容量时移除最旧的
-        while (recentLines.size > maxLines) {
+        while (recentLines.size > effectiveMaxLines) {
             recentLines.removeFirst()
         }
         // 定期重写文件，裁剪掉已被淘汰的旧数据。
@@ -92,12 +99,13 @@ class FileEventStore(context: Context, private val maxLines: Int = DEFAULT_MAX_L
         return recentLines.toList().takeLast(limit).reversed()
     }
 
-    /** 清除所有数据：内存 + 文件。 */
+    /** 清除所有数据：内存 + 文件（无需先读取旧文件内容到内存）。 */
     @Synchronized
     override fun clear() {
-        ensureInit()
+        eventFile.parentFile?.mkdirs()
         eventFile.writeText("")
         recentLines.clear()
+        initialized = true
         // 清空后重新开始统计 append 次数。
         rewriteScheduler.reset()
     }

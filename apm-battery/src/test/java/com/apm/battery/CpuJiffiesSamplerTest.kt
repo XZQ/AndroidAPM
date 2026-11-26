@@ -92,6 +92,39 @@ class CpuJiffiesSamplerTest {
         assertEquals(NO_REPORT, reported.get())
     }
 
+    /** `/proc/[pid]/stat` 解析正确处理含空格与嵌套括号的线程/进程名。 */
+    @Test
+    fun `proc stat parser handles comm containing spaces and parentheses`() {
+        val statLine = "4321 (AsyncTask #1 (pool)) R 1 4321 4321 0 -1 4194560 " +
+            "10 0 2 0 42 58 0 0 20 0 8 0 12345 1048576 256"
+
+        assertEquals(100L, CpuJiffiesSampler.parseProcStatJiffies(statLine))
+    }
+
+    /** 首个高 CPU 采样窗口计入自身已经历的采样时长，不把告警延迟到两倍窗口。 */
+    @Test
+    fun `sustained cpu counts elapsed interval of first high sample`() {
+        val jiffies = AtomicLong(0L)
+        val now = AtomicLong(0L)
+        val reportedDurationSec = AtomicLong(NO_REPORT)
+        val sampler = CpuJiffiesSampler(
+            config = BatteryConfig(cpuThresholdPercent = 0.5f, cpuSustainedSeconds = 60L),
+            clockTickHz = 100L,
+            jiffiesReader = { jiffies.get() },
+            clock = { now.get() }
+        ).apply {
+            onCpuHigh = { _, durationSec -> reportedDurationSec.set(durationSec) }
+        }
+        sampler.start()
+
+        // 60 秒窗口内消耗 4800 jiffies (= 48s CPU = 0.8 核)，持续时长应为 60s
+        jiffies.set(4_800L)
+        now.set(60_000L)
+        sampler.sample()
+
+        assertEquals(60L, reportedDurationSec.get())
+    }
+
     companion object {
         /** 未上报标记。 */
         private const val NO_REPORT = -1L

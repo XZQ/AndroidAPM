@@ -114,4 +114,14 @@ class RateLimiterTest {
         // 热 key 的限流状态应保持
         assertFalse("Hot key should stay limited", limiter.tryAcquire("hot"))
     }
+
+    /** Non-positive maxBuckets clamps to 1 so newly inserted buckets are not immediately evicted. */
+    @Test
+    fun `non positive max buckets clamps to one active bucket`() {
+        val limiter = RateLimiter(maxEventsPerWindow = 1, windowMs = 60_000L, maxBuckets = 0)
+
+        assertTrue(limiter.tryAcquire("burst"))
+        assertFalse("Bucket must survive insertion and enforce quota", limiter.tryAcquire("burst"))
+        assertEquals(1, limiter.bucketCount())
+    }
 }

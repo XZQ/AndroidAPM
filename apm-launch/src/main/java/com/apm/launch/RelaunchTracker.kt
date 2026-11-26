@@ -49,8 +49,8 @@ internal class RelaunchTracker(private val warmStartThresholdMs: Long, private v
         val backgroundDurationMs = nowMs - stoppedAtMs
         lastStoppedAtMs = null
 
-        // 超出上报窗口的恢复不再继续跟踪。
-        if (backgroundDurationMs >= launchTimeoutMs) {
+        // 仅忽略时钟异常导致的负后台时长；恢复链路超时由 onActivityResumed 按 start->resume 判定。
+        if (backgroundDurationMs < 0L) {
             pendingLaunchType = null
             return
         }

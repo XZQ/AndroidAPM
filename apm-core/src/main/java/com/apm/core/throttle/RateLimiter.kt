@@ -1,7 +1,6 @@
 package com.apm.core.throttle
 
 import com.apm.core.ApmClock
-import java.util.concurrent.atomic.AtomicLong
 
 /**
  * 令牌桶限流器。按 key 分桶，每个桶独立计数。
@@ -12,9 +11,19 @@ import java.util.concurrent.atomic.AtomicLong
  * 被逐出的冷门 key 再次出现时会重新创建满额桶（对低频事件无实际影响）。
  *
  * 线程安全：桶集合通过 synchronized 保护（tryAcquire 已迁移到
- * dispatcher worker 线程执行，锁竞争极低）；桶内计数使用 AtomicLong CAS。
+ * dispatcher worker 线程执行，锁竞争极低）；桶内补充与扣减在同一临界区原子完成。
  */
-class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Long, private val maxBuckets: Int = DEFAULT_MAX_BUCKETS) {
+class RateLimiter(
+    /** 每个窗口允许通过的默认最大事件数。 */
+    private val maxEventsPerWindow: Int,
+    /** 默认补充窗口时长（毫秒）。 */
+    private val windowMs: Long,
+    /** 最大保留桶数上限。 */
+    private val maxBuckets: Int = DEFAULT_MAX_BUCKETS
+) {
+    /** 至少保留 1 个桶，避免非正配置导致刚创建的桶在入表瞬间被逐出而使限流失效。 */
+    private val effectiveMaxBuckets = maxBuckets.coerceAtLeast(1)
+
     /**
      * key → 令牌桶映射。
      * access-order 模式：每次访问将条目移至末尾，头部即最久未使用；
@@ -25,7 +34,7 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
     ) {
         /** 超出桶数量上限时逐出最久未使用的桶。 */
         override fun removeEldestEntry(eldest: Map.Entry<String, TokenBucket>): Boolean {
-            return size > maxBuckets
+            return size > effectiveMaxBuckets
         }
     }
 
@@ -73,14 +82,19 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
     }
 
     /**
-     * 单个令牌桶。使用 CAS 无锁实现。
-     * 窗口到期时自动补充令牌到满。
+     * 单个令牌桶。窗口到期补充与扣减在同一对象监视器内原子完成，
+     * 避免并发线程在时间戳推进与令牌写回之间误判为空桶。
      */
-    private class TokenBucket(private val capacity: Int, private val windowMs: Long) {
+    private class TokenBucket(
+        /** 桶容量上限。 */
+        private val capacity: Int,
+        /** 补充窗口时长（毫秒）。 */
+        private val windowMs: Long
+    ) {
         /** 当前可用令牌数。 */
-        private val tokens = AtomicLong(capacity.toLong())
+        private var tokens = capacity.toLong()
         /** 上一次补充令牌的时间戳。 */
-        private val lastRefill = AtomicLong(ApmClock.monotonicTimeMillis())
+        private var lastRefill = ApmClock.monotonicTimeMillis()
 
         /** Returns whether this bucket already represents the effective dynamic policy. */
         fun matches(capacity: Int, windowMs: Long): Boolean {
@@ -88,36 +102,22 @@ class RateLimiter(private val maxEventsPerWindow: Int, private val windowMs: Lon
         }
 
         /**
-         * 尝试消耗一个令牌。CAS 循环保证无锁并发安全。
+         * 尝试消耗一个令牌；窗口到期时先补充再扣减。
          * @return true 获取成功，false 令牌不足
          */
+        @Synchronized
         fun tryAcquire(): Boolean {
-            refill()
-            while (true) {
-                val current = tokens.get()
-                if (current <= 0) {
-                    return false
-                }
-                if (tokens.compareAndSet(current, current - 1)) {
-                    return true
-                }
-            }
-        }
-
-        /**
-         * 补充令牌。窗口到期时重置为满。
-         * 使用 CAS 保证只有一个线程执行补充。
-         */
-        private fun refill() {
             val now = ApmClock.monotonicTimeMillis()
-            val last = lastRefill.get()
-            if (now - last < windowMs) {
-                return
+            if (now - lastRefill >= windowMs) {
+                // 新窗口到达时原子重置水位与可用令牌
+                lastRefill = now
+                tokens = capacity.toLong()
             }
-            // 只有 CAS 成功的线程才执行补充
-            if (lastRefill.compareAndSet(last, now)) {
-                tokens.set(capacity.toLong())
+            if (tokens <= 0L) {
+                return false
             }
+            tokens -= 1L
+            return true
         }
     }
 

@@ -2,8 +2,11 @@
 
 > 精简索引：只保留每个时间点的结论与影响，逐项证据、命令输出和真机原始数据在链接文档中。README 只描述当前事实；实际状态以源码与 `python tools/verify_ci.py` 为准。
 
-## 未发布
+## 0.2.0（2026-11-26）
 
+- **全仓正确性与性能加固**：修复 `consumer-rules.pro` 混淆规则拼写与 JNI 类签名保护；加固 `apm_crash_jni.c` / `apm_io_jni.c` 的全局类引用、Modified UTF-8 与 `dlclose` 生命周期；修复 `emitCriticalSync` 优先级提升与多进程转发自监控计数；修复 `AnrModule` 原因分类优先级（BINDER 先于 CPU）及栈采样延迟窗口隔离；修复 `RelaunchTracker` 长后台停留温启动误抑制、`ViewModelLeakDetector` 对 `Application`（`AndroidViewModel`）误报、`BatteryModule` 充电水位重置与 `SqliteModule` `WITH ... SELECT` / 多行 SQL 识别；将 `DiagnosticRecorder` 空闲 100ms 轮询改为 `Condition` 零空转唤醒，并对 `DiagnosticSanitizer` 超长消息做正则前预截断；收敛 `PiiSanitizer`、`ApmEventCodec`、`SQLiteEventStore` 与 `OtelSpanMapper` 热路径分配与边界。
+- **0.2.0 公开 API 清理与 ABI 门禁补齐**：按 [API 兼容策略](API_COMPATIBILITY.md) 移除全部 17 项计划在 `0.2.0` 清理的 `@Deprecated` 声明（含未接线的 `ReferenceChainAnalyzer` 及其结果类型、12 项无运行时作用的配置字段与 `ApmWireProtocol.ENVELOPE_SCHEMA_VERSION`），升级 SDK 版本至 `0.2.0` 并刷新 24 份 ABI 基线；同时补齐 AGP 9 内置 Kotlin 下 Android Library 模块的 `apiBuild` / `apiCheck` / `apiDump` 任务接线，消除 BCV 0.18.2 因缺少旧 `kotlin-android` 插件 ID 而静默跳过 Android 模块校验的盲区。
+- **工程与示例清理**：删除 `docs/` 下 3 个历史临时调试 shell 脚本，将 `apm-sample-app` 默认测试 Collector 地址替换为占位域名 `https://collector.example.com/v1/events`。
 - **JDK 21 与 AGP 9.5.2**。将 Gradle daemon、编译和测试工具链及 JVM 字节码统一到 21。发布候选逐个检查 AAR 的 `minCompileSdk=36` 与 class file major 65。
 - **示例应用的 Strict V3**。Debug 与 Release 可通过 Gradle 属性选择测试 Collector。默认使用 Logcat，构建凭据的使用限制见 [README](../README.md)。
 - **Android Studio Sync**。核对 IDE 所需的 Kotlin、Groovy、Javadoc 与示例源码制品，并登记对应校验和。完整 Sync 已通过，排查过程见 [历史验证记录](HISTORICAL_VERIFICATION.md)。

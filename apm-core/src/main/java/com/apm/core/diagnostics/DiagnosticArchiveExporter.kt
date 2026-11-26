@@ -131,7 +131,7 @@ internal object DiagnosticArchiveExporter {
     /** Export schema version. */
     private const val EXPORT_FORMAT_VERSION = 2
     /** Published SDK version. */
-    private const val SDK_VERSION = "0.1.0"
+    private const val SDK_VERSION = "0.2.0"
     /** Manifest field: format version. */
     private const val MANIFEST_FORMAT_VERSION = "formatVersion"
     /** Manifest field: SDK version. */

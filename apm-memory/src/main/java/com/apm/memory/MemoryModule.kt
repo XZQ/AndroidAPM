@@ -306,7 +306,7 @@ class MemoryModule(private val config: MemoryConfig = MemoryConfig()) : ApmModul
     override fun onActivityStopped(activity: Activity) = Unit
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
 
-    /** Activity 销毁时检查 ViewModel 泄漏，并清理 Fragment 检测器。 */
+    /** Activity 销毁时清理关联的 Fragment 泄漏检测器；ViewModel 检查由宿主显式调用 [checkViewModel]。 */
     @Synchronized
     override fun onActivityDestroyed(activity: Activity) {
         // 清理该 Activity 的 Fragment 泄漏检测器

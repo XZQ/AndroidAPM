@@ -138,24 +138,6 @@ public final class com/apm/memory/MemorySnapshot {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class com/apm/memory/leak/GcRootType : java/lang/Enum {
-	public static final field FINALIZING Lcom/apm/memory/leak/GcRootType;
-	public static final field JAVA_FRAME Lcom/apm/memory/leak/GcRootType;
-	public static final field JNI_GLOBAL Lcom/apm/memory/leak/GcRootType;
-	public static final field JNI_LOCAL Lcom/apm/memory/leak/GcRootType;
-	public static final field MONITOR_USED Lcom/apm/memory/leak/GcRootType;
-	public static final field NATIVE_STACK Lcom/apm/memory/leak/GcRootType;
-	public static final field STICKY_CLASS Lcom/apm/memory/leak/GcRootType;
-	public static final field SYSTEM_CLASS Lcom/apm/memory/leak/GcRootType;
-	public static final field THREAD_BLOCK Lcom/apm/memory/leak/GcRootType;
-	public static final field THREAD_OBJ Lcom/apm/memory/leak/GcRootType;
-	public static final field UNKNOWN Lcom/apm/memory/leak/GcRootType;
-	public final fun getDisplayName ()Ljava/lang/String;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lcom/apm/memory/leak/GcRootType;
-	public static fun values ()[Lcom/apm/memory/leak/GcRootType;
-}
-
 public final class com/apm/memory/leak/LeakResult {
 	public fun <init> (Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;J)V
 	public synthetic fun <init> (Ljava/lang/String;Lcom/apm/memory/leak/LeakType;ILjava/lang/String;Ljava/util/List;Ljava/util/List;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -188,49 +170,6 @@ public final class com/apm/memory/leak/LeakType : java/lang/Enum {
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public static fun valueOf (Ljava/lang/String;)Lcom/apm/memory/leak/LeakType;
 	public static fun values ()[Lcom/apm/memory/leak/LeakType;
-}
-
-public final class com/apm/memory/leak/RefNode {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()J
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;J)Lcom/apm/memory/leak/RefNode;
-	public static synthetic fun copy$default (Lcom/apm/memory/leak/RefNode;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;JILjava/lang/Object;)Lcom/apm/memory/leak/RefNode;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getClassName ()Ljava/lang/String;
-	public final fun getFieldName ()Ljava/lang/String;
-	public final fun getObjectId ()J
-	public final fun getReferenceType ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class com/apm/memory/leak/ReferenceChainAnalyzer {
-	public static final field Companion Lcom/apm/memory/leak/ReferenceChainAnalyzer$Companion;
-	public fun <init> ()V
-	public final fun analyze (Ljava/io/File;Ljava/lang/String;)Lcom/apm/memory/leak/ReferenceChainResult;
-}
-
-public final class com/apm/memory/leak/ReferenceChainAnalyzer$Companion {
-}
-
-public final class com/apm/memory/leak/ReferenceChainResult {
-	public fun <init> (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;J)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/util/List;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()J
-	public final fun copy (Ljava/lang/String;Ljava/util/List;Ljava/lang/String;J)Lcom/apm/memory/leak/ReferenceChainResult;
-	public static synthetic fun copy$default (Lcom/apm/memory/leak/ReferenceChainResult;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;JILjava/lang/Object;)Lcom/apm/memory/leak/ReferenceChainResult;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAnalysisDurationMs ()J
-	public final fun getChain ()Ljava/util/List;
-	public final fun getGcRootType ()Ljava/lang/String;
-	public final fun getTargetClassName ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
 }
 
 public final class com/apm/memory/nativeheap/NativeHeapStats {

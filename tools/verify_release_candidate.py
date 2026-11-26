@@ -19,7 +19,7 @@ from xml.etree import ElementTree
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_VERSION = "0.1.0"
+DEFAULT_VERSION = "0.2.0"
 JAVA_21_CLASS_MAJOR = 65
 MIN_COMPILE_SDK = 36
 AAR_METADATA_PATH = "META-INF/com/android/build/gradle/aar-metadata.properties"

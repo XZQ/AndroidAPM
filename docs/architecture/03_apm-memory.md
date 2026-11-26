@@ -1,6 +1,6 @@
 # apm-memory 模块
 
-> 同步日期：2026-11-14｜模块名：`memory`
+> 同步日期：2026-11-26｜模块名：`memory`
 
 ## 目的与入口
 
@@ -13,11 +13,10 @@
 - `MemoryReporter`：snapshot/alert/leak 事件
 - `ActivityLeakDetector`：destroy 后 WeakReference + delayed GC/check
 - `FragmentLeakDetector`：Fragment 生命周期
-- `ViewModelLeakDetector`：检查 Context/View 持有
+- `ViewModelLeakDetector`：检查非 `Application` 的 `Context` 或 `View` 持有（排除 `AndroidViewModel` 进程级 `Application` 引用）
 - `OomMonitor`：heap/PSS/native/system trim 阈值
 - `HprofDumper`：直接或可选 fork dump、可选 strip，模块启动与每次成功 dump 后清理，raw/strip 合计最多保留 5 个文件；当前报告文件优先保留，独占临时路径避免同毫秒覆盖
 - `HprofStripProcessor`：以 8 KiB 缓冲流式解析 4/8 字节 ID 与 ART heap/root/class/array 布局，保留结构并等长清零 primitive payload；不缩减文件大小。非法 header/record/type、截断或取消返回失败并删除部分输出
-- `ReferenceChainAnalyzer`：已弃用的未接线死代码（`@Deprecated`，计划 0.2.0 移除）；曾有 Hprof 索引与 BFS 引用路径实现，但存在格式容错与无界内存缺陷，且没有任何运行时调用方。轻量泄漏检测只填 `suspectFields`，生产引用链分析建议使用 LeakCanary/Shark
 - `NativeHeapMonitor`：`Debug.getNativeHeapAllocatedSize`
 
 ## 主要默认值
@@ -48,7 +47,7 @@
 
 - 高风险 Hprof/Native 能力必须显式开启。
 - ViewModel 泄漏不会自动遍历所有实例，宿主需调用 `checkViewModel`。
-- Hprof 引用链分析未接线且已弃用（计划 0.2.0 移除）：轻量检测仅提供 bounded suspectFields，`referenceChain` 恒为空；需要 GC Root 证明时集成 Shark/LeakCanary，不宣称本地实现与其等价。
+- Hprof 引用链分析不在端上内建（原未接线的 `ReferenceChainAnalyzer` 已在 `0.2.0` 移除）：轻量检测仅提供 bounded `suspectFields`，`referenceChain` 恒为空；需要 GC Root 证明时集成 Shark/LeakCanary，不宣称本地实现与其等价。
 - fork dump/Native Heap 需要真机矩阵验证。
 - dump 产物如何上传、脱敏、留存由集成方定义。
 

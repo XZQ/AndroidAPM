@@ -702,6 +702,10 @@ class NativeIoHook(private val config: IoConfig) {
     /** Reports whether the optional process-wide Native PLT hook is currently installed. */
     internal fun isNativePltHookInstalled(): Boolean = nativeHookInstalled
 
+    /** Optional module callback recording value-free evidence of real Native PLT IO activity. */
+    @Volatile
+    internal var onNativeObservation: (() -> Unit)? = null
+
     /**
      * 处理 Native 层上报的 IO 事件。
      * 由伴生对象的静态 JNI 桥接方法 [onNativeIoEvent] 转发到当前活跃实例。
@@ -718,6 +722,9 @@ class NativeIoHook(private val config: IoConfig) {
             return
         }
         val isReadOrWrite = operation == OP_READ || operation == OP_WRITE
+        if (isReadOrWrite && !insideJavaProxy) {
+            onNativeObservation?.invoke()
+        }
 
         val slowOnMain = isMainThread && durationMs >= config.mainThreadIoThresholdMs
         val slowOperation = durationMs >= config.singleIoThresholdMs

@@ -1,6 +1,6 @@
 # apm-battery 模块
 
-> 同步日期：2026-07-10｜模块名：`battery`
+> 同步日期：2026-11-26｜模块名：`battery`
 
 ## 目的与真实接入
 
@@ -14,8 +14,8 @@
 
 ## 检测
 
-- 电量窗口下降超过阈值
-- `/proc/self/stat` 进程 CPU tick 与 wall-clock/clock-tick-Hz 计算
+- 电量窗口下降超过阈值（充电回升时自动刷新放电峰值基线；缺失 `EXTRA_LEVEL` 的无效广播忽略）
+- `/proc/self/stat` 进程 CPU tick 与 wall-clock/clock-tick-Hz 计算（按最后一个 `)` 解析 `comm` 之后的 `utime/stime`，兼容含空格与括号的线程/进程名）
 - CPU 连续高占用
 - WakeLock 持有时间/仍持有
 - GPS 使用时间/仍活跃

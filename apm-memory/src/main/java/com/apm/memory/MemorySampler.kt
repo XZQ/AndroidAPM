@@ -107,14 +107,19 @@ internal class MemorySampler(private val context: Context) {
 
     /** 从 /proc 行中提取 KB 数值。格式："VmRSS:    123456 kB" */
     private fun String.kbValue(): Long {
-        return trim().split(Regex("\\s+")).getOrNull(KB_VALUE_INDEX)?.toLongOrNull() ?: 0L
+        return trim().split(WHITESPACE_REGEX).getOrNull(KB_VALUE_INDEX)?.toLongOrNull() ?: 0L
     }
 
     /** 字节转 MB。 */
     private fun Long.toMb(): Long = this / BYTES_PER_MB
 
     /** /proc/self/status 的解析结果。 */
-    private data class ProcStatus(val vmRssKb: Long, val vmPeakKb: Long)
+    private data class ProcStatus(
+        /** 常驻物理内存（KB）。 */
+        val vmRssKb: Long,
+        /** 虚拟内存峰值（KB）。 */
+        val vmPeakKb: Long
+    )
 
     companion object {
         /** 字节/KB。 */
@@ -129,5 +134,7 @@ internal class MemorySampler(private val context: Context) {
         private const val VMPEAK_PREFIX = "VmPeak:"
         /** KB 值在 split 结果中的索引。 */
         private const val KB_VALUE_INDEX = 1
+        /** 预编译空白分隔正则，避免每次采样重复编译。 */
+        private val WHITESPACE_REGEX = Regex("\\s+")
     }
 }
